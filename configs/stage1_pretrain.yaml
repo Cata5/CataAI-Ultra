@@ -1,0 +1,54 @@
+# Stage 1: General Language Pretraining Configuration (5.0B tokens)
+stage: 1
+name: "general_language_pretraining"
+total_tokens: 5000000000
+
+model:
+  vocab_size: 12288
+  d_model: 512
+  n_layers: 16
+  n_q: 8
+  n_kv: 2
+  d_h: 64
+  d_ff: 1280
+  kernel_size: 4
+  rms_norm_eps: 1e-6
+  rope_theta: 10000.0
+  max_seq_len: 1024
+  tie_word_embeddings: true
+
+training:
+  micro_batch_size: 8
+  seq_len: 1024
+  grad_accum_steps_initial: 8
+  grad_accum_steps_final: 16
+  bss_switch_token: 3500000000
+  max_grad_norm: 1.0
+  dtype: "bfloat16"
+
+optimizer:
+  muon:
+    lr: 3.0e-3
+    weight_decay: 0.01
+    momentum: 0.95
+    nesterov: true
+    ns_steps: 5
+  adamw:
+    lr: 6.0e-4
+    weight_decay: 0.01
+    betas: [0.9, 0.95]
+    eps: 1.0e-8
+
+scheduler:
+  type: "WSD"
+  warmup_tokens: 131072000  # ~2,000 steps at 65.5k tok/step
+  stable_tokens: 4868928000
+  decay_tokens: 0  # Stable through Stage 1, decay in Stage 2
+
+data_mix:
+  romanian_edu: 0.35
+  english_edu: 0.30
+  cosmopedia_textbooks: 0.15
+  finemath_reasoning: 0.10
+  stack_code: 0.10
+

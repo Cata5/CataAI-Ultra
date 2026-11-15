@@ -1,0 +1,34 @@
+# Tokenizer configuration for RoCanon-48.5M
+tokenizer:
+  type: "ByteLevelBPE"
+  vocab_size: 12288
+  model_max_length: 2048
+  normalization:
+    unicode: "NFC"
+    unify_sedilas: true  # ş/ţ -> ș/ț
+  pre_tokenization:
+    split_digits_atomically: true  # \p{N} single digit
+    preserve_python_indentation: true
+  special_tokens:
+    bos_token: "<|bos|>"
+    eos_token: "<|eos|>"
+    pad_token: "<|pad|>"
+    unk_token: "<|unk|>"
+    system_token: "<|system|>"
+    user_token: "<|user|>"
+    assistant_token: "<|assistant|>"
+    end_turn_token: "<|end_turn|>"
+    think_token: "<|think|>"
+    end_think_token: "<|end_think|>"
+    code_token: "<|code|>"
+    end_code_token: "<|end_code|>"
+    unknown_info_token: "<|unknown_info|>"
+    reserved_1: "<|reserved_1|>"
+    reserved_2: "<|reserved_2|>"
+    reserved_3: "<|reserved_3|>"
+
+data_mix:
+  romanian_edu: 0.45
+  english_edu: 0.35
+  code_edu: 0.20
+

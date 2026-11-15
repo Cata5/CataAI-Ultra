@@ -1,0 +1,23 @@
+# Stage 4: On-Policy Rejection Sampling + SimPO Light (~80M tokens)
+stage: 4
+name: "on_policy_rejection_sampling_simpo"
+epochs: 1
+total_tokens: 80000000
+
+algorithm:
+  name: "SimPO"
+  reference_free: true  # Zero reference model in VRAM
+  beta: 2.0
+  gamma: 0.5  # Target reward margin
+
+optimizer:
+  lr: 2.0e-5
+  weight_decay: 0.01
+
+data:
+  generation: "on_policy_stage3_model"
+  verification:
+    code: "pytest_sandbox_execution"
+    math: "symbolic_arithmetic_verifier"
+    general: "offline_quantized_4b_judge"
+

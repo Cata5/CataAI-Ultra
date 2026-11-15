@@ -1,0 +1,31 @@
+# Hardware profile configuration for RoCanon-48.5M on ASUS ROG Zephyrus G14
+hardware:
+  device_name: "NVIDIA GeForce RTX 3060 Laptop GPU"
+  total_vram_gb: 6.0
+  safe_vram_ceiling_gb: 5.0
+  recommended_os: "Linux (Ubuntu 24.04/26.04 LTS)"
+  fallback_os: "Windows (WDDM driver)"
+
+compute:
+  target_dtype: "bfloat16"
+  master_weights_dtype: "float32"
+  grad_accum_dtype: "float32"
+  use_grad_scaler: false
+  fused_loss: true
+  chunk_size_loss: 2048
+
+batching:
+  stage1:
+    micro_batch_size: 8
+    seq_len: 1024
+    grad_accum_steps_initial: 8
+    grad_accum_steps_final: 16
+    tokens_per_step_initial: 65536
+    tokens_per_step_final: 131072
+    bss_transition_tokens: 3500000000
+  stage2:
+    micro_batch_size: 4
+    seq_len: 2048
+    grad_accum_steps: 16
+    tokens_per_step: 131072
+

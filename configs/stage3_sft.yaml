@@ -1,0 +1,29 @@
+# Stage 3: Instruction Tuning (SFT Bilingv + Abținere) (~200M tokens)
+stage: 3
+name: "instruction_tuning_grounded_qa"
+epochs: 2
+total_tokens: 200000000
+
+training:
+  micro_batch_size: 4
+  seq_len: 2048
+  grad_accum_steps: 4  # 32,768 tok/step
+  max_grad_norm: 1.0
+  dtype: "bfloat16"
+  loss_mask: "assistant_only"  # Loss calculated exclusively on assistant tokens
+
+optimizer:
+  muon:
+    lr: 2.0e-4
+    weight_decay: 0.01
+  adamw:
+    lr: 5.0e-5
+    weight_decay: 0.01
+
+data:
+  datasets:
+    - "smoltalk_filtered"
+    - "openllm_ro_sft"
+    - "grounded_qa_with_abstention"
+  abstention_ratio: 0.15  # 15% missing-info traps responding with <|unknown_info|>
+

@@ -1,0 +1,29 @@
+{
+  "id": "hybrid_cnn_transformer_20m",
+  "name": "Hybrid CNN-Transformer 20M",
+  "description": "Combines local 1D convolutional induction with global GQA multi-head attention.",
+  "architecture_family": "hybrid",
+  "vocab_size": 12288,
+  "max_seq_len": 1024,
+  "d_model": 416,
+  "n_layers": 10,
+  "n_q": 8,
+  "n_kv": 2,
+  "d_h": 52,
+  "d_ff": 1040,
+  "norm_type": "rmsnorm",
+  "activation": "swiglu",
+  "pos_encoding": "rope",
+  "has_conv1d": true,
+  "conv_kernel_size": 5,
+  "qk_norm": true,
+  "pre_norm": true,
+  "tie_word_embeddings": true,
+  "supported_tasks": [
+    "causal_lm"
+  ],
+  "version": "1.0",
+  "total_parameters": 22446944,
+  "created_at": 1794678857.2488172,
+  "updated_at": 1794678857.2488174
+}

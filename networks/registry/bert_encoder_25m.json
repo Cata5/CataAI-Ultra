@@ -1,0 +1,33 @@
+{
+  "id": "bert_encoder_25m",
+  "name": "BERT Encoder 25M",
+  "description": "Encoder-only bidirectional transformer for masked language modeling and sequence representation.",
+  "architecture_family": "encoder_only",
+  "vocab_size": 12288,
+  "max_seq_len": 512,
+  "d_model": 448,
+  "n_layers": 10,
+  "n_q": 7,
+  "n_kv": 7,
+  "d_h": 64,
+  "d_ff": 1344,
+  "norm_type": "layernorm",
+  "activation": "gelu",
+  "pos_encoding": "learned",
+  "has_conv1d": false,
+  "qk_norm": false,
+  "pre_norm": false,
+  "tie_word_embeddings": true,
+  "supported_tasks": [
+    "masked_lm",
+    "classification"
+  ],
+  "output_head": {
+    "type": "classifier",
+    "num_classes": 2
+  },
+  "version": "1.0",
+  "total_parameters": 25585728,
+  "created_at": 1794678857.2482193,
+  "updated_at": 1794678857.2482195
+}

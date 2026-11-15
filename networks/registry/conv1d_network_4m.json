@@ -1,0 +1,24 @@
+{
+  "id": "conv1d_network_4m",
+  "name": "1D Causal CNN Network 4M",
+  "description": "Pure stacked causal 1D convolutions for low-latency acoustic or character sequence modeling.",
+  "architecture_family": "cnn",
+  "input_dim": 128,
+  "d_model": 384,
+  "n_layers": 8,
+  "kernel_size": 5,
+  "norm_type": "batchnorm",
+  "activation": "gelu",
+  "supported_tasks": [
+    "classification",
+    "regression"
+  ],
+  "output_head": {
+    "type": "classifier",
+    "num_classes": 2
+  },
+  "version": "1.0",
+  "total_parameters": 4771968,
+  "created_at": 1794678857.2533066,
+  "updated_at": 1794678857.2533069
+}

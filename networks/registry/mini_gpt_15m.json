@@ -1,0 +1,28 @@
+{
+  "id": "mini_gpt_15m",
+  "name": "Mini-GPT 15M",
+  "description": "Lightweight 8-layer causal language model with standard MHA and GELU feed-forward networks.",
+  "architecture_family": "decoder_only",
+  "vocab_size": 12288,
+  "max_seq_len": 1024,
+  "d_model": 384,
+  "n_layers": 8,
+  "n_q": 6,
+  "n_kv": 6,
+  "d_h": 64,
+  "d_ff": 1152,
+  "norm_type": "layernorm",
+  "activation": "gelu",
+  "pos_encoding": "learned",
+  "has_conv1d": false,
+  "qk_norm": false,
+  "pre_norm": true,
+  "tie_word_embeddings": true,
+  "supported_tasks": [
+    "causal_lm"
+  ],
+  "version": "1.0",
+  "total_parameters": 16521600,
+  "created_at": 1794678857.2475986,
+  "updated_at": 1794678857.2475991
+}

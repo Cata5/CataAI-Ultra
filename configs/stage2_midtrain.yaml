@@ -1,0 +1,46 @@
+# Stage 2: Mid-Training / Knowledge, Code & Reasoning (1.8B tokens)
+stage: 2
+name: "knowledge_code_reasoning_midtraining"
+total_tokens: 1800000000
+
+model:
+  vocab_size: 12288
+  d_model: 512
+  n_layers: 16
+  n_q: 8
+  n_kv: 2
+  d_h: 64
+  d_ff: 1280
+  kernel_size: 4
+  rms_norm_eps: 1e-6
+  rope_theta: 50000.0  # Context extension to 2048
+  max_seq_len: 2048
+  tie_word_embeddings: true
+
+training:
+  micro_batch_size: 4
+  seq_len: 2048
+  grad_accum_steps: 16  # 4 * 2048 * 16 = 131,072 tok/step
+  max_grad_norm: 1.0
+  dtype: "bfloat16"
+
+optimizer:
+  muon:
+    lr: 3.0e-3
+    weight_decay: 0.01
+  adamw:
+    lr: 6.0e-4
+    weight_decay: 0.01
+
+scheduler:
+  type: "WSD_Decay"
+  decay_type: "cosine"
+  min_lr_ratio: 0.10  # Decay to 10% peak LR (3e-4 Muon / 6e-5 AdamW)
+
+data_mix:
+  romanian_edu: 0.25
+  english_edu: 0.15
+  cosmopedia_textbooks: 0.15
+  finemath_reasoning: 0.25
+  stack_code: 0.20
+
