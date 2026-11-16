@@ -19,7 +19,7 @@ interface ComponentPaletteProps {
 }
 
 export const PALETTE_ITEMS: PaletteItem[] = [
-  // Embedding
+  // Embedding & Heads
   {
     id: "token_emb",
     name: "Token Embedding",
@@ -37,12 +37,28 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     description: "Learnable or sinusoidal sequence position vectors",
   },
   {
+    id: "lm_head",
+    name: "LM Head (Output Logits)",
+    category: "embedding",
+    layerType: "Linear",
+    defaultConfig: { in_features: 512, out_features: 12288, bias: false },
+    description: "Linear projection head mapping d_model to vocabulary logits for next-token generation",
+  },
+  {
     id: "linear_proj",
-    name: "Linear Projection",
+    name: "Linear / Dense Projection",
     category: "embedding",
     layerType: "Linear",
     defaultConfig: { in_features: 512, out_features: 512, bias: false },
-    description: "Affine feature transform",
+    description: "General affine linear transform (d_in -> d_out)",
+  },
+  {
+    id: "cls_head",
+    name: "Classification Head",
+    category: "embedding",
+    layerType: "Linear",
+    defaultConfig: { in_features: 512, out_features: 2, bias: true },
+    description: "Linear classification head projecting hidden states to target class logits",
   },
 
   // Attention
@@ -180,7 +196,7 @@ export const ComponentPalette: React.FC<ComponentPaletteProps> = ({ onAddNode, o
 
   const categories = [
     { id: "all", name: "All" },
-    { id: "embedding", name: "Embed" },
+    { id: "embedding", name: "Embed / Head" },
     { id: "attention", name: "Attention" },
     { id: "feedforward", name: "FFN" },
     { id: "norm", name: "Norm" },
@@ -191,7 +207,8 @@ export const ComponentPalette: React.FC<ComponentPaletteProps> = ({ onAddNode, o
     const matchesCat = selectedCat === "all" || item.category === selectedCat;
     const matchesSearch =
       item.name.toLowerCase().includes(search.toLowerCase()) ||
-      item.layerType.toLowerCase().includes(search.toLowerCase());
+      item.layerType.toLowerCase().includes(search.toLowerCase()) ||
+      item.description.toLowerCase().includes(search.toLowerCase());
     return matchesCat && matchesSearch;
   });
 
