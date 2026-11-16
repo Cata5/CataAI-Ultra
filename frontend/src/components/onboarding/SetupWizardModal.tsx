@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   Zap,
   Cpu,
@@ -21,11 +22,12 @@ interface SetupWizardModalProps {
 }
 
 export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onClose }) => {
+  const router = useRouter();
   const [step, setStep] = useState(1);
   const [hardware, setHardware] = useState<any>(null);
   const [selectedProfile, setSelectedProfile] = useState<string>("balanced");
   const [workspaceName, setWorkspaceName] = useState<string>("My First Workspace");
-  const [selectedTemplate, setSelectedTemplate] = useState<string>("rocanon_48m");
+  const [selectedTemplate, setSelectedTemplate] = useState<string>("mini_gpt_15m");
   const [loading, setLoading] = useState<boolean>(false);
 
   useEffect(() => {
@@ -62,6 +64,13 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
     } catch {}
     setLoading(false);
     onClose();
+
+    // Redirect to Network Studio (Builder page)
+    if (selectedTemplate === "custom_scratch") {
+      router.push("/studio?scratch=true");
+    } else {
+      router.push(`/studio?template=${selectedTemplate}`);
+    }
   };
 
   const deviceName = hardware?.device_name || "Detected Accelerator / Host CPU";
@@ -280,49 +289,65 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
                   Choose Starting Architecture
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Select a baseline template or begin with a custom visual graph.
+                  Select one of the 3 most recognized neural network architectures, or design a custom model from scratch. You will be redirected straight to the visual builder page.
                 </p>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 {[
                   {
-                    id: "rocanon_48m",
-                    name: "RoCanon-48.5M Baseline",
-                    family: "Hybrid Conv1D + GQA",
-                    desc: "Registered SLM baseline with tied embeddings and SwiGLU.",
+                    id: "mini_gpt_15m",
+                    name: "Llama / GPT Transformer",
+                    family: "Decoder-Only Causal LM",
+                    badge: "Most Popular LLM",
+                    desc: "Autoregressive generation with causal attention, RoPE, and SwiGLU / MLP blocks. The foundation of modern LLMs.",
                   },
                   {
-                    id: "mini_gpt",
-                    name: "Mini-GPT (15M)",
-                    family: "Decoder-Only Transformer",
-                    desc: "Lightweight causal model for rapid experimentation.",
+                    id: "bert_encoder_25m",
+                    name: "BERT / RoBERTa Encoder",
+                    family: "Encoder-Only Transformer",
+                    badge: "Embeddings & NLU",
+                    desc: "Bidirectional self-attention network for embeddings, text classification, and masked language understanding.",
                   },
                   {
-                    id: "scratch",
-                    name: "Network Studio (Scratch)",
-                    family: "Custom Architecture",
-                    desc: "Build your own MLP, CNN, or Transformer from scratch.",
+                    id: "conv1d_network_4m",
+                    name: "ResNet / 1D-2D CNN",
+                    family: "Convolutional Neural Network",
+                    badge: "Classic Vision & Audio",
+                    desc: "Feature extraction via convolutional kernels and pooling for computer vision, audio, or sequence modeling.",
                   },
                   {
-                    id: "bert_encoder",
-                    name: "Encoder Classifier (10M)",
-                    family: "Encoder-Only",
-                    desc: "BERT-style sequence classification model.",
+                    id: "custom_scratch",
+                    name: "Custom (Build From Scratch)",
+                    family: "Blank Visual Canvas",
+                    badge: "Freeform Design",
+                    desc: "Start with an empty workspace canvas in Network Studio to freely design your custom layers, shapes, and connections.",
                   },
                 ].map((tpl) => (
                   <button
                     key={tpl.id}
                     onClick={() => setSelectedTemplate(tpl.id)}
-                    className={`p-3 rounded-lg border text-left transition-all font-mono ${
+                    className={`p-3.5 rounded-lg border text-left transition-all font-mono relative flex flex-col justify-between ${
                       selectedTemplate === tpl.id
-                        ? "bg-cyan-950/40 border-cyan-500 shadow-[0_0_10px_rgba(0,240,255,0.15)]"
+                        ? "bg-cyan-950/40 border-cyan-500 shadow-[0_0_12px_rgba(0,240,255,0.2)] ring-1 ring-cyan-500/50"
                         : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
                     }`}
                   >
-                    <div className="text-xs font-bold text-slate-200">{tpl.name}</div>
-                    <div className="text-[10px] text-cyan-400 mt-0.5">{tpl.family}</div>
-                    <div className="text-[11px] text-slate-400 mt-1 font-sans">{tpl.desc}</div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500/30 text-cyan-400 font-bold">
+                          {tpl.badge}
+                        </span>
+                        {selectedTemplate === tpl.id && (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />
+                        )}
+                      </div>
+                      <div className="text-xs font-bold text-slate-100">{tpl.name}</div>
+                      <div className="text-[10px] text-cyan-400/80 mt-0.5">{tpl.family}</div>
+                    </div>
+                    <div className="text-[11px] text-slate-400 mt-2 font-sans leading-relaxed">
+                      {tpl.desc}
+                    </div>
                   </button>
                 ))}
               </div>

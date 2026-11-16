@@ -1,7 +1,7 @@
 "use client";
 
 import React from "react";
-import { Sliders, Settings2, Trash2, Save, Copy, Info } from "lucide-react";
+import { Sliders, Settings2, Trash2, Save, Copy, Info, Plus } from "lucide-react";
 import { cn, formatParamCount } from "@/lib/utils";
 
 interface ConfigInspectorProps {
@@ -26,6 +26,7 @@ interface ConfigInspectorProps {
   onSaveNetwork: () => void;
   onCloneNetwork: () => void;
   onLoadTemplate: (templateId: string) => void;
+  onNewScratch?: () => void;
   onDeleteNetwork?: () => void;
   onShowInfo?: (layerType: string) => void;
   templates: any[];
@@ -40,6 +41,7 @@ export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
   onSaveNetwork,
   onCloneNetwork,
   onLoadTemplate,
+  onNewScratch,
   onDeleteNetwork,
   onShowInfo,
   templates,
@@ -162,8 +164,17 @@ export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-        {/* Template Presets */}
+        {/* Template Presets or New Scratch */}
         <div>
+          {onNewScratch && (
+            <button
+              type="button"
+              onClick={onNewScratch}
+              className="w-full mb-2.5 py-1.5 px-3 rounded bg-cyan-950/60 border border-cyan-500/40 hover:bg-cyan-900/60 text-cyan-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-[0_0_8px_rgba(0,240,255,0.15)]"
+            >
+              <Plus className="w-3.5 h-3.5" /> Start New From Scratch
+            </button>
+          )}
           <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
             Load Template Preset
           </label>
