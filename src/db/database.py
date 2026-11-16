@@ -131,6 +131,12 @@ class StudioDatabase:
                 results_json TEXT,
                 created_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            );
             """)
 
     # ------------------- Runs -------------------
@@ -299,6 +305,22 @@ class StudioDatabase:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def get_latest_validation(self, run_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            if run_id:
+                cur = conn.execute(
+                    "SELECT val_loss, step, timestamp FROM metrics WHERE run_id = ? AND val_loss IS NOT NULL ORDER BY step DESC, id DESC LIMIT 1",
+                    (run_id,),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT val_loss, step, timestamp FROM metrics WHERE val_loss IS NOT NULL ORDER BY id DESC LIMIT 1"
+                )
+            row = cur.fetchone()
+            if row:
+                return {"val_loss": row["val_loss"], "step": row["step"], "timestamp": row["timestamp"]}
+            return None
+
     # ------------------- Checkpoints -------------------
     def log_checkpoint(
         self,
@@ -414,6 +436,22 @@ class StudioDatabase:
             row = cur.fetchone()
             return dict(row) if row else None
 
+    def get_latest_validation(self, run_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            if run_id:
+                cur = conn.execute(
+                    "SELECT val_loss, step, timestamp FROM metrics WHERE run_id = ? AND val_loss IS NOT NULL ORDER BY step DESC, id DESC LIMIT 1",
+                    (run_id,),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT val_loss, step, timestamp FROM metrics WHERE val_loss IS NOT NULL ORDER BY id DESC LIMIT 1"
+                )
+            row = cur.fetchone()
+            if row:
+                return {"val_loss": row["val_loss"], "step": row["step"], "timestamp": row["timestamp"]}
+            return None
+
     # ------------------- Pipelines -------------------
     def save_pipeline(
         self,
@@ -505,6 +543,11 @@ class StudioDatabase:
             d["stats"] = json.loads(d["stats_json"]) if d.get("stats_json") else {}
             return d
 
+    def delete_dataset(self, dataset_id: str) -> bool:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
+            return cur.rowcount > 0
+
     def list_datasets(self) -> List[Dict[str, Any]]:
         with self._lock, self._get_connection() as conn:
             cur = conn.execute("SELECT * FROM datasets ORDER BY created_at DESC")
@@ -551,5 +594,30 @@ class StudioDatabase:
                 d = dict(r)
                 d["results"] = json.loads(d["results_json"]) if d.get("results_json") else {}
                 res.append(d)
+            return res
+
+    # ------------------- Persistent Settings -------------------
+    def save_settings(self, settings_dict: Dict[str, Any]) -> None:
+        now = time.time()
+        with self._lock, self._get_connection() as conn:
+            for k, v in settings_dict.items():
+                conn.execute(
+                    """
+                    INSERT INTO settings (key, value_json, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
+                    """,
+                    (str(k), json.dumps(v), now),
+                )
+
+    def get_settings(self) -> Dict[str, Any]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT key, value_json FROM settings")
+            res = {}
+            for row in cur.fetchall():
+                try:
+                    res[row["key"]] = json.loads(row["value_json"])
+                except Exception:
+                    res[row["key"]] = row["value_json"]
             return res
 

@@ -6,7 +6,7 @@ Automated integration tests for RoCanon-48.5M Studio v2 REST API and WebSocket e
 import json
 import pytest
 from aiohttp import web
-from aiohttp.test_utils import AioHTTPTestCase, unittest_run_loop
+from aiohttp.test_utils import AioHTTPTestCase
 
 from src.dashboard.server import create_app
 
@@ -17,7 +17,6 @@ class TestStudioAPI(AioHTTPTestCase):
     async def get_application(self):
         return create_app()
 
-    @unittest_run_loop
     async def test_get_index(self):
         resp = await self.client.request("GET", "/")
         assert resp.status == 200
@@ -25,7 +24,6 @@ class TestStudioAPI(AioHTTPTestCase):
         assert "RoCanon-48.5M" in text
         assert "Studio v2" in text
 
-    @unittest_run_loop
     async def test_get_system_status(self):
         resp = await self.client.request("GET", "/api/system/status")
         assert resp.status == 200
@@ -33,7 +31,6 @@ class TestStudioAPI(AioHTTPTestCase):
         assert "state" in data
         assert "latest_metrics" in data
 
-    @unittest_run_loop
     async def test_get_hardware(self):
         resp = await self.client.request("GET", "/api/hardware")
         assert resp.status == 200
@@ -41,14 +38,12 @@ class TestStudioAPI(AioHTTPTestCase):
         assert "device_name" in data
         assert "is_available" in data
 
-    @unittest_run_loop
     async def test_get_checkpoints(self):
         resp = await self.client.request("GET", "/api/checkpoints")
         assert resp.status == 200
         data = await resp.json()
         assert isinstance(data, list)
 
-    @unittest_run_loop
     async def test_get_pipelines(self):
         resp = await self.client.request("GET", "/api/pipelines")
         assert resp.status == 200
@@ -56,7 +51,6 @@ class TestStudioAPI(AioHTTPTestCase):
         assert isinstance(data, list)
         assert len(data) >= 1
 
-    @unittest_run_loop
     async def test_scheduler_curve_api(self):
         payload = {
             "schedule_type": "wsd",
@@ -72,7 +66,6 @@ class TestStudioAPI(AioHTTPTestCase):
         assert len(points) > 10
         assert points[0]["lr"] == 0.0
 
-    @unittest_run_loop
     async def test_tokenizer_inspect_api(self):
         payload = {"text": "Testare tokenizer RoCanon 12288"}
         resp = await self.client.request("POST", "/api/tokenizer/inspect", json=payload)
@@ -82,17 +75,28 @@ class TestStudioAPI(AioHTTPTestCase):
         assert "tokens" in data
         assert data["exact_match"] is True
 
-    @unittest_run_loop
     async def test_runs_api(self):
         resp = await self.client.request("GET", "/api/runs")
         assert resp.status == 200
         data = await resp.json()
         assert isinstance(data, list)
 
-    @unittest_run_loop
     async def test_calculate_params_api(self):
         resp = await self.client.request("GET", "/api/calculate_params?vocab_size=12288&d_model=512&n_layers=16&tied=true")
         assert resp.status == 200
         data = await resp.json()
         assert data["total_parameters"] == 48531968
+
+    async def test_eval_generate_api(self):
+        resp = await self.client.request(
+            "POST",
+            "/api/evaluation/generate",
+            json={"prompt": "Test", "max_new_tokens": 5, "temperature": 0.0},
+        )
+        assert resp.status == 200
+        data = await resp.json()
+        assert "generated_text" in data
+        assert "tokens_generated" in data
+        assert "device" in data
+
 

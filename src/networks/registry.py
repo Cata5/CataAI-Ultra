@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -81,22 +82,54 @@ class NetworkRegistry:
         results.sort(key=lambda x: x.get("updated_at", 0), reverse=True)
         return results
 
+    def _validate_and_resolve_path(self, network_id: str) -> Path:
+        """
+        Validates network ID and ensures the target file strictly resides
+        within the registry directory, preventing path traversal attacks.
+        """
+        if not network_id or not isinstance(network_id, str):
+            raise ValueError("Network ID must be a non-empty string.")
+
+        cleaned = network_id.strip()
+        if not re.match(r"^[A-Za-z0-9_-]{1,64}$", cleaned):
+            raise ValueError(
+                f"Invalid network ID '{network_id}'. IDs must contain only letters, digits, underscores, and hyphens (max 64 chars)."
+            )
+
+        target_path = (self.registry_dir / f"{cleaned}.json").resolve()
+        registry_root = self.registry_dir.resolve()
+        if not target_path.is_relative_to(registry_root):
+            raise ValueError(f"Security error: path traversal detected for network ID '{network_id}'")
+
+        return target_path
+
     def get_network(self, network_id: str) -> Optional[Dict[str, Any]]:
-        """Reads full network JSON definition."""
-        path = self.registry_dir / f"{network_id}.json"
+        """Reads full network JSON definition with path traversal protection."""
+        try:
+            path = self._validate_and_resolve_path(network_id)
+        except ValueError as e:
+            logger.warning("Rejected invalid network ID in get_network: %s", e)
+            return None
+
         if not path.exists():
             return None
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
     def save_network(self, network_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Atomically saves network definition to disk."""
-        target_path = self.registry_dir / f"{network_id}.json"
-        temp_path = self.registry_dir / f".tmp_{network_id}.json"
+        """Atomically saves network definition to disk after validation and security checks."""
+        target_path = self._validate_and_resolve_path(network_id)
+        temp_path = self.registry_dir / f".tmp_{target_path.name}"
+
+        # Validate configuration schema before saving
+        from .validator import ArchitectureValidator
+        errs = ArchitectureValidator.validate_config_schema(config)
+        if errs:
+            raise ValueError(f"Architecture validation failed: {'; '.join(errs)}")
 
         # Calculate exact parameter counts
         stats = ParameterCalculator.calculate(config)
-        config["id"] = network_id
+        config["id"] = target_path.stem
         config["total_parameters"] = stats["total_parameters"]
         config["updated_at"] = time.time()
         if "created_at" not in config:
@@ -106,11 +139,12 @@ class NetworkRegistry:
             json.dump(config, f, indent=2)
 
         os.replace(temp_path, target_path)
-        logger.info("Saved network %s to registry (%d parameters)", network_id, stats["total_parameters"])
+        logger.info("Saved network %s to registry (%d parameters)", config["id"], stats["total_parameters"])
         return config
 
     def clone_network(self, network_id: str, new_id: str, new_name: str) -> Optional[Dict[str, Any]]:
-        """Clones an existing network under a new ID and name."""
+        """Clones an existing network under a new ID and name with path traversal validation."""
+        self._validate_and_resolve_path(new_id)
         orig = self.get_network(network_id)
         if not orig:
             return None
@@ -127,11 +161,16 @@ class NetworkRegistry:
 
     def delete_network(self, network_id: str) -> bool:
         """Deletes a network definition from the registry (RoCanon baseline is protected)."""
-        if network_id == "rocanon_48m":
+        try:
+            path = self._validate_and_resolve_path(network_id)
+        except ValueError as e:
+            logger.warning("Rejected invalid network ID in delete_network: %s", e)
+            return False
+
+        if path.stem == "rocanon_48m":
             logger.warning("Cannot delete RoCanon-48.5M baseline architecture.")
             return False
 
-        path = self.registry_dir / f"{network_id}.json"
         if path.exists():
             path.unlink()
             return True

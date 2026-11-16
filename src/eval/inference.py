@@ -53,16 +53,31 @@ class InferenceEngine:
         temperature: float = 0.7,
         top_p: float = 0.9,
         top_k: int = 50,
-        repetition_penalty: float = 1.1,
+        repetition_penalty: float = 1.15,
+        no_repeat_ngram_size: int = 3,
         stop_tokens: Optional[List[int]] = None,
+        chat_mode: bool = False,
     ) -> Dict[str, Any]:
         """Executes text generation and returns text along with token throughput metrics."""
         t0 = time.time()
-        input_ids = self.tokenizer.encode(prompt)
+
+        # ChatML / Instruction formatting
+        formatted_prompt = prompt
+        if chat_mode and not ("<|user|>" in prompt or "<|im_start|>" in prompt):
+            formatted_prompt = f"<|user|>\n{prompt.strip()}\n<|assistant|>\n"
+
+        input_ids = self.tokenizer.encode(formatted_prompt)
         curr_ids = torch.tensor([input_ids], dtype=torch.long, device=self.device)
 
-        eos_id = self.tokenizer.eos_token_id
-        stops = set(stop_tokens or [eos_id])
+        default_stops = set()
+        if self.tokenizer.eos_token_id is not None:
+            default_stops.add(self.tokenizer.eos_token_id)
+        for stop_tag in ["<|end_turn|>", "<|im_end|>", "<|eos|>", "<|endoftext|>"]:
+            tid = self.tokenizer._tokenizer.token_to_id(stop_tag)
+            if tid is not None:
+                default_stops.add(tid)
+
+        stops = set(stop_tokens) if stop_tokens is not None else default_stops
         generated_token_ids: List[int] = []
 
         max_seq_len = getattr(self.model.config, "max_seq_len", 2048)
@@ -85,6 +100,14 @@ class InferenceEngine:
                         next_token_logits[tid] /= repetition_penalty
                     else:
                         next_token_logits[tid] *= repetition_penalty
+
+            # Ban duplicate n-grams to prevent repetitive loops (e.g. "de exemplu de exemplu...")
+            if no_repeat_ngram_size > 0 and len(generated_token_ids) >= no_repeat_ngram_size - 1:
+                prefix = tuple(generated_token_ids[-(no_repeat_ngram_size - 1):])
+                for i in range(len(generated_token_ids) - no_repeat_ngram_size + 1):
+                    if tuple(generated_token_ids[i : i + no_repeat_ngram_size - 1]) == prefix:
+                        banned_token = generated_token_ids[i + no_repeat_ngram_size - 1]
+                        next_token_logits[banned_token] = -float("Inf")
 
             # Temperature
             if temperature > 0:
@@ -119,9 +142,16 @@ class InferenceEngine:
         tok_per_sec = tok_count / max(1e-5, dt)
         output_text = self.tokenizer.decode(generated_token_ids)
 
+        for stop_str in ["<|end_turn|>", "<|im_end|>", "<|eos|>", "<|endoftext|>"]:
+            if output_text.endswith(stop_str):
+                output_text = output_text[:-len(stop_str)].strip()
+
         return {
             "prompt": prompt,
+            "formatted_prompt": formatted_prompt,
+            "completion": output_text,
             "generated_text": output_text,
+            "full_text": formatted_prompt + output_text,
             "tokens_generated": tok_count,
             "generation_time_sec": round(dt, 3),
             "tokens_per_sec": round(tok_per_sec, 1),

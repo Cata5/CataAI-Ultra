@@ -1,0 +1,555 @@
+"""
+Database manager for RoCanon-48.5M Studio.
+Provides SQLite persistence for runs, metrics, checkpoints, alerts, pipelines, datasets, and benchmark results.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import sqlite3
+import threading
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_DB_PATH = Path("data/rocanon_studio.db")
+
+
+class StudioDatabase:
+    """Thread-safe SQLite database manager for training metadata and metrics."""
+
+    def __init__(self, db_path: Path | str = DEFAULT_DB_PATH) -> None:
+        self.db_path = Path(db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+        self._init_db()
+
+    def _get_connection(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA synchronous = NORMAL;")
+        return conn
+
+    def _init_db(self) -> None:
+        with self._lock, self._get_connection() as conn:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS runs (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                current_phase TEXT NOT NULL,
+                dataset_source TEXT,
+                total_steps INTEGER DEFAULT 0,
+                total_tokens INTEGER DEFAULT 0,
+                best_val_loss REAL,
+                config_json TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                step INTEGER NOT NULL,
+                tokens INTEGER NOT NULL,
+                train_loss REAL NOT NULL,
+                val_loss REAL,
+                generalization_gap REAL,
+                grad_norm REAL DEFAULT 0.0,
+                muon_lr REAL DEFAULT 0.0,
+                adamw_lr REAL DEFAULT 0.0,
+                vram_used_gb REAL DEFAULT 0.0,
+                tok_per_sec REAL DEFAULT 0.0,
+                tflops REAL DEFAULT 0.0,
+                timestamp REAL NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_metrics_run_step ON metrics(run_id, step);
+
+            CREATE TABLE IF NOT EXISTS checkpoints (
+                id TEXT PRIMARY KEY,
+                run_id TEXT,
+                step INTEGER NOT NULL,
+                tokens INTEGER DEFAULT 0,
+                train_loss REAL,
+                val_loss REAL,
+                file_path TEXT NOT NULL,
+                file_size_bytes INTEGER DEFAULT 0,
+                phase TEXT,
+                metadata_json TEXT,
+                created_at REAL NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_checkpoints_step ON checkpoints(step);
+
+            CREATE TABLE IF NOT EXISTS alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT,
+                level TEXT NOT NULL,
+                category TEXT NOT NULL,
+                message TEXT NOT NULL,
+                step INTEGER DEFAULT 0,
+                timestamp REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS pipelines (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                current_phase_idx INTEGER DEFAULT 0,
+                phases_json TEXT NOT NULL,
+                state_json TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS datasets (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_size_bytes INTEGER DEFAULT 0,
+                format TEXT NOT NULL,
+                token_count INTEGER DEFAULT 0,
+                sample_count INTEGER DEFAULT 0,
+                revision TEXT NOT NULL,
+                stats_json TEXT,
+                created_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS benchmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT,
+                checkpoint_id TEXT,
+                step INTEGER DEFAULT 0,
+                category TEXT NOT NULL,
+                score REAL DEFAULT 0.0,
+                results_json TEXT,
+                created_at REAL NOT NULL
+            );
+            """)
+
+    # ------------------- Runs -------------------
+    def create_run(
+        self,
+        run_id: str,
+        name: str,
+        current_phase: str = "pretrain",
+        dataset_source: str = "",
+        config: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        now = time.time()
+        cfg_str = json.dumps(config or {})
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO runs 
+                (id, name, status, current_phase, dataset_source, total_steps, total_tokens, config_json, created_at, updated_at)
+                VALUES (?, ?, 'STARTING', ?, ?, 0, 0, ?, ?, ?)
+                """,
+                (run_id, name, current_phase, dataset_source, cfg_str, now, now),
+            )
+
+    def update_run_status(
+        self,
+        run_id: str,
+        status: str,
+        step: Optional[int] = None,
+        tokens: Optional[int] = None,
+        best_val_loss: Optional[float] = None,
+    ) -> None:
+        now = time.time()
+        updates = ["status = ?", "updated_at = ?"]
+        params: List[Any] = [status, now]
+        if step is not None:
+            updates.append("total_steps = ?")
+            params.append(step)
+        if tokens is not None:
+            updates.append("total_tokens = ?")
+            params.append(tokens)
+        if best_val_loss is not None:
+            updates.append("best_val_loss = ?")
+            params.append(best_val_loss)
+        params.append(run_id)
+
+        sql = f"UPDATE runs SET {', '.join(updates)} WHERE id = ?"
+        with self._lock, self._get_connection() as conn:
+            conn.execute(sql, params)
+
+    def get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            if d.get("config_json"):
+                d["config"] = json.loads(d["config_json"])
+            return d
+
+    def list_runs(self, limit: int = 50) -> List[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,))
+            rows = cur.fetchall()
+            result = []
+            for r in rows:
+                d = dict(r)
+                if d.get("config_json"):
+                    try:
+                        d["config"] = json.loads(d["config_json"])
+                    except Exception:
+                        d["config"] = {}
+                result.append(d)
+            return result
+
+    # ------------------- Metrics -------------------
+    def log_metric(self, run_id: str, data: Dict[str, Any]) -> None:
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO metrics
+                (run_id, step, tokens, train_loss, val_loss, generalization_gap,
+                 grad_norm, muon_lr, adamw_lr, vram_used_gb, tok_per_sec, tflops, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_id,
+                    data.get("step", 0),
+                    data.get("tokens", 0),
+                    data.get("train_loss", 0.0),
+                    data.get("val_loss"),
+                    data.get("generalization_gap"),
+                    data.get("grad_norm", 0.0),
+                    data.get("muon_lr", 0.0),
+                    data.get("adamw_lr", 0.0),
+                    data.get("vram_used_gb", 0.0),
+                    data.get("tok_per_sec", 0.0),
+                    data.get("tflops", 0.0),
+                    data.get("timestamp", time.time()),
+                ),
+            )
+
+    def log_metrics_batch(self, run_id: str, batch: List[Dict[str, Any]]) -> None:
+        if not batch:
+            return
+        rows = [
+            (
+                run_id,
+                d.get("step", 0),
+                d.get("tokens", 0),
+                d.get("train_loss", 0.0),
+                d.get("val_loss"),
+                d.get("generalization_gap"),
+                d.get("grad_norm", 0.0),
+                d.get("muon_lr", 0.0),
+                d.get("adamw_lr", 0.0),
+                d.get("vram_used_gb", 0.0),
+                d.get("tok_per_sec", 0.0),
+                d.get("tflops", 0.0),
+                d.get("timestamp", time.time()),
+            )
+            for d in batch
+        ]
+        with self._lock, self._get_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO metrics
+                (run_id, step, tokens, train_loss, val_loss, generalization_gap,
+                 grad_norm, muon_lr, adamw_lr, vram_used_gb, tok_per_sec, tflops, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                rows,
+            )
+
+    def get_metrics(
+        self,
+        run_id: str,
+        start_step: int = 0,
+        end_step: Optional[int] = None,
+        max_points: int = 5000,
+    ) -> List[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            if end_step is not None:
+                cur = conn.execute(
+                    "SELECT * FROM metrics WHERE run_id = ? AND step >= ? AND step <= ? ORDER BY step ASC LIMIT ?",
+                    (run_id, start_step, end_step, max_points),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT * FROM metrics WHERE run_id = ? AND step >= ? ORDER BY step ASC LIMIT ?",
+                    (run_id, start_step, max_points),
+                )
+            return [dict(r) for r in cur.fetchall()]
+
+    def get_latest_metric(self, run_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            if run_id:
+                cur = conn.execute(
+                    "SELECT * FROM metrics WHERE run_id = ? ORDER BY step DESC, id DESC LIMIT 1",
+                    (run_id,),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT * FROM metrics ORDER BY id DESC LIMIT 1"
+                )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    # ------------------- Checkpoints -------------------
+    def log_checkpoint(
+        self,
+        checkpoint_id: str,
+        run_id: Optional[str],
+        step: int,
+        tokens: int,
+        train_loss: Optional[float],
+        val_loss: Optional[float],
+        file_path: str,
+        file_size_bytes: int,
+        phase: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        now = time.time()
+        meta_str = json.dumps(metadata or {})
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO checkpoints
+                (id, run_id, step, tokens, train_loss, val_loss, file_path, file_size_bytes, phase, metadata_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    checkpoint_id,
+                    run_id,
+                    step,
+                    tokens,
+                    train_loss,
+                    val_loss,
+                    file_path,
+                    file_size_bytes,
+                    phase,
+                    meta_str,
+                    now,
+                ),
+            )
+
+    def list_checkpoints(self, run_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            if run_id:
+                cur = conn.execute(
+                    "SELECT * FROM checkpoints WHERE run_id = ? ORDER BY step DESC LIMIT ?",
+                    (run_id, limit),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT ?",
+                    (limit,),
+                )
+            results = []
+            for r in cur.fetchall():
+                d = dict(r)
+                if d.get("metadata_json"):
+                    try:
+                        d["metadata"] = json.loads(d["metadata_json"])
+                    except Exception:
+                        d["metadata"] = {}
+                results.append(d)
+            return results
+
+    def delete_checkpoint(self, checkpoint_id: str) -> Optional[str]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT file_path FROM checkpoints WHERE id = ?", (checkpoint_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            file_path = row["file_path"]
+            conn.execute("DELETE FROM checkpoints WHERE id = ?", (checkpoint_id,))
+            return file_path
+
+    # ------------------- Alerts -------------------
+    def log_alert(
+        self,
+        level: str,
+        category: str,
+        message: str,
+        run_id: Optional[str] = None,
+        step: int = 0,
+    ) -> None:
+        now = time.time()
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO alerts (run_id, level, category, message, step, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (run_id, level, category, message, step, now),
+            )
+
+    def list_alerts(self, run_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            if run_id:
+                cur = conn.execute(
+                    "SELECT * FROM alerts WHERE run_id = ? ORDER BY id DESC LIMIT ?",
+                    (run_id, limit),
+                )
+            else:
+                cur = conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,))
+            return [dict(r) for r in cur.fetchall()]
+
+    def get_latest_metric(self, run_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            if run_id:
+                cur = conn.execute(
+                    "SELECT * FROM metrics WHERE run_id = ? ORDER BY step DESC, id DESC LIMIT 1",
+                    (run_id,),
+                )
+            else:
+                cur = conn.execute(
+                    "SELECT * FROM metrics ORDER BY id DESC LIMIT 1"
+                )
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+    # ------------------- Pipelines -------------------
+    def save_pipeline(
+        self,
+        pipeline_id: str,
+        name: str,
+        status: str,
+        phases: List[Dict[str, Any]],
+        current_phase_idx: int = 0,
+        state: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        now = time.time()
+        phases_str = json.dumps(phases)
+        state_str = json.dumps(state or {})
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO pipelines
+                (id, name, status, current_phase_idx, phases_json, state_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (pipeline_id, name, status, current_phase_idx, phases_str, state_str, now, now),
+            )
+
+    def get_pipeline(self, pipeline_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM pipelines WHERE id = ?", (pipeline_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            d["phases"] = json.loads(d["phases_json"])
+            d["state"] = json.loads(d["state_json"]) if d.get("state_json") else {}
+            return d
+
+    def list_pipelines(self) -> List[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM pipelines ORDER BY updated_at DESC")
+            results = []
+            for r in cur.fetchall():
+                d = dict(r)
+                d["phases"] = json.loads(d["phases_json"])
+                d["state"] = json.loads(d["state_json"]) if d.get("state_json") else {}
+                results.append(d)
+            return results
+
+    # ------------------- Datasets -------------------
+    def save_dataset(
+        self,
+        dataset_id: str,
+        name: str,
+        file_path: str,
+        file_size_bytes: int,
+        format_type: str,
+        revision: str,
+        token_count: int = 0,
+        sample_count: int = 0,
+        stats: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        now = time.time()
+        stats_str = json.dumps(stats or {})
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO datasets
+                (id, name, file_path, file_size_bytes, format, token_count, sample_count, revision, stats_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    dataset_id,
+                    name,
+                    file_path,
+                    file_size_bytes,
+                    format_type,
+                    token_count,
+                    sample_count,
+                    revision,
+                    stats_str,
+                    now,
+                ),
+            )
+
+    def get_dataset(self, dataset_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM datasets WHERE id = ?", (dataset_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            d["stats"] = json.loads(d["stats_json"]) if d.get("stats_json") else {}
+            return d
+
+    def list_datasets(self) -> List[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM datasets ORDER BY created_at DESC")
+            results = []
+            for r in cur.fetchall():
+                d = dict(r)
+                d["stats"] = json.loads(d["stats_json"]) if d.get("stats_json") else {}
+                results.append(d)
+            return results
+
+    # ------------------- Benchmarks -------------------
+    def log_benchmark_result(
+        self,
+        category: str,
+        score: float,
+        run_id: Optional[str] = None,
+        checkpoint_id: Optional[str] = None,
+        step: int = 0,
+        results: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        now = time.time()
+        res_str = json.dumps(results or {})
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO benchmarks
+                (run_id, checkpoint_id, step, category, score, results_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (run_id, checkpoint_id, step, category, score, res_str, now),
+            )
+
+    def list_benchmarks(self, run_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            if run_id:
+                cur = conn.execute(
+                    "SELECT * FROM benchmarks WHERE run_id = ? ORDER BY id DESC LIMIT ?",
+                    (run_id, limit),
+                )
+            else:
+                cur = conn.execute("SELECT * FROM benchmarks ORDER BY id DESC LIMIT ?", (limit,))
+            res = []
+            for r in cur.fetchall():
+                d = dict(r)
+                d["results"] = json.loads(d["results_json"]) if d.get("results_json") else {}
+                res.append(d)
+            return res
+

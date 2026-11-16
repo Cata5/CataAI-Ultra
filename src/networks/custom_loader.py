@@ -34,6 +34,11 @@ class CustomModuleBase(nn.Module):
     def __init__(self, **kwargs: Any) -> None:
         super().__init__()
 
+    @classmethod
+    def parameter_count(cls, dim: int, **kwargs: Any) -> int:
+        """Analytical parameter count calculation for Network Studio."""
+        return 0
+
     def forward(self, x: torch.Tensor, *args: Any, **kwargs: Any) -> torch.Tensor:
         raise NotImplementedError("Subclasses must implement forward()")
 

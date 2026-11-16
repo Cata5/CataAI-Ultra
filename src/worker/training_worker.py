@@ -30,6 +30,7 @@ from ..tokenizer.tokenizer import RoCanonTokenizer
 from ..training.factory import create_model_from_dict, create_optimizers_from_dict
 from ..training.loss import ChunkedCrossEntropyLoss
 from ..training.scheduler import WSDScheduler
+from ..training.task_adapter import BaseTaskAdapter, TaskAdapterFactory
 from ..training.trainer import Trainer, TrainingConfig
 from .protocol import CommandType, EventType, RunState, WorkerCommand, WorkerEvent
 from .state_machine import RunStateMachine
@@ -185,23 +186,47 @@ class TrainingWorkerProcess:
         config_opt = payload.get("config_opt", {})
         config_es = payload.get("config_early_stopping", {})
         max_samples = payload.get("max_samples")
-        checkpoint_to_load = payload.get("checkpoint_to_load")
-        target_steps = int(payload.get("target_steps", 1000))
-        target_tokens = int(payload.get("target_tokens", 10_000_000_000_000))  # Rely exclusively on target steps
-        eval_freq = int(payload.get("eval_frequency", 10))
-        save_freq = int(payload.get("save_frequency", 50))
-        es_enabled = bool(payload.get("early_stopping_enabled", True))
-        es_patience = int(payload.get("early_stopping_patience", 5))
+        checkpoint_to_load = (
+            payload.get("resume_checkpoint")
+            or payload.get("checkpoint_to_load")
+            or payload.get("checkpoint_path")
+            or payload.get("checkpoint")
+        )
+        duration_mode = str(payload.get("duration_mode", "steps")).lower()
+        target_epochs = int(payload.get("target_epochs") or payload.get("epochs") or 3)
+        target_steps = int(payload.get("total_steps") or payload.get("target_steps") or 1000)
+        target_tokens = int(payload.get("target_tokens", 10_000_000_000_000))
+        eval_freq = int(
+            payload.get("validation_interval")
+            or payload.get("val_interval")
+            or payload.get("eval_frequency")
+            or payload.get("eval_freq")
+            or config_es.get("eval_frequency")
+            or 250
+        )
+        save_freq = int(
+            payload.get("checkpoint_interval")
+            or payload.get("save_frequency")
+            or payload.get("chk_interval")
+            or 50
+        )
+        es_enabled = bool(payload.get("early_stopping_enabled", False))
+        es_patience = int(payload.get("early_stopping_patience", 20))
         es_min_delta = float(payload.get("early_stopping_min_delta", 0.001))
 
-        if "muon_lr" in payload:
-            config_opt["muon_lr"] = float(payload["muon_lr"])
-        if "adamw_lr" in payload:
-            config_opt["adamw_lr"] = float(payload["adamw_lr"])
+        base_muon = float(payload.get("muon_lr") or config_opt.get("muon_lr", 3e-3))
+        base_adamw = float(payload.get("adamw_lr") or payload.get("peak_lr") or config_opt.get("adamw_lr", 6e-4))
+        config_opt["muon_lr"] = base_muon
+        config_opt["adamw_lr"] = base_adamw
         if "micro_batch_size" in payload:
             config_opt["micro_batch_size"] = int(payload["micro_batch_size"])
         if "grad_accum_steps" in payload:
             config_opt["grad_accum_steps"] = int(payload["grad_accum_steps"])
+
+        self.latest_val_loss = None
+        self.latest_val_step = None
+        self.latest_val_timestamp = None
+        self.cumulative_active_time = 0.0
 
         self.state_machine.transition_to(RunState.STARTING)
         self.db.create_run(
@@ -232,41 +257,7 @@ class TrainingWorkerProcess:
             self.state_machine.transition_to(RunState.FAILED)
             return
 
-        # 2. Load Checkpoint if provided
-        start_step = 0
-        total_tokens = 0
-        if checkpoint_to_load:
-            try:
-                load_res = self.checkpoint_manager.load_checkpoint(
-                    checkpoint_path=checkpoint_to_load,
-                    model=model,
-                    device=device,
-                    restore_training_state=False,
-                )
-                start_step = int(load_res.get("step", 0))
-                total_tokens = int(load_res.get("tokens_seen", 0))
-                logger.info("Loaded weights from %s (starting step: %d, tokens: %d)", checkpoint_to_load, start_step, total_tokens)
-            except Exception as e:
-                logger.warning("Could not load checkpoint %s: %s", checkpoint_to_load, e)
-
-        # Checkpoint resume & target steps resolution:
-        # If user loads a checkpoint at step 10,000 and entered 1,000 steps,
-        # target_steps (1000) <= start_step (10000).
-        # Set target_steps = start_step + session_steps = 11,000 so training does not stop immediately!
-        if start_step > 0 and target_steps <= start_step:
-            session_steps = target_steps
-            target_steps = start_step + session_steps
-            logger.info(
-                "Checkpoint resume: target_steps (%d) <= start_step (%d). Adjusted target_steps to %d (+%d steps in this session).",
-                session_steps, start_step, target_steps, session_steps,
-            )
-        else:
-            session_steps = max(1, target_steps - start_step)
-
-        if total_tokens > 0 and target_tokens <= total_tokens:
-            target_tokens = total_tokens + 10_000_000_000_000
-
-        # 3. Configure Optimizers & Scheduler
+        # 2. Configure Optimizers & Scheduler
         try:
             muon_opt, adamw_opt = create_optimizers_from_dict(model, config_opt)
             scheduler = WSDScheduler(
@@ -288,11 +279,17 @@ class TrainingWorkerProcess:
                 max_budget_gb=float(config_opt.get("max_budget_gb", 5.0)),
             )
 
+            # Resolve Task Adapter (Causal LM, Classification, Masked LM, Regression)
+            task_name = payload.get("task") or config_arch.get("default_task") or "causal_lm"
+            task_adapter = TaskAdapterFactory.get_adapter(task_name)
+            logger.info("Configured task adapter: %s (%s)", task_adapter.task_name, task_adapter.description)
+
             trainer = Trainer(
                 model=model,
                 optimizers=(muon_opt, adamw_opt),
                 scheduler=scheduler,
                 config=training_cfg,
+                task_adapter=task_adapter,
             )
         except Exception as e:
             logger.exception("Failed to configure trainer/optimizer: %s", e)
@@ -304,11 +301,92 @@ class TrainingWorkerProcess:
             self.state_machine.transition_to(RunState.FAILED)
             return
 
+        # 3. Load Checkpoint (Full State Restoration: Weights + Optimizers + Scheduler + RNG)
+        start_step = 0
+        total_tokens = 0
+        if checkpoint_to_load:
+            try:
+                cand_p = Path(checkpoint_to_load)
+                if not cand_p.is_absolute() and not cand_p.exists():
+                    for search_dir in [Path("checkpoints"), self.checkpoint_manager.checkpoint_dir, Path(r"d:\proiecte\LLM from Scratch\checkpoints")]:
+                        if (search_dir / cand_p.name).exists():
+                            checkpoint_to_load = str((search_dir / cand_p.name).resolve())
+                            break
+
+                load_res = self.checkpoint_manager.load_checkpoint(
+                    checkpoint_path=checkpoint_to_load,
+                    model=model,
+                    optimizers=(muon_opt, adamw_opt),
+                    scheduler=scheduler,
+                    device=device,
+                    restore_training_state=True,
+                )
+                start_step = int(load_res.get("step", 0))
+                total_tokens = int(load_res.get("tokens_seen", 0))
+                trainer.global_step = start_step
+                trainer.cumulative_tokens = total_tokens
+                chk_val_loss = load_res.get("val_loss")
+                chk_train_loss = load_res.get("train_loss")
+                if chk_val_loss is not None:
+                    try:
+                        self.latest_val_loss = float(chk_val_loss)
+                        self.latest_val_step = start_step
+                        self.latest_val_timestamp = time.time()
+                    except (ValueError, TypeError):
+                        pass
+                self.cumulative_active_time = float(load_res.get("active_training_time_s") or load_res.get("elapsed_time") or 0.0)
+                logger.info(
+                    "Fully restored training state from %s (starting step: %d, tokens: %d, val_loss: %s, Muon entries: %d)",
+                    checkpoint_to_load,
+                    start_step,
+                    total_tokens,
+                    chk_val_loss,
+                    len(muon_opt.state),
+                )
+                self._send_event(WorkerEvent(
+                    event_type=EventType.STATE_CHANGED,
+                    run_id=run_id,
+                    step=start_step,
+                    payload={
+                        "message": f"Checkpoint loaded: step {start_step}, tokens {total_tokens}, val_loss {chk_val_loss}",
+                        "checkpoint": checkpoint_to_load,
+                        "step": start_step,
+                        "val_loss": chk_val_loss,
+                        "loss": chk_train_loss,
+                        "train_loss": chk_train_loss,
+                    },
+                ))
+            except Exception as e:
+                logger.warning("Could not fully load checkpoint %s: %s", checkpoint_to_load, e)
+                self._send_event(WorkerEvent(
+                    event_type=EventType.GRADIENT_WARNING,
+                    run_id=run_id,
+                    payload={"alert": f"Warning: Failed to restore checkpoint {checkpoint_to_load}: {e}"},
+                ))
+
+        # Checkpoint resume & target steps resolution:
+        # If user loads a checkpoint at step 10,000 and entered 1,000 steps,
+        # target_steps (1000) <= start_step (10000).
+        # Set target_steps = start_step + session_steps = 11,000 so training does not stop immediately!
+        if start_step > 0 and target_steps <= start_step:
+            session_steps = target_steps
+            target_steps = start_step + session_steps
+            logger.info(
+                "Checkpoint resume: target_steps (%d) <= start_step (%d). Adjusted target_steps to %d (+%d steps in this session).",
+                session_steps, start_step, target_steps, session_steps,
+            )
+        else:
+            session_steps = max(1, target_steps - start_step)
+
+        if total_tokens > 0 and target_tokens <= total_tokens:
+            target_tokens = total_tokens + 10_000_000_000_000
+
         # 4. Configure Early Stopping
         es_cfg = EarlyStoppingConfig(
             enabled=es_enabled,
             patience=es_patience,
             min_delta=es_min_delta,
+            min_steps=int(payload.get("early_stopping_min_steps", config_es.get("min_steps", 500))),
             overfitting_ratio=float(config_es.get("overfitting_ratio", 1.15)),
             checkpoint_dir="checkpoints",
         )
@@ -316,7 +394,7 @@ class TrainingWorkerProcess:
 
         # 5. Load Dataset
         tokenizer = RoCanonTokenizer()
-        dataset_engine = CustomDatasetEngine(tokenizer=tokenizer)
+        dataset_engine = CustomDatasetEngine(tokenizer=tokenizer, db=self.db)
 
         def on_ds_progress(txt: str, pct: float):
             self._send_event(WorkerEvent(
@@ -347,10 +425,17 @@ class TrainingWorkerProcess:
             self.state_machine.transition_to(RunState.FAILED)
             return
 
-        batch_len = training_cfg.micro_batch_size * training_cfg.seq_len
-        train_len = len(train_inputs)
-        val_len = len(val_inputs)
-        val_batches = max(1, min(4, val_len // batch_len))
+        is_seq_tokens = (train_inputs.dim() == 1)
+        if is_seq_tokens:
+            batch_len = training_cfg.micro_batch_size * training_cfg.seq_len
+            train_len = len(train_inputs)
+            val_len = len(val_inputs)
+        else:
+            batch_len = training_cfg.micro_batch_size
+            train_len = train_inputs.size(0)
+            val_len = val_inputs.size(0)
+
+        val_batches = max(1, min(12, val_len // max(1, batch_len)))
 
         self.state_machine.transition_to(RunState.RUNNING)
         self._send_event(WorkerEvent(
@@ -371,10 +456,22 @@ class TrainingWorkerProcess:
         ))
 
         step = start_step
-        base_muon = float(config_opt.get("muon_lr", 3e-3))
-        base_adamw = float(config_opt.get("adamw_lr", 6e-4))
-        eval_freq = int(payload.get("eval_frequency") or config_es.get("eval_frequency", 10))
-        save_freq = int(payload.get("save_frequency", 50))
+        base_muon = float(payload.get("muon_lr") or config_opt.get("muon_lr", 3e-3))
+        base_adamw = float(payload.get("adamw_lr") or payload.get("peak_lr") or config_opt.get("adamw_lr", 6e-4))
+        eval_freq = int(
+            payload.get("validation_interval")
+            or payload.get("val_interval")
+            or payload.get("eval_frequency")
+            or payload.get("eval_freq")
+            or config_es.get("eval_frequency")
+            or 250
+        )
+        save_freq = int(
+            payload.get("checkpoint_interval")
+            or payload.get("save_frequency")
+            or payload.get("chk_interval")
+            or 50
+        )
         grad_norm: Optional[float] = None
 
         # Metrics write buffer for batch sqlite commits
@@ -414,12 +511,15 @@ class TrainingWorkerProcess:
                 warmup_steps = max(10, min(150, int(session_total_steps * 0.05)))
                 if session_step < warmup_steps:
                     sched_factor = 0.1 + 0.9 * (float(session_step) / float(max(1, warmup_steps)))
+                    sched_phase = "warmup"
                 elif session_step > int(session_total_steps * 0.85):
                     decay_span = max(1, session_total_steps - int(session_total_steps * 0.85))
                     decay_progress = (session_step - int(session_total_steps * 0.85)) / float(decay_span)
                     sched_factor = 0.15 + 0.85 * 0.5 * (1.0 + math.cos(math.pi * min(1.0, decay_progress)))
+                    sched_phase = "decay"
                 else:
                     sched_factor = 1.0
+                    sched_phase = "stable"
 
                 # 2. Dynamic Auto-Adjustment based on Gradient Stability
                 if self.auto_lr_adjust and step > (start_step + 3) and grad_norm is not None:
@@ -474,25 +574,31 @@ class TrainingWorkerProcess:
                     trainer.zero_grad()
                     for accum_idx in range(training_cfg.grad_accum_steps):
                         start_pos = (step * training_cfg.grad_accum_steps + accum_idx) * batch_len
-                        if start_pos + batch_len <= train_len:
-                            batch_in = train_inputs[start_pos : start_pos + batch_len].view(
-                                training_cfg.micro_batch_size, training_cfg.seq_len
-                            )
-                            batch_lbl = (
-                                train_labels[start_pos : start_pos + batch_len].view(
+                        if is_seq_tokens:
+                            if start_pos + batch_len <= train_len:
+                                batch_in = train_inputs[start_pos : start_pos + batch_len].view(
                                     training_cfg.micro_batch_size, training_cfg.seq_len
                                 )
-                                if train_labels is not None
-                                else None
-                            )
+                                batch_lbl = (
+                                    train_labels[start_pos : start_pos + batch_len].view(
+                                        training_cfg.micro_batch_size, training_cfg.seq_len
+                                    )
+                                    if train_labels is not None
+                                    else None
+                                )
+                            else:
+                                idx = (torch.arange(batch_len, device=device) + start_pos) % train_len
+                                batch_in = train_inputs[idx].view(training_cfg.micro_batch_size, training_cfg.seq_len)
+                                batch_lbl = (
+                                    train_labels[idx].view(training_cfg.micro_batch_size, training_cfg.seq_len)
+                                    if train_labels is not None
+                                    else None
+                                )
                         else:
+                            # Feature tensor [N, S, D] or [N, D]
                             idx = (torch.arange(batch_len, device=device) + start_pos) % train_len
-                            batch_in = train_inputs[idx].view(training_cfg.micro_batch_size, training_cfg.seq_len)
-                            batch_lbl = (
-                                train_labels[idx].view(training_cfg.micro_batch_size, training_cfg.seq_len)
-                                if train_labels is not None
-                                else None
-                            )
+                            batch_in = train_inputs[idx]
+                            batch_lbl = train_labels[idx] if train_labels is not None else None
 
                         trainer.accumulate_micro_batch(input_ids=batch_in, labels=batch_lbl)
 
@@ -507,9 +613,12 @@ class TrainingWorkerProcess:
                     tokens_in_step = training_cfg.micro_batch_size * (training_cfg.seq_len - 1) * training_cfg.grad_accum_steps
                     total_tokens += tokens_in_step
 
-                    grad_norm = trainer.optimizer_step(num_tokens_in_step=total_tokens)
+                    grad_norm = trainer.optimizer_step(num_tokens_in_step=total_tokens, advance_scheduler=False)
+                    scheduler.current_step = step
+                    scheduler.current_tokens = total_tokens
                     train_loss = trainer.loss_accumulator.reset()
                     dt = time.time() - t0
+                    self.cumulative_active_time += dt
 
                 except torch.cuda.OutOfMemoryError as oom_err:
                     logger.critical("CUDA Out of Memory encountered at step %d: %s", step, oom_err)
@@ -583,7 +692,8 @@ class TrainingWorkerProcess:
                 # Validation evaluation
                 val_loss = None
                 gen_gap = None
-                if (step % eval_freq == 0) or self.manual_val_requested or (step == 1):
+                is_eval_step = (eval_freq > 0 and (step - start_step) > 0 and (step - start_step) % eval_freq == 0) or self.manual_val_requested
+                if is_eval_step:
                     self.manual_val_requested = False
                     model.eval()
                     val_loss_acc = 0.0
@@ -592,22 +702,30 @@ class TrainingWorkerProcess:
                             for v_idx in range(val_batches):
                                 v_start = (v_idx * batch_len) % val_len
                                 v_idx_tensor = (torch.arange(batch_len, device=device) + v_start) % val_len
-                                v_in_batch = val_inputs[v_idx_tensor].view(training_cfg.micro_batch_size, training_cfg.seq_len)
-                                v_tgt_batch = (
-                                    val_labels[v_idx_tensor].view(training_cfg.micro_batch_size, training_cfg.seq_len)
-                                    if val_labels is not None
-                                    else v_in_batch
-                                )
+                                if is_seq_tokens:
+                                    v_in_batch = val_inputs[v_idx_tensor].view(training_cfg.micro_batch_size, training_cfg.seq_len)
+                                    v_tgt_batch = (
+                                        val_labels[v_idx_tensor].view(training_cfg.micro_batch_size, training_cfg.seq_len)
+                                        if val_labels is not None
+                                        else v_in_batch
+                                    )
+                                else:
+                                    v_in_batch = val_inputs[v_idx_tensor]
+                                    v_tgt_batch = val_labels[v_idx_tensor] if val_labels is not None else None
 
-                                v_logits = model(v_in_batch)
-                                if isinstance(v_logits, tuple):
-                                    v_logits = v_logits[0]
-                                v_shift_logits = v_logits[..., :-1, :].contiguous()
-                                v_shift_targets = v_tgt_batch[..., 1:].contiguous()
-                                v_loss_t, _ = trainer.loss_fn(v_shift_logits, v_shift_targets)
+                                v_loss_t, _, _ = task_adapter.forward_loss(
+                                    model=model,
+                                    inputs=v_in_batch,
+                                    targets=v_tgt_batch,
+                                    loss_fn=trainer.loss_fn,
+                                    autocast_dtype=training_cfg.dtype,
+                                )
                                 val_loss_acc += float(v_loss_t.item())
 
                     val_loss = val_loss_acc / val_batches
+                    self.latest_val_loss = val_loss
+                    self.latest_val_step = step
+                    self.latest_val_timestamp = time.time()
                     model.train()
 
                     val_record = detector.evaluate_step(
@@ -749,17 +867,40 @@ class TrainingWorkerProcess:
                     "dataset_name": dataset_source,
                     "dataset_status": "CUDA Streaming & Training",
                     "dataset_progress_pct": 100.0,
+                    "loss": round(train_loss, 4),
                     "train_loss": round(train_loss, 4),
                     "val_loss": round(val_loss, 4) if val_loss is not None else None,
+                    "latest_val_loss": round(self.latest_val_loss, 4) if self.latest_val_loss is not None else None,
+                    "latest_val_step": self.latest_val_step,
+                    "latest_val_timestamp": self.latest_val_timestamp,
+                    "val_status": "completed" if self.latest_val_loss is not None else "awaiting",
+                    "eval_interval": eval_freq,
+                    "last_val_step": self.latest_val_step,
+                    "next_val_step": (start_step + (((step - start_step) // eval_freq) + 1) * eval_freq) if eval_freq > 0 else None,
                     "generalization_gap": round(gen_gap, 4) if gen_gap is not None else None,
                     "grad_norm": round(grad_norm, 4) if grad_norm is not None else 0.0,
+                    "learning_rate": eff_muon_lr,
+                    "lr": eff_muon_lr,
                     "muon_lr": eff_muon_lr,
                     "adamw_lr": eff_adamw_lr,
+                    "base_muon_lr": active_base_muon,
+                    "base_adamw_lr": active_base_adamw,
+                    "sched_phase": sched_phase,
+                    "sched_factor": round(sched_factor, 4),
                     "lr_multiplier": round(curr_mult, 4),
                     "adaptive_lr_factor": round(self.adaptive_lr_factor, 4),
+                    "step_time_ms": round(dt * 1000, 2),
+                    "active_training_time_s": round(self.cumulative_active_time, 2),
+                    "duration_mode": duration_mode,
+                    "target_epochs": target_epochs if duration_mode == "epochs" else None,
+                    "tokens_per_epoch": train_len,
                     "vram_used_gb": round(vram_gb, 2),
+                    "memory_allocated_mb": round(vram_gb * 1024, 1),
+                    "tokens_seen": total_tokens,
                     "tok_per_sec": round(tok_per_sec, 1),
+                    "tokens_per_second": round(tok_per_sec, 1),
                     "tflops": round(tflops, 3),
+                    "phase": phase,
                     "early_stopping_enabled": es_enabled,
                     "early_stopping_patience": es_patience,
                     "early_stopping_counter": detector.counter,
@@ -783,8 +924,17 @@ class TrainingWorkerProcess:
                 ))
 
                 # Check completion targets
-                if step >= target_steps or total_tokens >= target_tokens:
-                    logger.info("Target steps/tokens reached: step %d (target %d, session %d/%d steps)", step, target_steps, session_curr_steps, session_total_steps)
+                is_completed = False
+                if duration_mode == "epochs":
+                    if total_tokens >= (target_epochs * train_len):
+                        logger.info("Target epochs reached: %d epochs (%d tokens) at step %d", target_epochs, total_tokens, step)
+                        is_completed = True
+                else:
+                    if step >= target_steps:
+                        logger.info("Target steps reached: step %d (target %d, session %d/%d steps)", step, target_steps, session_curr_steps, session_total_steps)
+                        is_completed = True
+
+                if is_completed:
                     self.checkpoint_manager.save_checkpoint(
                         model=model,
                         step=step,
@@ -861,6 +1011,26 @@ class TrainingWorkerProcess:
                 metrics_buffer.clear()
             self.db.update_run_status(run_id, self.state_machine.current_state.value, step=step, tokens=total_tokens)
             logger.info("Session %s ended with state %s at step %d", run_id, self.state_machine.current_state.value, step)
+
+            # Comprehensive GPU & CPU resource cleanup
+            try:
+                del model
+                del trainer
+                del muon_opt
+                del adamw_opt
+                del scheduler
+                del train_inputs
+                del train_labels
+                del val_inputs
+                del val_labels
+            except Exception:
+                pass
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                torch.cuda.empty_cache()
+                torch.cuda.ipc_collect()
 
 
 def worker_process_entrypoint(

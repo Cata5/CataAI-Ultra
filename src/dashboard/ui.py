@@ -21,12 +21,12 @@ INDEX_HTML = """<!DOCTYPE html>
         theme: {
           extend: {
             colors: {
-              brand: { 400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7' },
-              darkbg: '#0a0f1d',
-              darkcard: '#111827',
-              darkcard2: '#162035',
-              darkborder: '#1f293d',
-              accent: '#06b6d4',
+              brand: { 400: '#00f0ff', 500: '#38bdf8', 600: '#0284c7' },
+              darkbg: '#050811',
+              darkcard: '#0a101f',
+              darkcard2: '#0f172a',
+              darkborder: 'rgba(56, 189, 248, 0.16)',
+              accent: '#00f0ff',
             }
           }
         }
@@ -71,8 +71,12 @@ INDEX_HTML = """<!DOCTYPE html>
             if (typeof refreshRunsTable === 'function') refreshRunsTable();
           } else if (tabId === 'datasets' && typeof refreshRegisteredDatasets === 'function') {
             refreshRegisteredDatasets();
-          } else if (tabId === 'evaluation' && typeof refreshComparisonCheckpoints === 'function') {
-            refreshComparisonCheckpoints();
+          } else if (tabId === 'evaluation') {
+            if (typeof refreshComparisonCheckpoints === 'function') refreshComparisonCheckpoints();
+            if (typeof refreshBenchmarkHistory === 'function') refreshBenchmarkHistory();
+            if (typeof refreshCheckpointsTable === 'function') refreshCheckpointsTable();
+          } else if (tabId === 'settings') {
+            if (typeof refreshAlertsTable === 'function') refreshAlertsTable();
           }
         } catch (tabErr) {
           console.warn('Tab initialization warning:', tabErr);
@@ -100,15 +104,33 @@ INDEX_HTML = """<!DOCTYPE html>
   </script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
-    body { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #0a0f1d; }
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: #050811;
+      background-image: 
+        linear-gradient(to right, rgba(56, 189, 248, 0.03) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(56, 189, 248, 0.03) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
     .font-mono { font-family: 'JetBrains Mono', monospace; }
-    .tab-active { border-color: #0ea5e9 !important; color: #38bdf8 !important; background-color: rgba(14, 165, 233, 0.12) !important; }
-    .glow-cyan { box-shadow: 0 0 20px -3px rgba(6, 182, 212, 0.25); }
+    .tab-active {
+      border-color: #00f0ff !important;
+      color: #00f0ff !important;
+      background-color: rgba(0, 240, 255, 0.12) !important;
+      box-shadow: 0 0 12px rgba(0, 240, 255, 0.2) !important;
+    }
+    .glow-cyan { box-shadow: 0 0 20px -3px rgba(0, 240, 255, 0.3); }
+    .glass-card {
+      background: rgba(10, 16, 31, 0.75);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(56, 189, 248, 0.16);
+    }
     .hidden { display: none !important; }
     ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: #0a0f1d; }
-    ::-webkit-scrollbar-thumb { background: #1f293d; border-radius: 3px; }
-    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+    ::-webkit-scrollbar-track { background: #050811; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #0284c7; }
   </style>
 </head>
 <body class="text-slate-200 antialiased min-h-screen flex flex-col justify-between">
@@ -441,14 +463,14 @@ INDEX_HTML = """<!DOCTYPE html>
                     <span>🛑</span> Early Stopping
                   </label>
                   <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" id="config-es-enabled" checked class="sr-only peer">
+                    <input type="checkbox" id="config-es-enabled" class="sr-only peer">
                     <div class="w-8 h-4 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-3 after:w-3 after:transition-all peer-checked:bg-emerald-500"></div>
                   </label>
                 </div>
                 <div class="grid grid-cols-2 gap-1.5">
                   <div>
                     <span class="text-[9px] text-slate-400 uppercase block">Patience</span>
-                    <input type="number" id="config-es-patience" value="5" min="1" max="50" class="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500">
+                    <input type="number" id="config-es-patience" value="20" min="1" max="500" class="w-full bg-slate-950 border border-slate-700 rounded px-1.5 py-0.5 text-xs text-white font-mono focus:outline-none focus:border-emerald-500">
                   </div>
                   <div>
                     <span class="text-[9px] text-slate-400 uppercase block">Min Delta</span>
@@ -1192,7 +1214,13 @@ INDEX_HTML = """<!DOCTYPE html>
 
         <textarea id="infer-prompt" rows="3" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-xs text-slate-200 font-mono focus:outline-none focus:border-cyan-500" placeholder="Scrie un prompt pentru RoCanon-48.5M (ex: Explică arhitectura RoCanon și avantajele filtrelor Canon...)..."></textarea>
 
-        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 text-xs">
+        <div class="grid grid-cols-2 md:grid-cols-6 gap-3 text-xs">
+          <div>
+            <label class="text-[10px] text-slate-400 uppercase font-semibold">Active Checkpoint</label>
+            <select id="infer-checkpoint" class="w-full mt-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 font-mono text-[11px]">
+              <option value="">Baseline / Active Model</option>
+            </select>
+          </div>
           <div>
             <label class="text-[10px] text-slate-400 uppercase font-semibold">Max Tokens</label>
             <input type="number" id="infer-max-tokens" value="128" step="16" class="w-full mt-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-200 font-mono">
@@ -1218,7 +1246,11 @@ INDEX_HTML = """<!DOCTYPE html>
         <!-- Output response -->
         <div id="infer-output-container" class="hidden p-4 rounded-lg bg-slate-900 border border-slate-800 space-y-2">
           <div class="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800 pb-1.5">
-            <span>Model Output:</span>
+            <div class="flex items-center gap-2">
+              <span>Model Output:</span>
+              <span id="infer-device-badge" class="px-1.5 py-0.5 rounded text-[10px] bg-slate-800 font-mono text-cyan-400"></span>
+              <span id="infer-checkpoint-badge" class="text-[10px] text-slate-400 font-mono"></span>
+            </div>
             <div class="flex items-center gap-3 font-mono">
               <span id="infer-time-label">-- s</span>
               <span id="infer-speed-label" class="text-cyan-400">-- tok/s</span>
@@ -1265,6 +1297,33 @@ INDEX_HTML = """<!DOCTYPE html>
 
         <div id="benchmark-results-container" class="space-y-3">
           <div class="text-slate-500 italic text-xs py-2">Click "Run Benchmark Suite" to evaluate the current model weights against standardized test sets.</div>
+        </div>
+      </div>
+
+      <!-- Historical Benchmark Runs -->
+      <div class="bg-darkcard border border-darkborder rounded-xl p-5 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-bold text-white flex items-center gap-2">
+            <span>📊</span> Benchmark Run History
+          </h2>
+          <button onclick="refreshBenchmarkHistory()" class="text-xs text-cyan-400 hover:text-cyan-300">Refresh History</button>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="text-slate-400 border-b border-darkborder">
+              <tr>
+                <th class="pb-2 font-semibold">Category</th>
+                <th class="pb-2 font-semibold">Score</th>
+                <th class="pb-2 font-semibold">Step</th>
+                <th class="pb-2 font-semibold">Checkpoint</th>
+                <th class="pb-2 font-semibold">Run ID</th>
+                <th class="pb-2 font-semibold">Date</th>
+              </tr>
+            </thead>
+            <tbody id="table-benchmark-history-body" class="divide-y divide-slate-800/60 font-mono">
+              <tr><td colspan="6" class="py-4 text-center text-slate-500 italic">No benchmark runs recorded.</td></tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -1400,6 +1459,32 @@ INDEX_HTML = """<!DOCTYPE html>
             </div>
           </div>
         </div>
+
+        <!-- System Alerts History Table -->
+        <div class="bg-darkcard border border-darkborder rounded-xl p-5 space-y-3 col-span-1 md:col-span-2">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-bold text-white flex items-center gap-2">
+              <span>🔔</span> System & Training Alerts History
+            </h2>
+            <button onclick="refreshAlertsTable()" class="text-xs text-cyan-400 hover:text-cyan-300">Refresh Alerts</button>
+          </div>
+          <div class="overflow-x-auto max-h-64 overflow-y-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="text-slate-400 border-b border-darkborder sticky top-0 bg-darkcard">
+                <tr>
+                  <th class="pb-2 font-semibold">Level</th>
+                  <th class="pb-2 font-semibold">Category</th>
+                  <th class="pb-2 font-semibold">Message</th>
+                  <th class="pb-2 font-semibold">Step</th>
+                  <th class="pb-2 font-semibold">Time</th>
+                </tr>
+              </thead>
+              <tbody id="table-alerts-body" class="divide-y divide-slate-800/60 font-mono">
+                <tr><td colspan="5" class="py-4 text-center text-slate-500 italic">No alerts recorded.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   </main>
@@ -1488,6 +1573,7 @@ INDEX_HTML = """<!DOCTYPE html>
         // Tab-specific initializations protected in try-catch
         try {
           if (tabId === 'training') {
+            refreshRegisteredDatasets();
             setTimeout(() => {
               initChartsIfNeeded();
               if (chartLoss) chartLoss.resize();
@@ -1514,6 +1600,10 @@ INDEX_HTML = """<!DOCTYPE html>
             refreshRegisteredDatasets();
           } else if (tabId === 'evaluation') {
             refreshComparisonCheckpoints();
+            refreshBenchmarkHistory();
+            refreshCheckpointsTable();
+          } else if (tabId === 'settings') {
+            refreshAlertsTable();
           }
         } catch (initErr) {
           console.warn('Tab initialization warning:', initErr);
@@ -2773,8 +2863,8 @@ INDEX_HTML = """<!DOCTYPE html>
         target_steps: (stepsEl && stepsEl.value) ? parseInt(stepsEl.value, 10) : 1000,
         eval_frequency: (evalEl && evalEl.value) ? parseInt(evalEl.value, 10) : 25,
         save_frequency: (saveEl && saveEl.value) ? parseInt(saveEl.value, 10) : 50,
-        early_stopping_enabled: esEnabledEl ? esEnabledEl.checked : true,
-        early_stopping_patience: (esPatienceEl && esPatienceEl.value) ? parseInt(esPatienceEl.value, 10) : 5,
+        early_stopping_enabled: esEnabledEl ? esEnabledEl.checked : false,
+        early_stopping_patience: (esPatienceEl && esPatienceEl.value) ? parseInt(esPatienceEl.value, 10) : 20,
         early_stopping_min_delta: (esDeltaEl && esDeltaEl.value) ? parseFloat(esDeltaEl.value) : 0.001,
         micro_batch_size: (batchEl && batchEl.value) ? parseInt(batchEl.value, 10) : 8,
         grad_accum_steps: (accumEl && accumEl.value) ? parseInt(accumEl.value, 10) : 2,
@@ -2903,8 +2993,10 @@ INDEX_HTML = """<!DOCTYPE html>
       btn.disabled = true;
       btn.innerText = 'Generating...';
 
+      const chk = document.getElementById('infer-checkpoint') ? document.getElementById('infer-checkpoint').value : '';
       const payload = {
         prompt: prompt,
+        checkpoint: chk,
         max_new_tokens: parseInt(document.getElementById('infer-max-tokens').value),
         temperature: parseFloat(document.getElementById('infer-temp').value),
         top_p: parseFloat(document.getElementById('infer-top-p').value),
@@ -2922,6 +3014,12 @@ INDEX_HTML = """<!DOCTYPE html>
         document.getElementById('infer-output-container').classList.remove('hidden');
         document.getElementById('infer-time-label').innerText = `${d.generation_time_sec} s`;
         document.getElementById('infer-speed-label').innerText = `${d.tokens_per_sec} tok/s`;
+        if (document.getElementById('infer-device-badge')) {
+          document.getElementById('infer-device-badge').innerText = d.device ? `Device: ${d.device}` : '';
+        }
+        if (document.getElementById('infer-checkpoint-badge')) {
+          document.getElementById('infer-checkpoint-badge').innerText = d.checkpoint_loaded ? `Checkpoint: ${d.checkpoint_loaded}` : 'Base Model';
+        }
         document.getElementById('infer-response-text').innerText = d.generated_text;
       } catch (e) {
         console.error('Generation error:', e);
@@ -2938,7 +3036,11 @@ INDEX_HTML = """<!DOCTYPE html>
         const list = await res.json();
         const tbody = document.getElementById('table-checkpoints-body');
         const select = document.getElementById('config-checkpoint');
+        const inferSelect = document.getElementById('infer-checkpoint');
         select.innerHTML = '<option value="">Start from Scratch</option>';
+        if (inferSelect) {
+          inferSelect.innerHTML = '<option value="">Baseline / Active Model</option>';
+        }
 
         if (!list || list.length === 0) {
           tbody.innerHTML = '<tr><td colspan="6" class="py-4 text-center text-slate-500 italic">No checkpoints found.</td></tr>';
@@ -2947,11 +3049,19 @@ INDEX_HTML = """<!DOCTYPE html>
 
         tbody.innerHTML = '';
         list.forEach(chk => {
-          // Add to select
+          // Add to config select
           const opt = document.createElement('option');
           opt.value = chk.path || chk.filename;
           opt.innerText = `${chk.filename} (Step ${chk.step || 0})`;
           select.appendChild(opt);
+
+          // Add to evaluation inference select
+          if (inferSelect) {
+            const opt2 = document.createElement('option');
+            opt2.value = chk.path || chk.filename;
+            opt2.innerText = `${chk.filename} (Step ${chk.step || 0}${chk.val_loss ? ', Val ' + chk.val_loss.toFixed(3) : ''})`;
+            inferSelect.appendChild(opt2);
+          }
 
           // Add row
           const tr = document.createElement('tr');
@@ -2970,6 +3080,55 @@ INDEX_HTML = """<!DOCTYPE html>
         });
       } catch (e) {
         console.error('Checkpoints fetch error:', e);
+      }
+    }
+
+    async function refreshBenchmarkHistory() {
+      try {
+        const res = await fetch('/api/evaluation/results');
+        const list = await res.json();
+        const tbody = document.getElementById('table-benchmark-history-body');
+        if (!tbody) return;
+        if (!list || list.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="py-4 text-center text-slate-500 italic">No benchmark runs recorded.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = list.map(b => `
+          <tr class="hover:bg-slate-900/40">
+            <td class="py-2.5 font-semibold text-white">${b.category || '--'}</td>
+            <td class="py-2.5 font-bold ${b.score >= 0.7 ? 'text-emerald-400' : (b.score >= 0.4 ? 'text-amber-400' : 'text-rose-400')}">${(b.score !== undefined && b.score !== null) ? (b.score * 100).toFixed(1) + '%' : '--'}</td>
+            <td class="py-2.5 text-slate-300">${b.step || 0}</td>
+            <td class="py-2.5 text-slate-400 text-[11px] truncate max-w-xs">${b.checkpoint_id || '--'}</td>
+            <td class="py-2.5 text-cyan-400 text-[11px]">${b.run_id || '--'}</td>
+            <td class="py-2.5 text-slate-500 text-[10px]">${b.created_at ? new Date(b.created_at * 1000).toLocaleString() : '--'}</td>
+          </tr>
+        `).join('');
+      } catch (e) {
+        console.error('Failed to load benchmark history:', e);
+      }
+    }
+
+    async function refreshAlertsTable() {
+      try {
+        const res = await fetch('/api/alerts');
+        const list = await res.json();
+        const tbody = document.getElementById('table-alerts-body');
+        if (!tbody) return;
+        if (!list || list.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="5" class="py-4 text-center text-slate-500 italic">No alerts recorded.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = list.map(a => `
+          <tr class="hover:bg-slate-900/40">
+            <td class="py-2 font-bold ${a.level === 'CRITICAL' ? 'text-rose-400' : (a.level === 'WARNING' ? 'text-amber-400' : 'text-cyan-400')}">${a.level}</td>
+            <td class="py-2 text-slate-300 font-semibold">${a.category}</td>
+            <td class="py-2 text-slate-200 text-[11px]">${a.message}</td>
+            <td class="py-2 text-slate-400">${a.step || 0}</td>
+            <td class="py-2 text-slate-500 text-[10px]">${a.timestamp ? new Date(a.timestamp * 1000).toLocaleTimeString() : '--'}</td>
+          </tr>
+        `).join('');
+      } catch (e) {
+        console.error('Failed to load alerts:', e);
       }
     }
 
@@ -3014,6 +3173,37 @@ INDEX_HTML = """<!DOCTYPE html>
         const res = await fetch('/api/datasets');
         const list = await res.json();
         const container = document.getElementById('registered-datasets-list');
+        const configDsSelect = document.getElementById('config-dataset');
+
+        // Update Training Configuration Dataset dropdown
+        if (configDsSelect) {
+          const currentVal = configDsSelect.value;
+          configDsSelect.innerHTML = `
+            <optgroup label="Standard Built-in Presets">
+              <option value="tech_wiki_ro">tech_wiki_ro (Wikipedia & Tech Romanian - Phase 1)</option>
+              <option value="chat_persona_ro">chat_persona_ro (Creator Persona - Phase 2 & 4)</option>
+              <option value="alpaca_ro">alpaca_ro (Instruction Tuning - Phase 3)</option>
+            </optgroup>
+            <optgroup label="Uploaded User Datasets" id="config-dataset-uploaded-group"></optgroup>
+            <optgroup label="Testing & Synthetic">
+              <option value="synthetic">synthetic (Synthetic Fallback Mix - Testing Only)</option>
+            </optgroup>
+          `;
+          const upGroup = document.getElementById('config-dataset-uploaded-group');
+          if (list && list.length > 0 && upGroup) {
+            list.forEach(ds => {
+              const opt = document.createElement('option');
+              opt.value = ds.id;
+              opt.textContent = `${ds.name} (${Number(ds.sample_count).toLocaleString()} samples, ${Number(ds.token_count).toLocaleString()} tok)`;
+              upGroup.appendChild(opt);
+            });
+          }
+          if (currentVal) {
+            configDsSelect.value = currentVal;
+          }
+        }
+
+        if (!container) return;
         if (!list || list.length === 0) {
           container.innerHTML = '<div class="text-slate-500 italic text-xs py-2">No custom datasets uploaded yet. Upload above to inspect.</div>';
           return;
@@ -3025,7 +3215,7 @@ INDEX_HTML = """<!DOCTYPE html>
           card.innerHTML = `
             <div class="flex items-center justify-between">
               <span class="font-bold text-white text-sm">${ds.name}</span>
-              <span class="px-2 py-0.5 rounded text-[10px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-mono">Rev: ${ds.revision}</span>
+              <span class="px-2 py-0.5 rounded text-[10px] bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-mono">ID: ${ds.id}</span>
             </div>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-slate-400 font-mono">
               <div>Format: <span class="text-slate-200">${ds.format}</span></div>
@@ -3120,6 +3310,7 @@ INDEX_HTML = """<!DOCTYPE html>
             </div>
           </div>
         `;
+        refreshBenchmarkHistory();
       } catch (e) {
         container.innerHTML = `<div class="text-rose-400 text-xs">Benchmark execution failed: ${e}</div>`;
       } finally {

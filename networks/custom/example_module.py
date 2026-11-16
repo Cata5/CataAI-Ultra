@@ -42,6 +42,10 @@ class GatedConvolutionalUnit(CustomModuleBase):
         )
         self.out_proj = nn.Linear(dim, dim, bias=False)
 
+    @classmethod
+    def parameter_count(cls, dim: int = 512, kernel_size: int = 5, **kwargs) -> int:
+        return (dim * 2 * kernel_size) + (dim * dim)
+
     def forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         # x is [B, S, D] -> transpose to [B, D, S]
         b, s, d = x.shape

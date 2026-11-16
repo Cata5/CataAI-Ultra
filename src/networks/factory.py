@@ -8,6 +8,7 @@ Decoder-only Transformers, Encoder-only, MLPs, CNNs, and Hybrids.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -102,7 +103,17 @@ class GenericModularNetwork(nn.Module):
             b_qk_norm = bool(layer_spec.get("qk_norm", config.get("qk_norm", False)))
             b_use_rope = (self.pos_encoding == "rope")
 
-            if self.family == "mlp":
+            custom_mod_name = layer_spec.get("custom_module")
+            if custom_mod_name:
+                from .custom_loader import CustomModuleRegistry
+                custom_cls = CustomModuleRegistry().get_module(custom_mod_name)
+                if custom_cls is not None:
+                    custom_params = layer_spec.get("custom_params", {})
+                    block = custom_cls(dim=b_dim, **custom_params)
+                else:
+                    logger.warning("Custom module '%s' requested but not registered.", custom_mod_name)
+                    block = CnnBlock(dim=b_dim, kernel_size=3, act=b_act, norm_type=self.norm_type)
+            elif self.family == "mlp":
                 # MLP stack
                 block = nn.Sequential(
                     nn.Linear(b_dim, b_dff),

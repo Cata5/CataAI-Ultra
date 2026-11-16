@@ -1,3 +1,9 @@
 checkpoints/
 data/
 __pycache__/
+__pycache__/
+*.pyc
+.venv/
+frontend/node_modules/
+frontend/.next/
+frontend/out/

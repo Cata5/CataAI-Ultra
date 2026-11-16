@@ -24,6 +24,7 @@ from ..utils.memory import MemoryTracker
 from .loss import ChunkedCrossEntropyLoss, TokenLossAccumulator
 from .optimizer import configure_optimizers
 from .scheduler import WSDScheduler, clip_gradient_norm
+from .task_adapter import BaseTaskAdapter, TaskAdapterFactory
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +67,10 @@ class Trainer:
         loss_fn: ChunkedCrossEntropyLoss | None = None,
         memory_tracker: MemoryTracker | None = None,
         config: TrainingConfig | None = None,
+        task_adapter: BaseTaskAdapter | None = None,
     ) -> None:
         self.config = config or TrainingConfig()
+        self.task_adapter = task_adapter or TaskAdapterFactory.get_adapter("causal_lm")
 
         # Determine target device
         if self.config.device is not None:
@@ -133,53 +136,28 @@ class Trainer:
         valid_normalizer: int | None = None,
     ) -> tuple[float, int]:
         """
-        Executes a single micro-batch forward and backward pass with BF16 autocast.
-
-        Args:
-            input_ids: Input tokens [B, S].
-            labels: Optional target tokens [B, S]. If None, shifted input_ids are used.
-            cu_seqlens: Optional packed sequence delimiter tensor.
-            valid_normalizer: Total valid tokens across all micro-batches for exact normalization.
-
-        Returns:
-            Tuple of (unscaled_loss_float, valid_tokens_int).
+        Executes a single micro-batch forward and backward pass with BF16 autocast
+        using the configured task adapter.
         """
-        input_ids = input_ids.to(device=self.device, non_blocking=True)
-        if labels is None:
-            # Standard causal LM next-token prediction
-            target_ids = input_ids.clone()
-        else:
-            target_ids = labels.to(device=self.device, non_blocking=True)
+        inputs, targets = self.task_adapter.prepare_batch(
+            (input_ids, labels) if labels is not None else input_ids,
+            device=self.device,
+            dtype=self.config.dtype,
+        )
 
-        if cu_seqlens is not None:
-            cu_seqlens = cu_seqlens.to(device=self.device, non_blocking=True)
-
-        # Device type for autocast ('cuda' or 'cpu')
-        device_type = self.device.type
-
-        # BF16 Autocast forward pass
-        with torch.autocast(device_type=device_type, dtype=self.config.dtype):
-            # Forward pass through model backbone up to logits
-            logits = self.model(input_ids, cu_seqlens=cu_seqlens)
-            if isinstance(logits, tuple):
-                logits = logits[0]
-
-            # Shift logits and targets for causal next-token prediction
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_targets = target_ids[..., 1:].contiguous()
-
-            # Compute chunked cross-entropy with token normalization
-            loss, valid_tokens = self.loss_fn(
-                shift_logits,
-                shift_targets,
-                valid_normalizer=valid_normalizer,
-            )
+        loss, valid_tokens, metrics = self.task_adapter.forward_loss(
+            model=self.model,
+            inputs=inputs,
+            targets=targets,
+            loss_fn=self.loss_fn,
+            valid_normalizer=valid_normalizer,
+            autocast_dtype=self.config.dtype,
+        )
 
         # Backward pass (FP32 accumulation)
         loss.backward()
 
         loss_val = float(loss.item())
-        # If valid_normalizer was used, scale back to unnormalized sum for logging
         if valid_normalizer is not None and valid_normalizer > 0:
             loss_sum = loss_val * float(valid_normalizer)
         else:
@@ -188,12 +166,20 @@ class Trainer:
         self.loss_accumulator.add(loss_sum, valid_tokens)
         return loss_val, valid_tokens
 
-    def optimizer_step(self, num_tokens_in_step: int | None = None) -> float:
+        self.loss_accumulator.add(loss_sum, valid_tokens)
+        return loss_val, valid_tokens
+
+    def optimizer_step(
+        self,
+        num_tokens_in_step: int | None = None,
+        advance_scheduler: bool = True,
+    ) -> float:
         """
-        Executes gradient norm clipping at 1.0, steps both optimizers, and advances scheduler.
+        Executes gradient norm clipping at 1.0, steps both optimizers, and optionally advances scheduler.
 
         Args:
             num_tokens_in_step: Cumulative tokens processed in this step.
+            advance_scheduler: Whether to execute internal scheduler step.
 
         Returns:
             Gradient norm prior to clipping.
@@ -208,11 +194,12 @@ class Trainer:
         # 3. Clear gradients
         self.zero_grad()
 
-        # 4. Advance scheduler
+        # 4. Advance scheduler and step counter
         tokens = num_tokens_in_step if num_tokens_in_step is not None else self.loss_accumulator.total_valid_tokens
         self.cumulative_tokens += tokens
         self.global_step += 1
-        self.scheduler.step(tokens=self.cumulative_tokens)
+        if advance_scheduler and self.scheduler is not None:
+            self.scheduler.step(tokens=self.cumulative_tokens)
 
         # 5. Check memory budget
         self.memory_tracker.assert_within_budget()

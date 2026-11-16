@@ -36,6 +36,7 @@ class WorkerManager:
 
         # State tracking on control plane
         self.current_state: RunState = RunState.IDLE
+        self.state_machine = RunStateMachine()
         self.current_run_id: Optional[str] = None
         self.latest_metrics: Dict[str, Any] = {}
         self.latest_alerts: List[Dict[str, Any]] = []
@@ -121,6 +122,7 @@ class WorkerManager:
             new_state_str = event.payload.get("new_state", "IDLE")
             try:
                 self.current_state = RunState(new_state_str)
+                self.state_machine.current_state = self.current_state
             except ValueError:
                 pass
         elif et == EventType.STEP_COMPLETED:
@@ -140,6 +142,7 @@ class WorkerManager:
         elif et == EventType.RUN_STARTED:
             self.current_run_id = event.run_id
             self.current_state = RunState.RUNNING
+            self.state_machine.current_state = self.current_state
             self.latest_metrics.update(event.payload)
         elif et in (EventType.RUN_STOPPED, EventType.RUN_COMPLETED, EventType.RUN_FAILED):
             if et == EventType.RUN_STOPPED:
@@ -148,6 +151,7 @@ class WorkerManager:
                 self.current_state = RunState.COMPLETED
             elif et == EventType.RUN_FAILED:
                 self.current_state = RunState.FAILED
+            self.state_machine.current_state = self.current_state
 
         # Broadcast to UI WebSockets
         self._broadcast(event)
@@ -184,6 +188,24 @@ class WorkerManager:
         sent = self.send_command(cmd)
         if sent and self.current_state in (RunState.RUNNING, RunState.PAUSED, RunState.STARTING):
             self.current_state = RunState.STOPPING
+
+        # Ensure worker process exits cleanly and CUDA context is completely released back to the OS
+        def _reap_worker_process():
+            time.sleep(2.5)
+            with self._lock:
+                if self._process and self._process.is_alive():
+                    try:
+                        logger.info("Reaping worker process to guarantee 100%% CUDA context release.")
+                        self._process.join(timeout=1.5)
+                        if self._process and self._process.is_alive():
+                            self._process.terminate()
+                            self._process.join(timeout=1.0)
+                    except Exception as e:
+                        logger.warning("Error reaping worker process: %s", e)
+                    self._process = None
+                    self.current_state = RunState.STOPPED
+
+        threading.Thread(target=_reap_worker_process, daemon=True).start()
         return sent
 
     def trigger_validation(self) -> bool:

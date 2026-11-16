@@ -1,0 +1,214 @@
+/**
+ * Type definitions for RoCanon-48.5M WebUI v2 Sci-Fi Workstation.
+ * Matches backend contracts in src/dashboard/server.py and worker protocols.
+ */
+
+export type RunState =
+  | "IDLE"
+  | "STARTING"
+  | "RUNNING"
+  | "PAUSED"
+  | "STOPPING"
+  | "STOPPED"
+  | "COMPLETED"
+  | "FAILED";
+
+export interface MetricPoint {
+  step: number;
+  loss: number;
+  train_loss?: number;
+  val_loss?: number | null;
+  latest_val_loss?: number | null;
+  latest_val_step?: number | null;
+  latest_val_timestamp?: number | null;
+  val_status?: "completed" | "awaiting" | "evaluating";
+  eval_interval?: number;
+  last_val_step?: number | null;
+  next_val_step?: number | null;
+  learning_rate: number;
+  muon_lr?: number;
+  adamw_lr?: number;
+  base_muon_lr?: number;
+  base_adamw_lr?: number;
+  sched_phase?: "warmup" | "stable" | "decay";
+  sched_factor?: number;
+  lr_multiplier?: number;
+  adaptive_lr_factor?: number;
+  tokens_seen?: number;
+  tokens?: number;
+  tokens_per_second?: number;
+  tokens_per_sec?: number;
+  tokens_in_epoch?: number;
+  tokens_per_epoch?: number;
+  current_epoch?: number;
+  target_epochs?: number | null;
+  duration_mode?: "steps" | "epochs";
+  epoch_pct?: number;
+  step_time_ms?: number;
+  active_training_time_s?: number;
+  grad_norm?: number | null;
+  memory_allocated_mb?: number | null;
+  vram_used_gb?: number;
+  phase?: string | null;
+  timestamp?: number;
+  created_at?: string;
+  [key: string]: any;
+}
+
+export interface SystemStatus {
+  state: RunState;
+  run_id: string | null;
+  latest_metrics: MetricPoint | null;
+  alerts_count: number;
+  timestamp: number;
+}
+
+export interface HardwareTelemetry {
+  gpu_name?: string;
+  device_name?: string;
+  gpu_count?: number;
+  cuda_available: boolean;
+  gpu_utilization_pct?: number;
+  gpu_util_percent?: number;
+  memory_used_mb?: number;
+  used_vram_mb?: number;
+  memory_total_mb?: number;
+  total_vram_mb?: number;
+  memory_free_mb?: number;
+  free_vram_mb?: number;
+  memory_utilization_pct?: number;
+  vram_percent?: number;
+  temperature_c: number;
+  power_draw_w?: number;
+  power_draw_watts?: number;
+  power_limit_w?: number;
+  power_limit_watts?: number;
+  core_clock_mhz?: number;
+  sm_clock_mhz?: number;
+  memory_clock_mhz?: number;
+  pytorch_allocated_mb?: number;
+  pytorch_reserved_mb?: number;
+  throttle_reasons?: string[];
+  timestamp: number;
+  is_available?: boolean;
+}
+
+export interface Alert {
+  id: number;
+  run_id?: string;
+  step?: number;
+  level: "INFO" | "WARNING" | "CRITICAL" | "ERROR";
+  category: string;
+  message: string;
+  created_at?: string;
+  timestamp?: number;
+}
+
+export interface RunItem {
+  id: string;
+  name: string;
+  status: RunState;
+  config: Record<string, any>;
+  started_at: string;
+  completed_at?: string | null;
+  total_steps: number;
+  total_tokens: number;
+  best_val_loss?: number | null;
+  final_loss?: number | null;
+}
+
+export interface CheckpointItem {
+  id: string;
+  filename: string;
+  step: number;
+  val_loss?: number | null;
+  size_mb: number;
+  created_at?: string;
+  path: string;
+  is_best?: boolean;
+}
+
+export interface DatasetItem {
+  id: string;
+  name: string;
+  source: string;
+  status: string;
+  size_mb: number;
+  total_tokens?: number;
+  train_tokens?: number;
+  val_tokens?: number;
+  stats?: Record<string, any>;
+  created_at?: string;
+  is_uploaded?: boolean;
+}
+
+export interface NetworkConfig {
+  id: string;
+  name: string;
+  description?: string;
+  task_type?: string;
+  architecture_type?: string;
+  layers?: any[];
+  vocab_size?: number;
+  d_model?: number;
+  n_layers?: number;
+  n_q?: number;
+  n_kv?: number;
+  d_ff?: number;
+  kernel_size?: number;
+  total_params?: number;
+  parameters?: {
+    total_params: number;
+    trainable_params: number;
+    non_trainable_params?: number;
+    breakdown?: Record<string, number>;
+  };
+  memory?: {
+    model_weights_mb: number;
+    optimizer_states_mb: number;
+    gradients_mb: number;
+    activations_mb: number;
+    total_training_vram_mb: number;
+    fits_6gb_gpu: boolean;
+  };
+}
+
+export interface PipelinePhase {
+  name: string;
+  steps: number;
+  lr: number;
+  dataset: string;
+  task: string;
+}
+
+export interface PipelineItem {
+  id: string;
+  name: string;
+  status: string;
+  current_phase_index: number;
+  phases: PipelinePhase[];
+}
+
+export interface BenchmarkResult {
+  id: number;
+  run_id?: string;
+  checkpoint_id?: string;
+  task_name: string;
+  score: number;
+  metric_name: string;
+  details?: Record<string, any>;
+  created_at: string;
+}
+
+export interface WebSocketEvent {
+  event_type:
+    | "STEP_METRICS"
+    | "STATE_CHANGED"
+    | "VALIDATION_RESULT"
+    | "CHECKPOINT_SAVED"
+    | "ALERT"
+    | "LOG"
+    | "TELEMETRY";
+  payload: any;
+  timestamp?: number;
+}

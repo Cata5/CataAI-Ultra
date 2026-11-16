@@ -51,6 +51,17 @@ class RMSNorm(nn.Module):
         return (normed * self.weight).type_as(x)
 
 
+class SequenceBatchNorm1d(nn.BatchNorm1d):
+    """
+    1D Batch Normalization compatible with sequence tensors of shape [B, S, D].
+    Transposes to [B, D, S] before applying BatchNorm1d, then transposes back to [B, S, D].
+    """
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 3:
+            return super().forward(x.transpose(1, 2)).transpose(1, 2)
+        return super().forward(x)
+
+
 def get_norm_layer(norm_type: str, dim: int, eps: float = 1e-6) -> nn.Module:
     nt = norm_type.lower()
     if nt == "rmsnorm":
@@ -58,7 +69,7 @@ def get_norm_layer(norm_type: str, dim: int, eps: float = 1e-6) -> nn.Module:
     elif nt == "layernorm":
         return nn.LayerNorm(dim, eps=eps)
     elif nt == "batchnorm":
-        return nn.BatchNorm1d(dim)
+        return SequenceBatchNorm1d(dim, eps=eps)
     elif nt == "groupnorm":
         num_groups = min(32, max(1, dim // 16))
         return nn.GroupNorm(num_groups=num_groups, num_channels=dim)

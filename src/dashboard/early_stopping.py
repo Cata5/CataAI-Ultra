@@ -21,9 +21,10 @@ class EarlyStoppingConfig:
     """
     Configuration parameters for early stopping and overfitting detection.
     """
-    enabled: bool = True               # Enable or disable early stopping
-    patience: int = 5                  # Number of validation checks without improvement
+    enabled: bool = False              # Disabled by default for LLM pre-training
+    patience: int = 20                 # Number of validation checks without improvement (default 20 checks)
     min_delta: float = 0.001           # Minimum decrease in loss to qualify as improvement
+    min_steps: int = 500               # Grace period: do not trigger early stopping before step 500
     overfitting_ratio: float = 1.15    # Ratio (val_loss / train_loss) that triggers an overfitting warning
     restore_best_weights: bool = True  # Automatically restore weights from lowest val loss checkpoint
     checkpoint_dir: str = "checkpoints"
@@ -91,11 +92,11 @@ class OverfittingDetector:
             self.counter += 1
             is_best = False
 
-            if self.config.enabled and self.counter >= self.config.patience:
+            if self.config.enabled and (step >= self.config.min_steps) and (self.counter >= self.config.patience):
                 status = "EARLY STOPPING TRIGGERED"
                 self.stop_requested = True
                 logger.warning(
-                    f"Early stopping triggered at step {step}: no improvement for {self.counter} checks. "
+                    f"Early stopping triggered at step {step}: no improvement for {self.counter} checks (min_steps={self.config.min_steps}). "
                     f"Best val loss: {self.best_val_loss:.4f} at step {self.best_step}."
                 )
             elif gap_ratio >= self.config.overfitting_ratio:

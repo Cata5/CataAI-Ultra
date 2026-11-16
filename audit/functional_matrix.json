@@ -1,0 +1,574 @@
+{
+  "summary": {
+    "total_features_audited": 55,
+    "overall_counts": {
+      "PASS": 22,
+      "PARTIAL": 13,
+      "FAIL": 9,
+      "MOCKED": 0,
+      "NOT IMPLEMENTED": 5,
+      "NOT TESTED": 6,
+      "BLOCKED": 0
+    },
+    "denominator_excludes": [
+      "NOT TESTED",
+      "BLOCKED"
+    ],
+    "verified_denominator": 49,
+    "fully_functional": 22,
+    "verified_pass_percent": 44.9,
+    "raw_pass_percent_of_all_features": 40.0
+  },
+  "features": [
+    {
+      "feature": "Start training \u2014 RoCanon decoder",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PASS",
+      "evidence": "Live run_1794744608 advanced 8996\u21929063 at ~3.7-5.4k tok/s; worker is a real spawn process writing metrics"
+    },
+    {
+      "feature": "Start training \u2014 custom decoder/hybrid network",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "NOT TESTED",
+      "persistence": "N/A",
+      "overall": "NOT TESTED",
+      "evidence": "ModelFactory builds + forward/backward OK (probe P3); not started live to protect the active job"
+    },
+    {
+      "feature": "Start training \u2014 MLP / CNN / classifier networks",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "FAIL",
+      "runtime": "N/A",
+      "persistence": "N/A",
+      "overall": "FAIL",
+      "evidence": "Worker feeds int64 token IDs and shifted causal CE; deep_mlp_5m/conv1d fail on dtype, bert_encoder_25m fails CE shape (probe P5)"
+    },
+    {
+      "feature": "Pause training",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "NOT TESTED",
+      "persistence": "N/A",
+      "overall": "NOT TESTED",
+      "evidence": "State machine + PAUSE_RUN command implemented; not exercised because a real job is running"
+    },
+    {
+      "feature": "Resume training",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "NOT TESTED",
+      "persistence": "N/A",
+      "overall": "NOT TESTED",
+      "evidence": "RESUME_RUN implemented; not exercised (active job protected)"
+    },
+    {
+      "feature": "Stop training",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "NOT TESTED",
+      "persistence": "N/A",
+      "overall": "NOT TESTED",
+      "evidence": "STOP_RUN + stopped_snapshot implemented; not exercised (active job protected)"
+    },
+    {
+      "feature": "Manual checkpoint button",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "NOT TESTED",
+      "persistence": "PASS",
+      "overall": "NOT TESTED",
+      "evidence": "manual_chk_requested handled in worker; not triggered on the live run"
+    },
+    {
+      "feature": "Automatic / best / periodic checkpoints",
+      "frontend": "N/A",
+      "api": "N/A",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PASS",
+      "evidence": "4 real .pt files incl. best_model.pt step 9125, DB checkpoint rows present"
+    },
+    {
+      "feature": "Checkpoint listing",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "GET /api/checkpoints returned 4 entries in 0.94 s"
+    },
+    {
+      "feature": "Checkpoint weight loading",
+      "frontend": "PARTIAL",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "NOT TESTED",
+      "persistence": "N/A",
+      "overall": "PARTIAL",
+      "evidence": "load_checkpoint(strict=False) + shape-adapt; used by evaluation compare; not run live"
+    },
+    {
+      "feature": "Optimizer / scheduler / RNG restoration",
+      "frontend": "N/A",
+      "api": "N/A",
+      "backend": "FAIL",
+      "runtime": "NOT TESTED",
+      "persistence": "N/A",
+      "overall": "FAIL",
+      "evidence": "training_worker passes restore_training_state=False (probe P6b: 0 optimizer entries). RNG restore also fails: 'RNG state must be a torch.ByteTensor' (map_location=cuda moves it to GPU)"
+    },
+    {
+      "feature": "Delete checkpoint",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PASS",
+      "evidence": "Unit test deletes a temp checkpoint successfully; DELETE route + UI button wired; not run on real artifacts"
+    },
+    {
+      "feature": "Dataset upload + validation + analysis",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PASS",
+      "evidence": "Probe P7a: upload/register OK; .txt/.jsonl/.json validator + tokenizer analyzer are real"
+    },
+    {
+      "feature": "Dataset list / stats API",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PASS",
+      "evidence": "GET /api/datasets and /api/datasets/{id}/stats read SQLite"
+    },
+    {
+      "feature": "Dataset preview in UI",
+      "frontend": "NOT IMPLEMENTED",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "N/A",
+      "persistence": "PASS",
+      "overall": "PARTIAL",
+      "evidence": "Validator returns previews and they are stored in stats_json, but the UI only renders counts"
+    },
+    {
+      "feature": "Select an uploaded dataset for training",
+      "frontend": "FAIL",
+      "api": "PASS",
+      "backend": "FAIL",
+      "runtime": "N/A",
+      "persistence": "PASS",
+      "overall": "FAIL",
+      "evidence": "config-dataset has only 3 hardcoded preset keys; passing the dataset id falls back to synthetic data (probe P7c)"
+    },
+    {
+      "feature": "Sample a dataset in training",
+      "frontend": "N/A",
+      "api": "PASS",
+      "backend": "FAIL",
+      "runtime": "N/A",
+      "persistence": "PASS",
+      "overall": "FAIL",
+      "evidence": "max_samples is in StateManager but the Start payload never sends it; no UI control"
+    },
+    {
+      "feature": "Tokenizer inspector",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "Exact round-trip asserted; pytest + /api/tokenizer/inspect"
+    },
+    {
+      "feature": "Tokenizer corpus / vocab",
+      "frontend": "N/A",
+      "api": "N/A",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "12288 vocab verified by tests; special tokens load"
+    },
+    {
+      "feature": "Live text generation",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "BLOCKED",
+      "persistence": "N/A",
+      "overall": "PARTIAL",
+      "evidence": "Real autoregressive sampler, but always the default randomly-initialised RoCanon; no model/checkpoint selector. Not run live: a second 48M model on a GPU with ~600 MB free would risk OOM for the active job"
+    },
+    {
+      "feature": "Evaluation model / checkpoint selection",
+      "frontend": "NOT IMPLEMENTED",
+      "api": "FAIL",
+      "backend": "PARTIAL",
+      "runtime": "N/A",
+      "persistence": "N/A",
+      "overall": "FAIL",
+      "evidence": "handle_eval_generate ignores model/checkpoint fields; InferenceEngine is constructed with RoCanonConfig()"
+    },
+    {
+      "feature": "Side-by-side checkpoint comparison",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "BLOCKED",
+      "persistence": "N/A",
+      "overall": "PARTIAL",
+      "evidence": "Sequential single-instance compare implemented correctly; not run during active training"
+    },
+    {
+      "feature": "Benchmark suite execution",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "BLOCKED",
+      "persistence": "PASS",
+      "overall": "PARTIAL",
+      "evidence": "Real generation + keyword/repetition scoring, persists to benchmarks table; not run during active training"
+    },
+    {
+      "feature": "Benchmark history retrieval",
+      "frontend": "NOT IMPLEMENTED",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "N/A",
+      "persistence": "PASS",
+      "overall": "FAIL",
+      "evidence": "GET /api/evaluation/results exists but no UI element calls it; benchmarks table currently empty"
+    },
+    {
+      "feature": "NVML hardware telemetry",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "Live: RTX 3060 Laptop, 74\u00b0C, 5535 MB used device-wide, 43% util, 1770/6001 MHz, 68.9 W"
+    },
+    {
+      "feature": "PyTorch allocator statistics",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "Live: allocated 194 MB / reserved 602 MB vs device-wide 5535 MB \u2014 correctly distinguished"
+    },
+    {
+      "feature": "VRAM alert evaluation",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "VRAMGuard thresholds + worker logging; live free VRAM 609 MB > 600 MB warning"
+    },
+    {
+      "feature": "Alert delivery over WebSocket",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PASS",
+      "evidence": "Loss-spike/gradient events broadcast and rendered; alerts persisted in DB"
+    },
+    {
+      "feature": "Alert history from DB",
+      "frontend": "NOT IMPLEMENTED",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "N/A",
+      "persistence": "PASS",
+      "overall": "PARTIAL",
+      "evidence": "GET /api/alerts is never called by the UI; alerts container is WS-only"
+    },
+    {
+      "feature": "Architecture templates instantiate + forward",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "rocanon/mini_gpt/hybrid/bert/mlp build and forward; parameter totals match the module exactly"
+    },
+    {
+      "feature": "CNN template forward pass",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "FAIL",
+      "runtime": "N/A",
+      "persistence": "N/A",
+      "overall": "FAIL",
+      "evidence": "conv1d_network_4m saved with norm_type=batchnorm; BatchNorm1d receives [B,S,D] \u2192 'running_mean should contain 16 elements not 384'"
+    },
+    {
+      "feature": "Add / remove / reorder / connect components",
+      "frontend": "NOT IMPLEMENTED",
+      "api": "N/A",
+      "backend": "N/A",
+      "runtime": "N/A",
+      "persistence": "N/A",
+      "overall": "NOT IMPLEMENTED",
+      "evidence": "Palette entries are inert <span>s; Visual Builder is a dimension form; no graph editing"
+    },
+    {
+      "feature": "Visual computation graph",
+      "frontend": "PASS",
+      "api": "N/A",
+      "backend": "PASS",
+      "runtime": "N/A",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "renderComputationGraph derives blocks from config (read-only, not editable)"
+    },
+    {
+      "feature": "Save architecture to registry",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PARTIAL",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PARTIAL",
+      "evidence": "Persists atomically, but ParameterCalculator swallows errors so invalid configs save (probe P8 saved n_q=5/n_kv=2)"
+    },
+    {
+      "feature": "Load / clone / delete architecture",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PASS",
+      "evidence": "Verified via API + registry; rocanon_48m delete is blocked"
+    },
+    {
+      "feature": "Export / import architecture",
+      "frontend": "NOT IMPLEMENTED",
+      "api": "NOT IMPLEMENTED",
+      "backend": "NOT IMPLEMENTED",
+      "runtime": "N/A",
+      "persistence": "N/A",
+      "overall": "NOT IMPLEMENTED",
+      "evidence": "Only a copy/paste JSON textarea; no file import/export"
+    },
+    {
+      "feature": "Architecture versioning",
+      "frontend": "NOT IMPLEMENTED",
+      "api": "N/A",
+      "backend": "NOT IMPLEMENTED",
+      "runtime": "N/A",
+      "persistence": "PARTIAL",
+      "overall": "NOT IMPLEMENTED",
+      "evidence": "A static 'version': '1.0' string; no revision history"
+    },
+    {
+      "feature": "Parameter count (total)",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "48,531,968 exact for RoCanon; matches sum(p.numel()) for all 6 templates"
+    },
+    {
+      "feature": "Parameter breakdown per component",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PARTIAL",
+      "runtime": "N/A",
+      "persistence": "N/A",
+      "overall": "PARTIAL",
+      "evidence": "Components do not sum to total for any template; RoCanon conv reported 32,768 vs ~278,528 actual; registry list shows stale 4,771,968 for conv1d"
+    },
+    {
+      "feature": "VRAM estimator",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PARTIAL",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PARTIAL",
+      "evidence": "Conservative heuristic (+350 MB fixed workspace); tiny-model estimate 366 MB vs measured 34 MB; UI has no gradient-checkpointing toggle; each call rebuilds the model (~0.9 s, called twice per keystroke)"
+    },
+    {
+      "feature": "Architecture preflight (forward/backward)",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "CPU instantiate + forward + backward + gradient coverage check"
+    },
+    {
+      "feature": "Custom module discovery",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PARTIAL",
+      "evidence": "gated_conv_unit is discovered; but registry.reload() re-executes module files on every GET"
+    },
+    {
+      "feature": "Use a custom module in a model",
+      "frontend": "NOT IMPLEMENTED",
+      "api": "NOT IMPLEMENTED",
+      "backend": "NOT IMPLEMENTED",
+      "runtime": "N/A",
+      "persistence": "N/A",
+      "overall": "NOT IMPLEMENTED",
+      "evidence": "ModelFactory/GenericModularNetwork never references CustomModuleRegistry"
+    },
+    {
+      "feature": "Generic ModelFactory build/forward/backward",
+      "frontend": "N/A",
+      "api": "N/A",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "5 families build, forward and propagate gradients (probe P2/P3)"
+    },
+    {
+      "feature": "Create / list pipelines",
+      "frontend": "NOT IMPLEMENTED",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PARTIAL",
+      "evidence": "CRUD + readiness checks work and persist; no UI and no execution engine"
+    },
+    {
+      "feature": "Multi-stage pipeline execution",
+      "frontend": "NOT IMPLEMENTED",
+      "api": "NOT IMPLEMENTED",
+      "backend": "NOT IMPLEMENTED",
+      "runtime": "N/A",
+      "persistence": "NOT IMPLEMENTED",
+      "overall": "NOT IMPLEMENTED",
+      "evidence": "No start endpoint, no worker handling of LOAD_PIPELINE/PHASE_COMPLETED, no automatic phase transition"
+    },
+    {
+      "feature": "Scheduler curve visualizer",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "WSD/cosine/linear/constant curves computed server-side and charted"
+    },
+    {
+      "feature": "Runs history table",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PASS",
+      "evidence": "refreshRunsTable() is called on tab switch; GET /api/runs returns 33 persisted runs"
+    },
+    {
+      "feature": "Live metric charts",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PARTIAL",
+      "overall": "PARTIAL",
+      "evidence": "WS STEP_COMPLETED drives charts in real time; after a page refresh only the latest point is seeded \u2014 /api/runs/{id}/metrics is never called"
+    },
+    {
+      "feature": "Settings persistence",
+      "frontend": "FAIL",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "N/A",
+      "persistence": "PARTIAL",
+      "overall": "PARTIAL",
+      "evidence": "Settings tab is read-only diagnostics; /api/config POST exists but no UI writes it"
+    },
+    {
+      "feature": "Live learning-rate adjustment",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "NOT TESTED",
+      "persistence": "N/A",
+      "overall": "NOT TESTED",
+      "evidence": "SET_LR_MULTIPLIER + dynamic base LR applied each step; not exercised on the live run"
+    },
+    {
+      "feature": "WebSocket event delivery",
+      "frontend": "PASS",
+      "api": "PASS",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "PASS",
+      "evidence": "Probe: 1 STATE_CHANGED + 8 STEP_COMPLETED in 12 s with full metric payloads; auto-reconnect on close"
+    },
+    {
+      "feature": "State persistence across restart",
+      "frontend": "N/A",
+      "api": "N/A",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "PASS",
+      "overall": "PASS",
+      "evidence": "SQLite WAL (33 runs, 11,450 metrics, 13 checkpoints) + JSON network registry"
+    },
+    {
+      "feature": "Security: checkpoint deserialization",
+      "frontend": "N/A",
+      "api": "N/A",
+      "backend": "FAIL",
+      "runtime": "N/A",
+      "persistence": "N/A",
+      "overall": "FAIL",
+      "evidence": "torch.load(..., weights_only=False) in inspect_checkpoint; load_checkpoint uses default torch.load"
+    },
+    {
+      "feature": "Security: path traversal in network ids",
+      "frontend": "N/A",
+      "api": "FAIL",
+      "backend": "PASS",
+      "runtime": "PASS",
+      "persistence": "N/A",
+      "overall": "FAIL",
+      "evidence": "GET /api/networks/..%2F..%2Fsrc%2Ftokenizer%2Ftokenizer_config returned the tokenizer JSON; delete_network('../victim') deleted an out-of-registry file"
+    }
+  ]
+}

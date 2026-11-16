@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+import torch
 from aiohttp import WSMsgType, web
 
 from ..checkpoints.manager import CheckpointManager
@@ -37,6 +38,7 @@ from ..networks import (
     get_template_by_id,
 )
 from ..pipeline.manager import PipelineManager
+from ..pipeline.runner import PipelineRunner
 from ..pipeline.scheduler_math import calculate_schedule_curve
 from ..telemetry.hardware import HardwareMonitor
 from ..training.factory import calculate_analytical_parameters, list_checkpoints
@@ -53,6 +55,7 @@ WORKER_MGR = WorkerManager(db=DB)
 CHECKPOINT_MGR = CheckpointManager(db=DB)
 DATASET_MGR = DatasetManager(db=DB)
 PIPELINE_MGR = PipelineManager(db=DB)
+PIPELINE_RUNNER = PipelineRunner(pipeline_mgr=PIPELINE_MGR, worker_mgr=WORKER_MGR)
 BENCHMARK_MGR = BenchmarkManager(db=DB)
 HW_MONITOR = HardwareMonitor()
 NETWORK_REGISTRY = NetworkRegistry()
@@ -64,11 +67,13 @@ CONNECTED_CLIENTS: Set[web.WebSocketResponse] = set()
 MAIN_EVENT_LOOP: Optional[asyncio.AbstractEventLoop] = None
 
 
-def get_inference_engine() -> InferenceEngine:
-    """Lazy initializer for inference engine to avoid holding GPU memory when not in use."""
+def get_inference_engine(force_cpu: bool = False) -> InferenceEngine:
+    """Lazy initializer for inference engine with GPU single-owner arbitration."""
     global _INFERENCE_ENGINE
-    if _INFERENCE_ENGINE is None:
-        _INFERENCE_ENGINE = InferenceEngine()
+    is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)
+    target_device = torch.device("cpu") if (force_cpu or is_training_active or not torch.cuda.is_available()) else torch.device("cuda")
+    if _INFERENCE_ENGINE is None or _INFERENCE_ENGINE.device != target_device:
+        _INFERENCE_ENGINE = InferenceEngine(device=target_device)
     return _INFERENCE_ENGINE
 
 
@@ -119,11 +124,21 @@ async def handle_index(request: web.Request) -> web.Response:
 
 async def handle_system_status(request: web.Request) -> web.Response:
     """Returns current system and run state machine status."""
-    metrics = WORKER_MGR.latest_metrics
-    if not metrics and WORKER_MGR.current_run_id:
-        db_metric = DB.get_latest_metric(WORKER_MGR.current_run_id)
-        if db_metric:
-            metrics = db_metric
+    metrics = dict(WORKER_MGR.latest_metrics) if WORKER_MGR.latest_metrics else {}
+    if WORKER_MGR.current_run_id:
+        if not metrics:
+            db_metric = DB.get_latest_metric(WORKER_MGR.current_run_id)
+            if db_metric:
+                metrics = dict(db_metric)
+        if "latest_val_loss" not in metrics or metrics["latest_val_loss"] is None:
+            val_info = DB.get_latest_validation(WORKER_MGR.current_run_id)
+            if val_info:
+                metrics["latest_val_loss"] = val_info["val_loss"]
+                metrics["latest_val_step"] = val_info["step"]
+                metrics["latest_val_timestamp"] = val_info["timestamp"]
+                metrics["val_status"] = "completed"
+            else:
+                metrics["val_status"] = "awaiting"
 
     state_val = WORKER_MGR.current_state.value
     if WORKER_MGR.current_run_id and state_val == "STOPPING":
@@ -220,10 +235,26 @@ async def handle_update_lr(request: web.Request) -> web.Response:
 
 async def handle_run_metrics(request: web.Request) -> web.Response:
     run_id = request.match_info.get("id")
+    if run_id == "current" or not run_id:
+        run_id = WORKER_MGR.current_run_id or ""
     start_step = int(request.query.get("start_step", 0))
     limit = int(request.query.get("limit", 5000))
     metrics = DB.get_metrics(run_id=run_id, start_step=start_step, max_points=limit)
-    return web.json_response(metrics)
+    normalized = []
+    for m in metrics:
+        m_copy = dict(m)
+        if "loss" not in m_copy:
+            m_copy["loss"] = m.get("train_loss")
+        if "learning_rate" not in m_copy:
+            m_copy["learning_rate"] = m.get("muon_lr") or m.get("adamw_lr") or 0.0
+        if "tokens_seen" not in m_copy:
+            m_copy["tokens_seen"] = m.get("tokens", 0)
+        if "tokens_per_second" not in m_copy:
+            m_copy["tokens_per_second"] = m.get("tok_per_sec", 0.0)
+        if "memory_allocated_mb" not in m_copy and m.get("vram_used_gb"):
+            m_copy["memory_allocated_mb"] = m["vram_used_gb"] * 1024
+        normalized.append(m_copy)
+    return web.json_response(normalized)
 
 
 # ---------------- Checkpoints ----------------
@@ -257,6 +288,52 @@ async def handle_create_pipeline(request: web.Request) -> web.Response:
     phases = data.get("phases")
     pid = PIPELINE_MGR.create_pipeline(name=name, phases=phases)
     return web.json_response({"pipeline_id": pid})
+
+
+async def handle_get_pipeline_by_id(request: web.Request) -> web.Response:
+    pid = request.match_info["id"]
+    pipe = PIPELINE_MGR.get_pipeline(pid)
+    if not pipe:
+        return web.json_response({"error": "Pipeline not found"}, status=404)
+    return web.json_response(pipe)
+
+
+async def handle_start_pipeline(request: web.Request) -> web.Response:
+    pid = request.match_info["id"]
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    phase_idx = data.get("phase_index")
+    res = PIPELINE_RUNNER.start_pipeline_execution(pid, start_from_phase=phase_idx)
+    status_code = 200 if res.get("success") else 400
+    return web.json_response(res, status=status_code)
+
+
+async def handle_advance_pipeline(request: web.Request) -> web.Response:
+    pid = request.match_info["id"]
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    step = int(data.get("completed_step", 0))
+    chk = data.get("checkpoint_path", "")
+    res = PIPELINE_MGR.advance_phase(pipeline_id=pid, completed_step=step, checkpoint_path=chk)
+    return web.json_response(res)
+
+
+async def handle_get_settings(request: web.Request) -> web.Response:
+    settings = DB.get_settings()
+    return web.json_response(settings)
+
+
+async def handle_save_settings(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    DB.save_settings(data)
+    return web.json_response({"status": "saved", "settings": data})
 
 
 async def handle_scheduler_curve(request: web.Request) -> web.Response:
@@ -328,6 +405,38 @@ async def handle_tokenizer_inspect(request: web.Request) -> web.Response:
     return web.json_response(res)
 
 
+async def handle_tokenize_dataset(request: web.Request) -> web.Response:
+    ds_id = request.match_info.get("id")
+    if not ds_id:
+        try:
+            data = await request.json()
+            ds_id = data.get("id") or data.get("dataset_id")
+        except Exception:
+            pass
+
+    if not ds_id:
+        return web.json_response({"error": "No dataset_id provided"}, status=400)
+
+    try:
+        from ..data.custom_loader import CustomDatasetEngine
+        engine = CustomDatasetEngine(db=DB)
+        train_x, train_y, val_x, val_y = engine.load_dataset(ds_id, device=torch.device("cpu"))
+        train_tok = int(train_x.numel())
+        val_tok = int(val_x.numel()) if val_x is not None else 0
+        total_tok = train_tok + val_tok
+        return web.json_response({
+            "success": True,
+            "dataset_id": ds_id,
+            "cached": True,
+            "token_count": total_tok,
+            "train_tokens": train_tok,
+            "val_tokens": val_tok,
+        })
+    except Exception as e:
+        logger.exception("Failed to tokenize dataset %s: %s", ds_id, e)
+        return web.json_response({"error": f"Tokenization error: {e}"}, status=500)
+
+
 # ---------------- Evaluation Lab ----------------
 
 async def handle_eval_generate(request: web.Request) -> web.Response:
@@ -337,13 +446,33 @@ async def handle_eval_generate(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
     prompt = data.get("prompt", "")
+    chat_mode = bool(data.get("chat_mode", False))
     max_tokens = int(data.get("max_new_tokens", 128))
     temp = float(data.get("temperature", 0.7))
     top_p = float(data.get("top_p", 0.9))
     top_k = int(data.get("top_k", 50))
-    rep_pen = float(data.get("repetition_penalty", 1.1))
+    rep_pen = float(data.get("repetition_penalty", 1.15))
+    no_repeat_ngram = int(data.get("no_repeat_ngram_size", 3))
+    checkpoint_req = data.get("checkpoint") or data.get("checkpoint_path")
 
-    engine = get_inference_engine()
+    is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)
+    # GPU single-owner arbitration: if training is active on GPU, route inference to CPU
+    engine = get_inference_engine(force_cpu=is_training_active)
+
+    loaded_chk_meta = None
+    if checkpoint_req:
+        chk_path = Path(checkpoint_req)
+        if not chk_path.exists():
+            chk_path = Path("checkpoints") / checkpoint_req
+        if chk_path.exists():
+            try:
+                loaded_chk_meta = engine.load_checkpoint_weights(chk_path)
+            except Exception as e:
+                logger.error("Failed to load checkpoint %s for inference: %s", chk_path, e)
+                return web.json_response({"error": f"Failed to load checkpoint: {e}"}, status=400)
+        else:
+            return web.json_response({"error": f"Checkpoint not found: {checkpoint_req}"}, status=404)
+
     res = engine.generate(
         prompt=prompt,
         max_new_tokens=max_tokens,
@@ -351,7 +480,16 @@ async def handle_eval_generate(request: web.Request) -> web.Response:
         top_p=top_p,
         top_k=top_k,
         repetition_penalty=rep_pen,
+        no_repeat_ngram_size=no_repeat_ngram,
+        chat_mode=chat_mode,
     )
+    res["device"] = str(engine.device)
+    res["gpu_arbitrated"] = is_training_active
+    res["checkpoint_loaded"] = str(checkpoint_req) if checkpoint_req else None
+    if loaded_chk_meta:
+        res["checkpoint_step"] = loaded_chk_meta.get("step")
+        res["checkpoint_val_loss"] = loaded_chk_meta.get("val_loss")
+
     return web.json_response(res)
 
 
@@ -391,7 +529,18 @@ async def handle_list_networks(request: web.Request) -> web.Response:
 
 
 async def handle_get_network_templates(request: web.Request) -> web.Response:
-    return web.json_response(ALL_TEMPLATES)
+    res = []
+    for tmpl in ALL_TEMPLATES:
+        t = tmpl.copy()
+        try:
+            stats = ParameterCalculator.calculate(tmpl)
+            t["total_params"] = stats.get("total_parameters", 0)
+            t["total_parameters"] = stats.get("total_parameters", 0)
+            t["trainable_params"] = stats.get("trainable_parameters", 0)
+        except Exception:
+            pass
+        res.append(t)
+    return web.json_response(res)
 
 
 async def handle_get_network(request: web.Request) -> web.Response:
@@ -409,8 +558,14 @@ async def handle_save_network(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
     net_id = data.get("id", f"network_{int(time.time())}")
-    saved = NETWORK_REGISTRY.save_network(net_id, data)
-    return web.json_response(saved)
+    try:
+        saved = NETWORK_REGISTRY.save_network(net_id, data)
+        return web.json_response(saved)
+    except ValueError as ve:
+        return web.json_response({"error": str(ve)}, status=400)
+    except Exception as e:
+        logger.exception("Failed to save network %s: %s", net_id, e)
+        return web.json_response({"error": f"Failed to save network: {e}"}, status=500)
 
 
 async def handle_clone_network(request: web.Request) -> web.Response:
@@ -421,16 +576,96 @@ async def handle_clone_network(request: web.Request) -> web.Response:
         data = {}
     new_id = data.get("new_id", f"{orig_id}_clone")
     new_name = data.get("new_name", f"Clone of {orig_id}")
-    cloned = NETWORK_REGISTRY.clone_network(orig_id, new_id, new_name)
-    if not cloned:
-        return web.json_response({"error": "Failed to clone network"}, status=400)
-    return web.json_response(cloned)
+    try:
+        cloned = NETWORK_REGISTRY.clone_network(orig_id, new_id, new_name)
+        if not cloned:
+            return web.json_response({"error": "Failed to clone network"}, status=400)
+        return web.json_response(cloned)
+    except ValueError as ve:
+        return web.json_response({"error": str(ve)}, status=400)
 
 
 async def handle_delete_network(request: web.Request) -> web.Response:
     net_id = request.match_info.get("id")
-    success = NETWORK_REGISTRY.delete_network(net_id)
-    return web.json_response({"success": success, "id": net_id})
+    if not net_id:
+        return web.json_response({"error": "Missing network ID"}, status=400)
+
+    # Check if active training is using this network
+    is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)
+    if is_training_active:
+        curr_payload = getattr(WORKER_MGR, "current_payload", {}) or {}
+        if curr_payload.get("network_id") == net_id:
+            return web.json_response(
+                {"error": f"Cannot delete network '{net_id}': active training run is currently utilizing this architecture."},
+                status=409,
+            )
+        curr_run_id = getattr(WORKER_MGR, "current_run_id", None)
+        if curr_run_id:
+            run_data = DB.get_run(curr_run_id)
+            if run_data:
+                cfg = run_data.get("config") or {}
+                if cfg.get("network_id") == net_id or cfg.get("arch", {}).get("network_id") == net_id:
+                    return web.json_response(
+                        {"error": f"Cannot delete network '{net_id}': active training run is currently utilizing this architecture."},
+                        status=409,
+                    )
+
+    try:
+        success = NETWORK_REGISTRY.delete_network(net_id)
+        if not success:
+            return web.json_response({"error": f"Could not delete network '{net_id}'. RoCanon baseline is protected or network was not found."}, status=400)
+        return web.json_response({"success": True, "id": net_id})
+    except ValueError as ve:
+        return web.json_response({"error": str(ve)}, status=400)
+
+
+async def handle_delete_dataset(request: web.Request) -> web.Response:
+    dataset_id = request.match_info.get("id")
+    if not dataset_id:
+        return web.json_response({"error": "Missing dataset ID"}, status=400)
+
+    # 1. Check if active training is utilizing this dataset
+    is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)
+    if is_training_active:
+        curr_payload = getattr(WORKER_MGR, "current_payload", {}) or {}
+        if curr_payload.get("dataset_source") == dataset_id or dataset_id in str(curr_payload.get("dataset_source", "")):
+            return web.json_response(
+                {"error": f"Cannot delete dataset '{dataset_id}': active training run is currently utilizing it."},
+                status=409,
+            )
+        curr_run_id = getattr(WORKER_MGR, "current_run_id", None)
+        if curr_run_id:
+            run_data = DB.get_run(curr_run_id)
+            if run_data and dataset_id in str(run_data.get("dataset_source", "")):
+                return web.json_response(
+                    {"error": f"Cannot delete dataset '{dataset_id}': active training run is currently utilizing it."},
+                    status=409,
+                )
+
+    # 2. Safely remove physical files inside managed data/uploads and data/cache
+    uploads_dir = Path("data/uploads").resolve()
+    cache_dir = Path("data/cache").resolve()
+    deleted_files = []
+
+    for p in uploads_dir.glob(f"*{dataset_id}*"):
+        try:
+            if p.is_file() and p.resolve().is_relative_to(uploads_dir):
+                p.unlink(missing_ok=True)
+                deleted_files.append(p.name)
+        except Exception as e:
+            logger.warning("Could not delete uploaded file %s: %s", p, e)
+
+    for p in cache_dir.glob(f"*{dataset_id}*"):
+        try:
+            if p.is_file() and p.resolve().is_relative_to(cache_dir):
+                p.unlink(missing_ok=True)
+                deleted_files.append(p.name)
+        except Exception as e:
+            logger.warning("Could not delete cache file %s: %s", p, e)
+
+    # 3. Remove DB record
+    DB.delete_dataset(dataset_id)
+    return web.json_response({"success": True, "id": dataset_id, "deleted_files": deleted_files})
 
 
 async def handle_validate_network(request: web.Request) -> web.Response:
@@ -440,6 +675,9 @@ async def handle_validate_network(request: web.Request) -> web.Response:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
     res = ArchitectureValidator.run_preflight_check(config, device="cpu", batch_size=2, seq_len=16)
+    errors = res.get("errors", [])
+    res["issues"] = errors
+    res["warnings"] = []
     return web.json_response(res)
 
 
@@ -457,6 +695,8 @@ async def handle_estimate_network(request: web.Request) -> web.Response:
     gc = bool(data.get("gradient_checkpointing", False))
 
     params = ParameterCalculator.calculate(config)
+    params["total_params"] = params.get("total_parameters", 0)
+    params["trainable_params"] = params.get("trainable_parameters", 0)
     mem = MemoryEstimator.estimate(
         config=config,
         micro_batch_size=bs,
@@ -634,9 +874,24 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+@web.middleware
+async def cors_middleware(request: web.Request, handler):
+    if request.method == "OPTIONS":
+        response = web.Response(status=200)
+    else:
+        try:
+            response = await handler(request)
+        except web.HTTPException as ex:
+            response = ex
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+    return response
+
+
 def create_app() -> web.Application:
     """Builds and returns the configured aiohttp Application."""
-    app = web.Application(client_max_size=1024 * 1024 * 500)  # Support up to 500MB dataset uploads
+    app = web.Application(client_max_size=1024 * 1024 * 500, middlewares=[cors_middleware])  # Support up to 500MB dataset uploads
 
     async def _on_startup(app_instance: web.Application) -> None:
         global MAIN_EVENT_LOOP
@@ -670,11 +925,19 @@ def create_app() -> web.Application:
 
     app.router.add_get("/api/pipelines", handle_get_pipelines)
     app.router.add_post("/api/pipelines", handle_create_pipeline)
+    app.router.add_get("/api/pipelines/{id}", handle_get_pipeline_by_id)
+    app.router.add_post("/api/pipelines/{id}/start", handle_start_pipeline)
+    app.router.add_post("/api/pipelines/{id}/advance", handle_advance_pipeline)
+    app.router.add_get("/api/settings", handle_get_settings)
+    app.router.add_post("/api/settings", handle_save_settings)
     app.router.add_post("/api/scheduler/curve", handle_scheduler_curve)
 
     app.router.add_post("/api/datasets/upload", handle_upload_dataset)
     app.router.add_get("/api/datasets", handle_list_datasets)
     app.router.add_get("/api/datasets/{id}/stats", handle_get_dataset_stats)
+    app.router.add_post("/api/datasets/{id}/tokenize", handle_tokenize_dataset)
+    app.router.add_post("/api/datasets/tokenize", handle_tokenize_dataset)
+    app.router.add_delete("/api/datasets/{id}", handle_delete_dataset)
     app.router.add_post("/api/tokenizer/inspect", handle_tokenizer_inspect)
 
     app.router.add_post("/api/evaluation/generate", handle_eval_generate)

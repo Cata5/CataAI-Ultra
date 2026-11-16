@@ -1,0 +1,11 @@
+{
+  "name": "llm-maker",
+  "version": "2.0.0",
+  "private": true,
+  "description": "LLM Maker — Local Neural Network & LLM Training Platform",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev -- -p 8080",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix frontend run start -- -p 8080"
+  }
+}

@@ -134,8 +134,66 @@ class DatasetManager:
         return self.analyzer.inspect_tokenization(text)
 
     def get_dataset_details(self, dataset_id: str) -> Optional[Dict[str, Any]]:
-        return self.db.get_dataset(dataset_id)
+        ds = self.db.get_dataset(dataset_id)
+        if ds:
+            return ds
+        for preset in self.list_all_datasets():
+            if preset["id"] == dataset_id:
+                cache_p = Path("data/cache") / f"{dataset_id}_tokens.pt"
+                if not cache_p.exists():
+                    cache_p = Path("data/cache") / f"{dataset_id}_full_tokens.pt"
+                raw_txt = Path(f"data/{dataset_id}.txt")
+                raw_path = str(raw_txt.resolve()) if raw_txt.exists() else f"data/{dataset_id}.txt"
+                return {
+                    "id": preset["id"],
+                    "name": preset["name"],
+                    "path": raw_path,
+                    "file_path": raw_path,
+                    "size_mb": preset.get("size_mb", 0.0),
+                    "file_size_bytes": int(preset.get("size_mb", 0.0) * 1024 * 1024),
+                    "total_tokens": preset.get("total_tokens", 0),
+                    "train_tokens": preset.get("train_tokens", 0),
+                    "val_tokens": preset.get("val_tokens", 0),
+                    "token_count": preset.get("total_tokens", 0),
+                    "sample_count": 50000,
+                    "format": "raw_text_stream",
+                    "cached": cache_p.exists(),
+                    "cache_file": str(cache_p) if cache_p.exists() else None,
+                    "is_uploaded": False,
+                }
+        return None
 
     def list_all_datasets(self) -> List[Dict[str, Any]]:
-        return self.db.list_datasets()
+        presets = [
+            {
+                "id": "tech_wiki_ro",
+                "name": "RoCanon Pretrain Corpus (tech_wiki_ro)",
+                "source": "preset",
+                "status": "ready",
+                "size_mb": 115.4,
+                "total_tokens": 48419639,
+                "train_tokens": 48419639,
+                "val_tokens": 2548402,
+                "is_uploaded": False,
+            },
+            {
+                "id": "synthetic",
+                "name": "Fast Synthetic Benchmark (synthetic)",
+                "source": "synthetic",
+                "status": "ready",
+                "size_mb": 1.0,
+                "total_tokens": 100000,
+                "train_tokens": 80000,
+                "val_tokens": 20000,
+                "is_uploaded": False,
+            },
+        ]
+        uploaded = self.db.list_datasets()
+        for u in uploaded:
+            u["is_uploaded"] = True
+            if "size_mb" not in u and "file_size_bytes" in u:
+                u["size_mb"] = round(u["file_size_bytes"] / (1024 * 1024), 2)
+            if "total_tokens" not in u and "token_count" in u:
+                u["total_tokens"] = u["token_count"]
+        return presets + uploaded
 

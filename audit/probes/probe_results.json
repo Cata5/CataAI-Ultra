@@ -1,0 +1,104 @@
+[
+  {
+    "probe": "P1 RoCanon parameter count",
+    "status": "PASS",
+    "detail": "sum(numel)=48,531,968 unique=48,531,968 (claimed 48,531,968)",
+    "evidence": ""
+  },
+  {
+    "probe": "P1b analytical calculator",
+    "status": "PASS",
+    "detail": "analytical=48,531,968",
+    "evidence": ""
+  },
+  {
+    "probe": "P2 registry templates instantiate/forward",
+    "status": "INFO",
+    "detail": "see evidence",
+    "evidence": "conv1d_network_4m                fam=cnn            actual=   3,599,234 calc=   3,599,234 match=True FORWARD FAILED: RuntimeError: running_mean should contain 16 elements not 384\ndeep_mlp_5m                      fam=mlp            actual=   6,444,554 calc=   6,444,554 match=True forward OK [2, 10]\nhybrid_cnn_transformer_20m       fam=hybrid         actual=  22,443,824 calc=  22,443,824 match=True forward OK [2, 16, 12288]\nbert_encoder_25m                 fam=encoder_only   actual=  25,824,514 calc=  25,824,514 match=True forward OK [2, 2]\nmini_gpt_15m                     fam=decoder_only   actual=  16,921,344 calc=  16,921,344 match=True forward OK [2, 16, 12288]\nrocanon_48m                      fam=decoder_only   actual=  48,531,968 calc=  48,531,968 match=True forward OK [2, 16, 12288]"
+  },
+  {
+    "probe": "P3 three custom architectures",
+    "status": "PASS",
+    "detail": "3/3 built, forward+backward executed",
+    "evidence": "audit_dec_A: actual=1,215,616 calc_total=1,215,616 match=True out=[2, 24, 4096] grads=42/42 breakdown(attn=196,608,ffn=491,520,conv=2,048)\naudit_dec_B: actual=3,838,848 calc_total=3,838,848 match=True out=[2, 24, 4096] grads=65/65 breakdown(attn=884,736,ffn=1,179,648,conv=0)\naudit_hyb_C: actual=488,736 calc_total=488,736 match=True out=[2, 24, 2048] grads=32/32 breakdown(attn=69,120,ffn=221,184,conv=1,440)"
+  },
+  {
+    "probe": "P4 scale_residual_with_layers",
+    "status": "FAIL",
+    "detail": "NameError in src/networks/factory.py (missing `import math`)",
+    "evidence": "Traceback (most recent call last):\n  File \"D:\\proiecte\\CataAI Ultra\\audit\\probes\\audit_probe.py\", line 133, in probe_residual_scale_math_bug\n    nf.ModelFactory.create(cfg)\n    ~~~~~~~~~~~~~~~~~~~~~~^^^^^\n  File \"D:\\proiecte\\CataAI Ultra\\src\\networks\\factory.py\", line 236, in create\n    model = GenericModularNetwork(config)\nNameError: name 'math' is not defined. Did you forget to import 'math'?\n"
+  },
+  {
+    "probe": "P5 training-engine model compatibility",
+    "status": "INFO",
+    "detail": "worker always feeds int64 tokens + shifted causal-CE",
+    "evidence": "rocanon_48m: TOKEN-FEED OK, LM-LOSS OK (loss=9.525)\nmini_gpt_15m: TOKEN-FEED OK, LM-LOSS OK (loss=238.731)\nbert_encoder_25m: forward OK but LM/LOSS FAILED -> ValueError: Expected input batch_size (1) to match target batch_size (30).\ndeep_mlp_5m: TOKEN-FEED FORWARD FAILED -> RuntimeError: mat1 and mat2 must have the same dtype, but got Long and Float\nconv1d_network_4m: TOKEN-FEED FORWARD FAILED -> RuntimeError: mat1 and mat2 must have the same dtype, but got Long and Float\nhybrid_cnn_transformer_20m: TOKEN-FEED OK, LM-LOSS OK (loss=317.774)"
+  },
+  {
+    "probe": "P6a checkpoint full-restore (optimizer+scheduler)",
+    "status": "PASS",
+    "detail": "muon state entries after load=14, step=7, sched={\"current_step\": 1, \"current_tokens\": 1000, \"warmup_steps\": 2, \"plateau_tokens\": 5000000000, \"total_tokens\": 10000, \"min_lr_ratio\": 0.1, \"decay_style\": \"cosine\", \"base_lrs\": [[0.003], [0.0006, 0.0006]",
+    "evidence": ""
+  },
+  {
+    "probe": "P6b worker-style resume (restore_training_state=False)",
+    "status": "FAIL",
+    "detail": "muon state entries after load=0 (worker loses optimizer/scheduler/RNG); step=7",
+    "evidence": ""
+  },
+  {
+    "probe": "P7a dataset upload+register",
+    "status": "PASS",
+    "detail": "success=True id=tiny_audit_f13d8b4d6fb51f68 tokens=18",
+    "evidence": ""
+  },
+  {
+    "probe": "P7b hardcoded KNOWN_DATASETS existence",
+    "status": "INFO",
+    "detail": "absolute paths outside repo",
+    "evidence": "{\n  \"tech_wiki_ro\": true,\n  \"chat_persona_ro\": true,\n  \"alpaca_ro\": true\n}"
+  },
+  {
+    "probe": "P7c training resolves uploaded dataset by ID",
+    "status": "FAIL",
+    "detail": "dataset_source='tiny_audit_f13d8b4d6fb51f68' -> file exists? False; engine fell back to synthetic data (train tokens=25292)",
+    "evidence": ""
+  },
+  {
+    "probe": "P7d training resolves uploaded dataset by absolute file path",
+    "status": "PASS",
+    "detail": "train tokens=1036",
+    "evidence": ""
+  },
+  {
+    "probe": "P8 registry save without validation",
+    "status": "FAIL",
+    "detail": "saved id=audit_invalid even though validator reports: ['`n_q` (5) must be divisible by `n_kv` (2) for GQA/MQA head repetition.']",
+    "evidence": ""
+  },
+  {
+    "probe": "P9 custom module discovery",
+    "status": "PASS",
+    "detail": "registered=['gated_conv_unit']",
+    "evidence": ""
+  },
+  {
+    "probe": "P9b custom modules wired into ModelFactory",
+    "status": "FAIL",
+    "detail": "ModelFactory/GenericModularNetwork has no reference to CustomModuleRegistry - modules are catalog-only",
+    "evidence": ""
+  },
+  {
+    "probe": "P10 VRAM estimator vs measured (tiny model)",
+    "status": "INFO",
+    "detail": "estimated_total=0.36 GB (365.7 MB) vs measured_peak_allocated=34.2 MB (delta -331.5 MB) [estimator adds fixed 350MB workspace; measured is allocator-only, FP32 master weights not modelled here]",
+    "evidence": ""
+  },
+  {
+    "probe": "P11 ParameterCalculator cost",
+    "status": "INFO",
+    "detail": "24.25M-style calculator instantiates the real model each call: 868 ms then 912 ms for rocanon_48m",
+    "evidence": ""
+  }
+]
