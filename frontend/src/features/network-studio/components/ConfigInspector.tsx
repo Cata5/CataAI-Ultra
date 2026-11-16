@@ -30,6 +30,8 @@ interface ConfigInspectorProps {
   onDeleteNetwork?: () => void;
   onShowInfo?: (layerType: string) => void;
   templates: any[];
+  registeredNetworks?: any[];
+  isSaving?: boolean;
 }
 
 export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
@@ -45,7 +47,25 @@ export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
   onDeleteNetwork,
   onShowInfo,
   templates,
+  registeredNetworks = [],
+  isSaving = false,
 }) => {
+  // Determine if currently selected architecture is custom (user-created) or built-in template
+  const defaultTemplateIds = [
+    "rocanon_48m",
+    "rocanon_48_5m",
+    "mini_gpt_15m",
+    "bert_encoder_25m",
+    "conv1d_network_4m",
+    "deep_mlp_5m",
+    "hybrid_cnn_transformer_20m",
+  ];
+  const isCustom = !defaultTemplateIds.includes(globalConfig.id);
+
+  // Group registered networks vs templates
+  const customNetworks = registeredNetworks.filter((n) => !defaultTemplateIds.includes(n.id));
+  const baseTemplates = templates.length > 0 ? templates : registeredNetworks.filter((n) => defaultTemplateIds.includes(n.id));
+
   if (selectedNode) {
     const { id, data } = selectedNode;
     const config = data.config || {};
@@ -165,6 +185,15 @@ export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
             ARCHITECTURE CONFIG
           </span>
         </div>
+        {isCustom ? (
+          <span className="text-[9px] px-2 py-0.5 rounded bg-[#45CFFF]/15 border border-[#45CFFF]/30 text-[#45CFFF] font-bold">
+            CUSTOM
+          </span>
+        ) : (
+          <span className="text-[9px] px-2 py-0.5 rounded bg-[#91A0B4]/15 border border-[#91A0B4]/30 text-[#91A0B4] font-bold">
+            TEMPLATE
+          </span>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-3 pr-1">
@@ -179,32 +208,44 @@ export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
               <Plus className="w-3.5 h-3.5" /> Start New From Scratch
             </button>
           )}
+
           <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-            Load Template Preset
+            Select Architecture to Edit
           </label>
           <select
+            value={globalConfig.id}
             onChange={(e) => e.target.value && onLoadTemplate(e.target.value)}
-            defaultValue=""
-            className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2.5 py-1 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]/50 text-xs"
+            className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2.5 py-1 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF] text-xs font-mono"
           >
-            <option value="" disabled>
-              Select Architecture Preset...
-            </option>
-            {templates.map((t) => {
-              const pCount = t.total_params || t.total_parameters || t.params || 0;
-              return (
-                <option key={t.id} value={t.id}>
-                  {t.name} {pCount > 0 ? `(${formatParamCount(pCount)})` : ""}
-                </option>
-              );
-            })}
+            {customNetworks.length > 0 && (
+              <optgroup label="MY REGISTERED ARCHITECTURES">
+                {customNetworks.map((t) => {
+                  const pCount = t.total_params || t.total_parameters || t.params || 0;
+                  return (
+                    <option key={t.id} value={t.id}>
+                      {t.name} {pCount > 0 ? `(${formatParamCount(pCount)})` : ""}
+                    </option>
+                  );
+                })}
+              </optgroup>
+            )}
+            <optgroup label="BASE TEMPLATES">
+              {baseTemplates.map((t) => {
+                const pCount = t.total_params || t.total_parameters || t.params || 0;
+                return (
+                  <option key={t.id} value={t.id}>
+                    {t.name} {pCount > 0 ? `(${formatParamCount(pCount)})` : ""}
+                  </option>
+                );
+              })}
+            </optgroup>
           </select>
         </div>
 
         {/* Network ID & Name */}
         <div>
           <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-            Network Identifier
+            Network Identifier (ID)
           </label>
           <input
             type="text"
@@ -236,7 +277,7 @@ export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
             onChange={(e) => onUpdateGlobalConfig({ task_type: e.target.value })}
             className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2.5 py-1 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]/50 text-xs"
           >
-            <option value="causal_lm">Causal LM (Autoregressive)</option>
+            <option value="causal_lm">Causal LM (Autoregressive Next-Token)</option>
             <option value="masked_lm">Masked LM (BERT-style)</option>
             <option value="classification">Sequence Classification</option>
             <option value="regression">Feature Regression</option>
@@ -367,18 +408,20 @@ export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
       <div className="pt-3 border-t border-[#273548] flex items-center gap-2">
         <button
           onClick={onSaveNetwork}
-          className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-bold transition-all shadow-sm"
+          disabled={isSaving}
+          className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-bold transition-all shadow-sm disabled:opacity-50"
         >
-          <Save className="w-3.5 h-3.5" /> SAVE
+          <Save className="w-3.5 h-3.5" />
+          <span>{isSaving ? "SAVING..." : isCustom ? "SAVE CHANGES" : "SAVE TO REGISTRY"}</span>
         </button>
         <button
           onClick={onCloneNetwork}
           className="inline-flex items-center justify-center p-1.5 rounded-md bg-[#0E1420] border border-[#273548] hover:border-[#384C66] text-[#ECF3FC] transition-colors"
-          title="Clone Network"
+          title="Clone as New Architecture"
         >
           <Copy className="w-3.5 h-3.5" />
         </button>
-        {onDeleteNetwork && (
+        {onDeleteNetwork && isCustom && (
           <button
             onClick={onDeleteNetwork}
             className="inline-flex items-center justify-center p-1.5 rounded-md bg-[#FF657A]/15 border border-[#FF657A]/30 hover:bg-[#FF657A]/25 text-[#FF657A] transition-colors"

@@ -31,8 +31,33 @@ import {
   Plus,
   Trash2,
   Layers,
-  Sparkles,
+  Save,
+  ChevronDown,
 } from "lucide-react";
+
+// Canonical layer type to category mapping
+const LAYER_TYPE_CATEGORY_MAP: Record<string, "embedding" | "attention" | "feedforward" | "norm" | "convolution" | "structural"> = {
+  Embedding: "embedding",
+  PositionalEncoding: "embedding",
+  Linear: "embedding",
+  MultiheadAttention: "attention",
+  MultiHeadAttention: "attention",
+  GQAAttention: "attention",
+  MQAAttention: "attention",
+  CausalSelfAttention: "attention",
+  CrossAttention: "attention",
+  SwiGLU: "feedforward",
+  MLP: "feedforward",
+  GELU: "feedforward",
+  RMSNorm: "norm",
+  LayerNorm: "norm",
+  BatchNorm1d: "norm",
+  Conv1D: "convolution",
+  Conv1d: "convolution",
+  Conv2D: "convolution",
+  ResidualBlock: "structural",
+  Dropout: "structural",
+};
 
 // Initial default nodes representing RoCanon-48.5M architectural pipeline
 const INITIAL_NODES: Node[] = [
@@ -121,6 +146,24 @@ const INITIAL_EDGES: Edge[] = [
 ];
 
 const PRESET_GRAPHS: Record<string, { config: any; nodes: Node[]; edges: Edge[] }> = {
+  rocanon_48_5m: {
+    config: {
+      id: "rocanon_48_5m",
+      name: "RoCanon-48.5M Baseline",
+      task_type: "causal_lm",
+      architecture_type: "hybrid_cnn_transformer",
+      vocab_size: 12288,
+      d_model: 512,
+      n_layers: 16,
+      n_q: 8,
+      n_kv: 2,
+      d_ff: 1280,
+      kernel_size: 4,
+      tied_embeddings: true,
+    },
+    nodes: INITIAL_NODES,
+    edges: INITIAL_EDGES,
+  },
   rocanon_48m: {
     config: {
       id: "rocanon_48_5m",
@@ -192,7 +235,7 @@ const PRESET_GRAPHS: Record<string, { config: any; nodes: Node[]; edges: Edge[] 
         data: {
           label: "Causal MHA Blocks (8x)",
           category: "attention",
-          layerType: "MultiHeadAttention",
+          layerType: "MultiheadAttention",
           config: { d_model: 384, n_heads: 6 },
           inputShape: "[B, S, 384]",
           outputShape: "[B, S, 384]",
@@ -251,7 +294,7 @@ const PRESET_GRAPHS: Record<string, { config: any; nodes: Node[]; edges: Edge[] 
       n_kv: 7,
       d_ff: 1344,
       kernel_size: 3,
-      tied_embeddings: true,
+      tied_embeddings: false,
     },
     nodes: [
       {
@@ -259,7 +302,7 @@ const PRESET_GRAPHS: Record<string, { config: any; nodes: Node[]; edges: Edge[] 
         type: "archNode",
         position: { x: 250, y: 30 },
         data: {
-          label: "Token & Segment Embed",
+          label: "Token & Position Embed",
           category: "embedding",
           layerType: "Embedding",
           config: { vocab_size: 12288, d_model: 448 },
@@ -274,7 +317,7 @@ const PRESET_GRAPHS: Record<string, { config: any; nodes: Node[]; edges: Edge[] 
         type: "archNode",
         position: { x: 250, y: 150 },
         data: {
-          label: "Input LayerNorm",
+          label: "LayerNorm Pre-Attn",
           category: "norm",
           layerType: "LayerNorm",
           config: { d_model: 448, eps: 1e-5 },
@@ -291,7 +334,7 @@ const PRESET_GRAPHS: Record<string, { config: any; nodes: Node[]; edges: Edge[] 
         data: {
           label: "Bidirectional Self-Attn (10x)",
           category: "attention",
-          layerType: "MultiHeadAttention",
+          layerType: "MultiheadAttention",
           config: { d_model: 448, n_heads: 7 },
           inputShape: "[B, S, 448]",
           outputShape: "[B, S, 448]",
@@ -444,10 +487,13 @@ export const NetworkStudioView: React.FC = () => {
   });
 
   const [templates, setTemplates] = useState<any[]>([]);
+  const [registeredNetworks, setRegisteredNetworks] = useState<any[]>([]);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
   const [estimation, setEstimation] = useState<{
     parameters: any;
     memory: any;
   } | null>(null);
+
   const [validation, setValidation] = useState<{
     valid: boolean;
     issues: string[];
@@ -461,18 +507,23 @@ export const NetworkStudioView: React.FC = () => {
   // Custom node types definition for ReactFlow
   const nodeTypes = useMemo(() => ({ archNode: ArchitectureNode as any }), []);
 
-  // Fetch templates on mount
-  useEffect(() => {
-    api
-      .getNetworkTemplates()
-      .then((res) => {
-        setTemplates(Array.isArray(res) ? res : []);
-      })
-      .catch((err) => {
-        console.error("Failed to load network templates:", err);
-        setTemplates([]);
-      });
+  // Fetch networks & templates
+  const fetchAllNetworks = useCallback(async () => {
+    try {
+      const [nets, tmpls] = await Promise.all([
+        api.listNetworks(),
+        api.getNetworkTemplates(),
+      ]);
+      setRegisteredNetworks(Array.isArray(nets) ? nets : []);
+      setTemplates(Array.isArray(tmpls) ? tmpls : []);
+    } catch (err) {
+      console.error("Failed to load networks:", err);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchAllNetworks();
+  }, [fetchAllNetworks]);
 
   // Recalculate metrics whenever globalConfig changes
   useEffect(() => {
@@ -530,7 +581,7 @@ export const NetworkStudioView: React.FC = () => {
     const newNode: Node = {
       id,
       type: "archNode",
-      position: { x: 300, y: (nodes.length + 1) * 80 },
+      position: { x: 250, y: (nodes.length + 1) * 110 },
       data: {
         label: item.name,
         category: item.category,
@@ -592,49 +643,216 @@ export const NetworkStudioView: React.FC = () => {
     setTimeout(() => setStatusMessage(null), 3500);
   }, [setNodes, setEdges]);
 
-  const handleLoadTemplate = useCallback(
-    (templateId: string) => {
-      if (templateId === "custom_scratch" || templateId === "scratch") {
+  // Master Network Loader: handles templates, custom user models, and URL parameters
+  const handleLoadNetwork = useCallback(
+    async (networkId: string) => {
+      if (!networkId) return;
+
+      if (networkId === "custom_scratch" || networkId === "scratch") {
         handleCreateScratch();
         return;
       }
 
-      if (PRESET_GRAPHS[templateId]) {
-        const preset = PRESET_GRAPHS[templateId];
-        setGlobalConfig(preset.config);
-        setNodes(preset.nodes);
-        setEdges(preset.edges);
+      try {
+        let fullNet: any = null;
+        try {
+          fullNet = await api.getNetwork(networkId);
+        } catch {
+          // Fallback to presets or templates
+        }
+
+        if (!fullNet && PRESET_GRAPHS[networkId]) {
+          const preset = PRESET_GRAPHS[networkId];
+          setGlobalConfig(preset.config);
+          setNodes(preset.nodes);
+          setEdges(preset.edges);
+          setSelectedNodeId(null);
+          setStatusMessage(`Loaded architecture preset: ${preset.config.name}`);
+          setTimeout(() => setStatusMessage(null), 3000);
+          return;
+        }
+
+        if (!fullNet) {
+          const t = templates.find((item) => item.id === networkId);
+          if (t) fullNet = t;
+        }
+
+        if (!fullNet) {
+          const r = registeredNetworks.find((item) => item.id === networkId);
+          if (r) fullNet = r;
+        }
+
+        if (!fullNet) {
+          setStatusMessage(`Network '${networkId}' not found.`);
+          setTimeout(() => setStatusMessage(null), 3500);
+          return;
+        }
+
+        // 1. Update Global Config
+        setGlobalConfig({
+          id: fullNet.id || networkId,
+          name: fullNet.name || networkId,
+          task_type: fullNet.task_type || fullNet.supported_tasks?.[0] || "causal_lm",
+          architecture_type: fullNet.architecture_type || fullNet.architecture_family || "decoder_only",
+          vocab_size: fullNet.vocab_size || 12288,
+          d_model: fullNet.d_model || 512,
+          n_layers: fullNet.n_layers || 8,
+          n_q: fullNet.n_q || 8,
+          n_kv: fullNet.n_kv || 2,
+          d_ff: fullNet.d_ff || 1280,
+          kernel_size: fullNet.kernel_size || 4,
+          tied_embeddings: fullNet.tied_embeddings ?? fullNet.tie_word_embeddings ?? true,
+        });
+
+        // 2. Restore Visual Graph (nodes & edges)
+        if (Array.isArray(fullNet.nodes) && fullNet.nodes.length > 0) {
+          setNodes(fullNet.nodes);
+          setEdges(Array.isArray(fullNet.edges) ? fullNet.edges : []);
+        } else if (Array.isArray(fullNet.layers) && fullNet.layers.length > 0) {
+          // Reconstruct graph from layers list
+          const reconstructedNodes: Node[] = fullNet.layers.map((l: any, i: number) => {
+            const layerType = l.type || l.layerType || "Linear";
+            const category = LAYER_TYPE_CATEGORY_MAP[layerType] || "structural";
+            return {
+              id: l.id || `node-${i + 1}`,
+              type: "archNode",
+              position: l.position || { x: 250, y: 30 + i * 120 },
+              data: {
+                label: l.label || `${layerType} Layer`,
+                category,
+                layerType,
+                config: l.config || {},
+                inputShape: l.inputShape || "[B, S, D]",
+                outputShape: l.outputShape || "[B, S, D]",
+                params: l.params || 0,
+                isValid: true,
+              },
+            };
+          });
+
+          const reconstructedEdges: Edge[] = reconstructedNodes.slice(0, -1).map((n, i) => ({
+            id: `e${i}-${i + 1}`,
+            source: n.id,
+            target: reconstructedNodes[i + 1].id,
+            animated: true,
+          }));
+
+          setNodes(reconstructedNodes);
+          setEdges(reconstructedEdges);
+        } else if (PRESET_GRAPHS[networkId]) {
+          setNodes(PRESET_GRAPHS[networkId].nodes);
+          setEdges(PRESET_GRAPHS[networkId].edges);
+        } else {
+          // Synthesize canonical LLM pipeline
+          const d_m = fullNet.d_model || 512;
+          const v_s = fullNet.vocab_size || 12288;
+          const n_l = fullNet.n_layers || 8;
+          const n_q = fullNet.n_q || 8;
+          const n_kv = fullNet.n_kv || 2;
+          const d_ff = fullNet.d_ff || d_m * 4;
+
+          const syntheticNodes: Node[] = [
+            {
+              id: "node-embed",
+              type: "archNode",
+              position: { x: 250, y: 30 },
+              data: {
+                label: "Token & Position Embed",
+                category: "embedding",
+                layerType: "Embedding",
+                config: { vocab_size: v_s, d_model: d_m },
+                inputShape: "[B, S]",
+                outputShape: `[B, S, ${d_m}]`,
+                params: v_s * d_m,
+                isValid: true,
+              },
+            },
+            {
+              id: "node-norm1",
+              type: "archNode",
+              position: { x: 250, y: 150 },
+              data: {
+                label: "Input RMSNorm",
+                category: "norm",
+                layerType: "RMSNorm",
+                config: { d_model: d_m, eps: 1e-6 },
+                inputShape: `[B, S, ${d_m}]`,
+                outputShape: `[B, S, ${d_m}]`,
+                params: d_m,
+                isValid: true,
+              },
+            },
+            {
+              id: "node-attn",
+              type: "archNode",
+              position: { x: 250, y: 270 },
+              data: {
+                label: `Attention Blocks (${n_l}x)`,
+                category: "attention",
+                layerType: n_kv === n_q ? "MultiheadAttention" : "GQAAttention",
+                config: { d_model: d_m, n_q, n_kv },
+                inputShape: `[B, S, ${d_m}]`,
+                outputShape: `[B, S, ${d_m}]`,
+                params: 4 * d_m * d_m * n_l,
+                isValid: true,
+              },
+            },
+            {
+              id: "node-ffn",
+              type: "archNode",
+              position: { x: 250, y: 390 },
+              data: {
+                label: `SwiGLU FFN Blocks (${n_l}x)`,
+                category: "feedforward",
+                layerType: "SwiGLU",
+                config: { d_model: d_m, d_ff },
+                inputShape: `[B, S, ${d_m}]`,
+                outputShape: `[B, S, ${d_m}]`,
+                params: 3 * d_m * d_ff * n_l,
+                isValid: true,
+              },
+            },
+            {
+              id: "node-head",
+              type: "archNode",
+              position: { x: 250, y: 510 },
+              data: {
+                label: "LM Head (Projection)",
+                category: "embedding",
+                layerType: "Linear",
+                config: { in_features: d_m, out_features: v_s, bias: false },
+                inputShape: `[B, S, ${d_m}]`,
+                outputShape: `[B, S, ${v_s}]`,
+                params: 0,
+                isValid: true,
+              },
+            },
+          ];
+
+          const syntheticEdges: Edge[] = [
+            { id: "e1-2", source: "node-embed", target: "node-norm1", animated: true },
+            { id: "e2-3", source: "node-norm1", target: "node-attn", animated: true },
+            { id: "e3-4", source: "node-attn", target: "node-ffn", animated: true },
+            { id: "e4-5", source: "node-ffn", target: "node-head", animated: true },
+          ];
+
+          setNodes(syntheticNodes);
+          setEdges(syntheticEdges);
+        }
+
         setSelectedNodeId(null);
-        setStatusMessage(`Loaded architecture preset: ${preset.config.name}`);
-        setTimeout(() => setStatusMessage(null), 3000);
-        return;
+        setStatusMessage(`Loaded architecture: ${fullNet.name || networkId}`);
+        setTimeout(() => setStatusMessage(null), 3500);
+      } catch (e: any) {
+        console.error("Failed to load network:", e);
+        setStatusMessage(`Failed to load network: ${e.message}`);
+        setTimeout(() => setStatusMessage(null), 4000);
       }
-
-      const template = templates.find((t) => t.id === templateId);
-      if (!template) return;
-
-      setGlobalConfig({
-        id: template.id,
-        name: template.name,
-        task_type: template.task_type || "causal_lm",
-        architecture_type: template.architecture_type || "hybrid_cnn_transformer",
-        vocab_size: template.vocab_size || 12288,
-        d_model: template.d_model || 512,
-        n_layers: template.n_layers || 16,
-        n_q: template.n_q || 8,
-        n_kv: template.n_kv || 2,
-        d_ff: template.d_ff || 1280,
-        kernel_size: template.kernel_size || 4,
-        tied_embeddings: template.tied_embeddings ?? true,
-      });
-
-      setStatusMessage(`Loaded template: ${template.name}`);
-      setTimeout(() => setStatusMessage(null), 3000);
     },
-    [handleCreateScratch, templates, setNodes, setEdges]
+    [handleCreateScratch, templates, registeredNetworks, setNodes, setEdges]
   );
 
-  // URL Query parameter navigation: ?scratch=true or ?template=<id>
+  // URL Query parameter navigation: ?network=<id> or ?id=<id> or ?template=<id> or ?scratch=true
   useEffect(() => {
     if (typeof window !== "undefined") {
       const search = window.location.search;
@@ -643,42 +861,57 @@ export const NetworkStudioView: React.FC = () => {
         if (params.get("scratch") === "true") {
           handleCreateScratch();
         } else {
-          const tpl = params.get("template");
-          if (tpl) {
-            handleLoadTemplate(tpl);
+          const target =
+            params.get("network") ||
+            params.get("id") ||
+            params.get("model") ||
+            params.get("template");
+          if (target) {
+            handleLoadNetwork(target);
           }
         }
       }
     }
-  }, [handleCreateScratch, handleLoadTemplate]);
+  }, [handleCreateScratch, handleLoadNetwork]);
 
   const handleSaveNetwork = async () => {
+    setIsSaving(true);
     try {
       const payload = {
         ...globalConfig,
         layers: nodes.map((n) => ({
           id: n.id,
           type: n.data.layerType,
+          label: n.data.label,
           config: n.data.config,
+          position: n.position,
         })),
+        nodes: nodes,
+        edges: edges,
         parameters: estimation?.parameters,
         memory: estimation?.memory,
       };
       await api.saveNetwork(payload);
-      setStatusMessage(`Network '${globalConfig.name}' saved to Registry successfully!`);
+      setStatusMessage(`Architecture '${globalConfig.name}' saved to Registry!`);
+      await fetchAllNetworks();
       setTimeout(() => setStatusMessage(null), 4000);
     } catch (e: any) {
       alert(`Save error: ${e.message}`);
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const handleCloneNetwork = async () => {
+    const newName = prompt(`Enter a new name for the cloned model:`, `Clone of ${globalConfig.name}`);
+    if (!newName) return;
+    const cleanId = newName.toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 48);
+    const newId = `${cleanId}_${Date.now().toString().slice(-4)}`;
     try {
-      const newId = `${globalConfig.id}_clone`;
-      const newName = `Clone of ${globalConfig.name}`;
       await api.cloneNetwork(globalConfig.id, newId, newName);
       setGlobalConfig((prev) => ({ ...prev, id: newId, name: newName }));
-      setStatusMessage(`Network cloned as '${newName}'!`);
+      await fetchAllNetworks();
+      setStatusMessage(`Architecture cloned as '${newName}'!`);
       setTimeout(() => setStatusMessage(null), 4000);
     } catch (e: any) {
       alert(`Clone error: ${e.message}`);
@@ -690,15 +923,29 @@ export const NetworkStudioView: React.FC = () => {
       await api.deleteNetwork(globalConfig.id);
       setConfirmDeleteNet(false);
       setStatusMessage(`Deleted '${globalConfig.name}' from Registry`);
-      const t = await api.getNetworkTemplates();
-      setTemplates(Array.isArray(t) ? t : []);
-      handleLoadTemplate("rocanon_48m");
+      await fetchAllNetworks();
+      handleLoadNetwork("rocanon_48_5m");
     } catch (e: any) {
       alert(`Delete error: ${e.message}`);
     }
   };
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId) || null;
+
+  const defaultTemplateIds = [
+    "rocanon_48m",
+    "rocanon_48_5m",
+    "mini_gpt_15m",
+    "bert_encoder_25m",
+    "conv1d_network_4m",
+    "deep_mlp_5m",
+    "hybrid_cnn_transformer_20m",
+  ];
+  const isCustomModel = !defaultTemplateIds.includes(globalConfig.id);
+
+  // Grouped list of registered models
+  const userCustomNetworks = registeredNetworks.filter((n) => !defaultTemplateIds.includes(n.id));
+  const baseTemplates = templates.length > 0 ? templates : registeredNetworks.filter((n) => defaultTemplateIds.includes(n.id));
 
   return (
     <div className="h-[calc(100vh-7.5rem)] flex flex-col space-y-3">
@@ -711,7 +958,7 @@ export const NetworkStudioView: React.FC = () => {
         />
 
         {/* Center Canvas */}
-        <div className="flex-1 h-full min-h-[450px] glass-panel rounded-lg overflow-hidden relative border border-slate-800">
+        <div className="flex-1 h-full min-h-[450px] glass-panel rounded-lg overflow-hidden relative border border-[#273548]">
           <ReactFlowProvider>
             <ReactFlow
               nodes={nodes.map((n) => ({
@@ -735,23 +982,60 @@ export const NetworkStudioView: React.FC = () => {
                 variant={BackgroundVariant.Dots}
                 gap={24}
                 size={1}
-                color="rgba(0, 240, 255, 0.15)"
+                color="rgba(69, 207, 255, 0.15)"
               />
-              <Controls className="!bg-slate-900 !border-slate-800 !rounded-lg !text-cyan-400" />
+              <Controls className="!bg-[#0E1420] !border-[#273548] !rounded-lg !text-[#45CFFF]" />
               <MiniMap
-                nodeColor="#00f0ff"
-                maskColor="rgba(6, 10, 20, 0.8)"
-                className="!bg-slate-950/80 !border !border-slate-800 !rounded-lg"
+                nodeColor="#45CFFF"
+                maskColor="rgba(9, 13, 20, 0.8)"
+                className="!bg-[#0E1420]/90 !border !border-[#273548] !rounded-lg"
               />
             </ReactFlow>
           </ReactFlowProvider>
 
-          {/* Canvas Floating Top Info */}
-          <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
-            <div className="flex items-center gap-2">
-              <span className="px-2.5 py-1 rounded-md bg-[#0E1420]/95 border border-[#273548] font-mono text-xs text-[#ECF3FC] font-semibold backdrop-blur-md shadow-sm">
-                ACTIVE GRAPH: <span className="text-[#45CFFF]">{globalConfig.name}</span>
-              </span>
+          {/* Canvas Floating Top Info & Model Switcher Toolbar */}
+          <div className="absolute top-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 pointer-events-none z-10">
+            {/* Left: Active Model Switcher */}
+            <div className="flex items-center gap-2 pointer-events-auto">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#0E1420]/95 border border-[#273548] backdrop-blur-md shadow-md">
+                <span className="text-[10px] text-[#91A0B4] font-bold uppercase font-mono">MODEL:</span>
+                <div className="relative flex items-center">
+                  <select
+                    value={globalConfig.id}
+                    onChange={(e) => handleLoadNetwork(e.target.value)}
+                    className="bg-transparent text-[#45CFFF] font-bold text-xs font-mono pr-5 focus:outline-none cursor-pointer appearance-none"
+                  >
+                    {userCustomNetworks.length > 0 && (
+                      <optgroup label="MY REGISTERED ARCHITECTURES">
+                        {userCustomNetworks.map((m) => (
+                          <option key={m.id} value={m.id} className="bg-[#0E1420] text-[#ECF3FC]">
+                            {m.name} ({formatParamCount(m.total_parameters || 0)})
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                    <optgroup label="BASE ARCHITECTURE TEMPLATES">
+                      {baseTemplates.map((t) => (
+                        <option key={t.id} value={t.id} className="bg-[#0E1420] text-[#ECF3FC]">
+                          {t.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                  <ChevronDown className="w-3 h-3 text-[#45CFFF] absolute right-0 pointer-events-none" />
+                </div>
+              </div>
+
+              {isCustomModel ? (
+                <span className="px-2 py-0.5 rounded-md bg-[#45CFFF]/15 border border-[#45CFFF]/30 text-[#45CFFF] text-[10px] font-bold font-mono">
+                  CUSTOM (EDITABLE)
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 rounded-md bg-[#91A0B4]/15 border border-[#91A0B4]/30 text-[#91A0B4] text-[10px] font-bold font-mono">
+                  BASE TEMPLATE
+                </span>
+              )}
+
               {statusMessage && (
                 <span className="px-2.5 py-1 rounded-md bg-[#35D49A]/15 border border-[#35D49A]/40 font-mono text-xs text-[#35D49A] font-bold animate-in fade-in">
                   {statusMessage}
@@ -759,16 +1043,29 @@ export const NetworkStudioView: React.FC = () => {
               )}
             </div>
 
-            <div className="flex items-center gap-2">
+            {/* Right: Quick Action Buttons */}
+            <div className="flex items-center gap-2 pointer-events-auto">
+              <button
+                type="button"
+                onClick={handleSaveNetwork}
+                disabled={isSaving}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-mono text-xs font-bold transition-all shadow-md disabled:opacity-50"
+                title="Save current model configuration and layers"
+              >
+                <Save className="w-3.5 h-3.5" />
+                <span>{isSaving ? "SAVING..." : isCustomModel ? "SAVE CHANGES" : "SAVE TO REGISTRY"}</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleCreateScratch}
-                className="pointer-events-auto flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-mono text-xs font-bold transition-all shadow-sm"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF] text-[#ECF3FC] font-mono text-xs font-semibold transition-all shadow-sm"
                 title="Start a new architecture on a blank canvas"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>+ New From Scratch</span>
+                <Plus className="w-3.5 h-3.5 text-[#45CFFF]" />
+                <span className="hidden sm:inline">+ New Architecture</span>
               </button>
+
               {nodes.length > 0 && (
                 <button
                   type="button"
@@ -777,7 +1074,7 @@ export const NetworkStudioView: React.FC = () => {
                     setEdges([]);
                     setSelectedNodeId(null);
                   }}
-                  className="pointer-events-auto flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#0E1420] border border-[#273548] hover:border-[#FF657A]/50 hover:bg-[#FF657A]/15 text-[#91A0B4] hover:text-[#FF657A] font-mono text-xs transition-all"
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#0E1420] border border-[#273548] hover:border-[#FF657A]/50 hover:bg-[#FF657A]/15 text-[#91A0B4] hover:text-[#FF657A] font-mono text-xs transition-all"
                   title="Clear canvas"
                 >
                   <Trash2 className="w-3 h-3" />
@@ -888,11 +1185,13 @@ export const NetworkStudioView: React.FC = () => {
           }
           onSaveNetwork={handleSaveNetwork}
           onCloneNetwork={handleCloneNetwork}
-          onLoadTemplate={handleLoadTemplate}
+          onLoadTemplate={handleLoadNetwork}
           onNewScratch={handleCreateScratch}
           onDeleteNetwork={() => setConfirmDeleteNet(true)}
           onShowInfo={setInfoModalLayer}
           templates={templates}
+          registeredNetworks={registeredNetworks}
+          isSaving={isSaving}
         />
       </div>
 
@@ -988,7 +1287,7 @@ export const NetworkStudioView: React.FC = () => {
           </div>
 
           <a
-            href="/training"
+            href={`/training?network=${encodeURIComponent(globalConfig.id)}`}
             className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-bold transition-all shadow-sm shrink-0"
           >
             <Play className="w-3.5 h-3.5 fill-current" /> DEPLOY TO TRAINING

@@ -140,9 +140,16 @@ export const TrainingView: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
-  // Load configuration from localStorage on mount
+  // Load configuration from localStorage on mount and check URL params
   useEffect(() => {
     const saved = getSavedConfig();
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const netParam = params.get("network") || params.get("model");
+      if (netParam) {
+        saved.selectedNetwork = netParam;
+      }
+    }
     setForm(saved);
     setIsLoadedFromStorage(true);
   }, []);
@@ -605,18 +612,28 @@ export const TrainingView: React.FC = () => {
                 <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
                   Architecture Model
                 </label>
-                <select
-                  value={form.selectedNetwork}
-                  onChange={(e) => updateForm("selectedNetwork", e.target.value)}
-                  disabled={isRunning || isPaused}
-                  className="w-full bg-[#0E1420] border border-[#273548] rounded px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]"
-                >
-                  {networks.map((n) => (
-                    <option key={n.id} value={n.id}>
-                      {n.name} ({((n.total_params || 48531968) / 1_000_000).toFixed(1)}M)
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={form.selectedNetwork}
+                    onChange={(e) => updateForm("selectedNetwork", e.target.value)}
+                    disabled={isRunning || isPaused}
+                    className="flex-1 bg-[#0E1420] border border-[#273548] rounded px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF] truncate"
+                  >
+                    {networks.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {n.name} ({((n.total_params || 48531968) / 1_000_000).toFixed(1)}M)
+                      </option>
+                    ))}
+                  </select>
+                  <a
+                    href={`/studio?network=${encodeURIComponent(form.selectedNetwork)}`}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF] hover:text-[#45CFFF] text-[#91A0B4] text-xs font-mono transition-colors shrink-0"
+                    title="Edit this model in Network Studio"
+                  >
+                    <Sliders className="w-3.5 h-3.5 text-[#45CFFF]" />
+                    <span>EDIT</span>
+                  </a>
+                </div>
               </div>
 
               <div>
