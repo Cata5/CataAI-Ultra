@@ -1,11 +1,7 @@
 """
 src/telemetry/vram_guard.py
-Dynamic VRAM safety monitoring and protective threshold enforcement for 6GB RTX 3060.
-Suggested starting policy:
-- > 1000 MB free: NORMAL
-- 700 MB - 1000 MB free: WARNING
-- 400 MB - 700 MB free: CRITICAL
-- < 400 MB free: EMERGENCY
+Dynamic VRAM safety monitoring and protective threshold enforcement for LLM Maker.
+Adapts dynamically to the detected hardware profile and user-selected safety ceiling.
 """
 
 from __future__ import annotations
@@ -14,6 +10,8 @@ import enum
 import logging
 from dataclasses import dataclass
 from typing import Optional, Tuple
+
+from .profiles import HardwareProfile
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +25,19 @@ class VRAMAlertLevel(str, enum.Enum):
 
 @dataclass
 class VRAMThresholdConfig:
-    warning_mb: float = 600.0   # Free VRAM below 600 MB triggers WARNING
-    critical_mb: float = 350.0   # Free VRAM below 350 MB triggers CRITICAL
-    emergency_mb: float = 150.0  # Free VRAM below 150 MB triggers EMERGENCY
+    warning_mb: float = 600.0   # Free VRAM below warning triggers WARNING
+    critical_mb: float = 350.0   # Free VRAM below critical triggers CRITICAL
+    emergency_mb: float = 150.0  # Free VRAM below emergency triggers EMERGENCY
     max_pytorch_allocated_gb: float = 5.0  # Ceiling for PyTorch allocated
+
+    @classmethod
+    def from_profile(cls, profile: HardwareProfile) -> VRAMThresholdConfig:
+        return cls(
+            warning_mb=profile.warning_threshold_mb,
+            critical_mb=profile.critical_threshold_mb,
+            emergency_mb=profile.emergency_threshold_mb,
+            max_pytorch_allocated_gb=round(profile.max_memory_allocated_mb / 1024.0, 2),
+        )
 
 
 class VRAMGuard:
@@ -38,6 +45,9 @@ class VRAMGuard:
 
     def __init__(self, config: Optional[VRAMThresholdConfig] = None) -> None:
         self.config = config or VRAMThresholdConfig()
+
+    def update_from_profile(self, profile: HardwareProfile) -> None:
+        self.config = VRAMThresholdConfig.from_profile(profile)
 
     def evaluate(self, free_vram_mb: Optional[float], pytorch_allocated_mb: Optional[float] = None) -> Tuple[VRAMAlertLevel, str]:
         if free_vram_mb is None:
@@ -63,4 +73,3 @@ class VRAMGuard:
                 return VRAMAlertLevel.WARNING, msg
 
         return VRAMAlertLevel.NORMAL, f"VRAM healthy ({free_vram_mb:.1f} MB free)"
-

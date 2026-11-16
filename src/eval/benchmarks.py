@@ -12,6 +12,7 @@ from __future__ import annotations
 import collections
 import json
 import logging
+import math
 import re
 import time
 from dataclasses import asdict, dataclass, field
@@ -150,6 +151,90 @@ DEFAULT_CODE_MATH_BENCHMARKS: List[BenchmarkItem] = [
     ),
 ]
 
+# Generalized Machine Learning & System Architecture Benchmarks
+DEFAULT_GENERAL_ML_BENCHMARKS: List[BenchmarkItem] = [
+    BenchmarkItem(
+        id="ml_1",
+        category="general_ml",
+        prompt="What is the purpose of Key-Value (KV) caching during autoregressive transformer inference?",
+        expected_keywords=["cache", "attention", "speed", "recomputation"],
+        reference_answer="KV caching stores previously computed key and value states to prevent quadratic redundant recomputations during generation.",
+    ),
+    BenchmarkItem(
+        id="ml_2",
+        category="general_ml",
+        prompt="Why is rotary position embedding (RoPE) widely used in modern language models?",
+        expected_keywords=["relative", "position", "extrapolation", "rotation"],
+        reference_answer="RoPE injects relative positional information via rotation matrices in the complex plane, enabling length extrapolation.",
+    ),
+]
+
+# Instruction Following & Compliance Benchmarks
+DEFAULT_INSTRUCTION_BENCHMARKS: List[BenchmarkItem] = [
+    BenchmarkItem(
+        id="inst_1",
+        category="instruction_following",
+        prompt="Reply with exactly one single word: What is the capital of France?",
+        expected_keywords=["Paris"],
+        reference_answer="Paris",
+        compliance_rule="single_word",
+    ),
+    BenchmarkItem(
+        id="inst_2",
+        category="instruction_following",
+        prompt="List three primary colors as a numbered list from 1 to 3.",
+        expected_keywords=["Red", "Blue", "Yellow"],
+        reference_answer="1. Red\n2. Blue\n3. Yellow",
+        compliance_rule="numbered_list",
+    ),
+]
+
+
+class EvaluationMetricsHelper:
+    """Helper for evaluating non-language tasks (Computer Vision, Tabular, Regression)."""
+
+    @staticmethod
+    def evaluate_classification(
+        predictions: List[int],
+        targets: List[int],
+        num_classes: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        total = len(targets)
+        if total == 0:
+            return {"accuracy": 0.0, "total_samples": 0}
+        correct = sum(1 for p, t in zip(predictions, targets) if p == t)
+        accuracy = round((correct / total) * 100.0, 2)
+        return {
+            "accuracy": accuracy,
+            "correct_samples": correct,
+            "total_samples": total,
+            "error_rate": round(100.0 - accuracy, 2),
+        }
+
+    @staticmethod
+    def evaluate_regression(
+        predictions: List[float],
+        targets: List[float],
+    ) -> Dict[str, float]:
+        n = len(targets)
+        if n == 0:
+            return {"mae": 0.0, "mse": 0.0, "rmse": 0.0, "r2": 0.0}
+        errors = [p - t for p, t in zip(predictions, targets)]
+        mae = sum(abs(e) for e in errors) / n
+        mse = sum(e * e for e in errors) / n
+        rmse = math.sqrt(mse)
+        # R2 calculation
+        mean_target = sum(targets) / n
+        ss_tot = sum((t - mean_target) ** 2 for t in targets)
+        ss_res = sum(e * e for e in errors)
+        r2 = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+        return {
+            "mae": round(mae, 4),
+            "mse": round(mse, 4),
+            "rmse": round(rmse, 4),
+            "r2": round(r2, 4),
+        }
+
 
 class BenchmarkManager:
     """Manages benchmark collections, execution, and evaluation metric scoring."""
@@ -163,6 +248,8 @@ class BenchmarkManager:
             + DEFAULT_HARDWARE_BENCHMARKS
             + DEFAULT_ROMANIAN_BENCHMARKS
             + DEFAULT_CODE_MATH_BENCHMARKS
+            + DEFAULT_GENERAL_ML_BENCHMARKS
+            + DEFAULT_INSTRUCTION_BENCHMARKS
         ):
             self.items[item.id] = item
 

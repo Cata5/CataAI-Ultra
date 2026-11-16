@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import {
   Search,
@@ -9,12 +9,18 @@ import {
   Wifi,
   WifiOff,
   Terminal,
+  Sparkles,
+  Globe,
+  Briefcase,
+  ChevronDown,
 } from "lucide-react";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
 import { CommandPalette } from "@/components/ui/CommandPalette";
+import { SetupWizardModal } from "@/components/onboarding/SetupWizardModal";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useHardwareTelemetry } from "@/hooks/useHardwareTelemetry";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
+import { useTranslation } from "@/i18n";
 
 const TITLES: Record<string, string> = {
   "/": "Command Center / Overview",
@@ -29,11 +35,58 @@ const TITLES: Record<string, string> = {
 export const Topbar: React.FC = () => {
   const pathname = usePathname();
   const [isCommandOpen, setIsCommandOpen] = useState(false);
+  const [isWizardOpen, setIsWizardOpen] = useState(false);
   const [showAlertsDropdown, setShowAlertsDropdown] = useState(false);
+  const [showWorkspaceDropdown, setShowWorkspaceDropdown] = useState(false);
+  const [workspaces, setWorkspaces] = useState<any[]>([]);
+  const [activeWorkspace, setActiveWorkspace] = useState<any>(null);
 
   const { isConnected, currentState, recentAlerts } = useWebSocket();
   const { status } = useSystemStatus(4000);
   const { telemetry } = useHardwareTelemetry(3000);
+  const { locale, setLocale, t } = useTranslation();
+
+  // First-run onboarding check
+  useEffect(() => {
+    try {
+      const completed = localStorage.getItem("llm_maker_onboarding_completed");
+      if (!completed) {
+        setIsWizardOpen(true);
+      }
+    } catch {}
+  }, []);
+
+  // Fetch workspaces
+  const fetchWorkspaces = () => {
+    fetch("/api/workspaces")
+      .then((res) => res.json())
+      .then((data) => {
+        if (Array.isArray(data)) setWorkspaces(data);
+      })
+      .catch(() => {});
+    fetch("/api/workspaces/current")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data && data.id) setActiveWorkspace(data);
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    fetchWorkspaces();
+  }, [isWizardOpen]);
+
+  const handleSwitchWorkspace = async (id: string) => {
+    try {
+      await fetch("/api/workspaces/current", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspace_id: id }),
+      });
+      fetchWorkspaces();
+      setShowWorkspaceDropdown(false);
+    } catch {}
+  };
 
   const pageTitle = TITLES[pathname] || "LLM Maker Console";
   const effectiveState = currentState !== "IDLE" ? currentState : status?.state || "IDLE";
@@ -159,10 +212,72 @@ export const Topbar: React.FC = () => {
               </div>
             )}
           </div>
+
+          {/* Workspace Switcher */}
+          <div className="relative hidden md:block">
+            <button
+              onClick={() => setShowWorkspaceDropdown(!showWorkspaceDropdown)}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 hover:border-cyan-400/50 text-slate-300 font-mono text-xs transition-colors"
+              title="Active Workspace"
+            >
+              <Briefcase className="w-3.5 h-3.5 text-cyan-400" />
+              <span className="max-w-[100px] truncate font-bold text-slate-200">
+                {activeWorkspace?.name || "DEFAULT"}
+              </span>
+              <ChevronDown className="w-3 h-3 text-slate-400" />
+            </button>
+
+            {showWorkspaceDropdown && (
+              <div className="absolute right-0 mt-2 w-56 glass-panel border border-slate-700/80 rounded-lg shadow-2xl p-2 z-50 animate-in fade-in duration-150">
+                <div className="px-2 py-1 text-[10px] font-mono font-bold text-slate-400 border-b border-slate-800">
+                  WORKSPACES
+                </div>
+                <div className="max-h-48 overflow-y-auto space-y-1 mt-1 font-mono text-xs">
+                  {workspaces.map((ws) => (
+                    <button
+                      key={ws.id}
+                      onClick={() => handleSwitchWorkspace(ws.id)}
+                      className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
+                        activeWorkspace?.id === ws.id
+                          ? "bg-cyan-950/60 text-cyan-300 border border-cyan-500/30"
+                          : "text-slate-300 hover:bg-slate-800/60"
+                      }`}
+                    >
+                      <span className="truncate">{ws.name}</span>
+                      {activeWorkspace?.id === ws.id && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Setup Wizard Button */}
+          <button
+            onClick={() => setIsWizardOpen(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-950/40 border border-cyan-500/40 hover:bg-cyan-900/50 text-cyan-400 font-mono text-xs transition-all shadow-[0_0_8px_rgba(0,240,255,0.15)]"
+            title="Open Hardware & Setup Wizard"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span className="hidden lg:inline font-bold">Wizard</span>
+          </button>
+
+          {/* Language Toggle (EN / RO) */}
+          <button
+            onClick={() => setLocale(locale === "en" ? "ro" : "en")}
+            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900/80 border border-slate-800 text-slate-300 hover:text-cyan-400 font-mono text-xs transition-colors"
+            title="Toggle Language (English / Română)"
+          >
+            <Globe className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="uppercase font-bold">{locale}</span>
+          </button>
         </div>
       </header>
 
       <CommandPalette isOpen={isCommandOpen} onClose={() => setIsCommandOpen(false)} />
+      <SetupWizardModal isOpen={isWizardOpen} onClose={() => setIsWizardOpen(false)} />
     </>
   );
 };

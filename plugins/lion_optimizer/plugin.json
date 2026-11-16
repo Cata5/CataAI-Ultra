@@ -1,0 +1,27 @@
+{
+  "id": "lion_optimizer",
+  "name": "EvoLved Sign Momentum (Lion) Optimizer",
+  "version": "1.0.0",
+  "description": "Memory-efficient sign momentum optimizer discovered via program search.",
+  "category": "optimizer",
+  "author": "LLM Maker Core",
+  "min_llm_maker_version": "2.0.0",
+  "supported_features": [
+    "fp32_master",
+    "sign_momentum"
+  ],
+  "config_schema": {
+    "lr": {
+      "type": "number",
+      "default": 0.0001
+    },
+    "beta1": {
+      "type": "number",
+      "default": 0.9
+    },
+    "beta2": {
+      "type": "number",
+      "default": 0.99
+    }
+  }
+}

@@ -458,13 +458,17 @@ export const NetworkStudioView: React.FC = () => {
               HARDWARE COMPLIANCE
             </span>
             <div>
-              {estimation?.memory?.fits_6gb_gpu !== false ? (
+              {estimation?.memory?.safety_status === "SAFE" || estimation?.memory?.fits_6gb_gpu !== false ? (
                 <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 font-bold text-[10px]">
-                  FITS RTX 3060 6GB CEILING (&lt; 5.0 GB)
+                  FITS HARDWARE BUDGET ({estimation?.memory?.hardware_target || "SAFE"})
+                </span>
+              ) : estimation?.memory?.safety_status === "TIGHT" ? (
+                <span className="px-2 py-0.5 rounded bg-amber-950/60 border border-amber-500/30 text-amber-300 font-bold text-[10px]">
+                  TIGHT BUDGET MARGIN ({estimation?.memory?.total_training_vram_gb || 0} GB)
                 </span>
               ) : (
                 <span className="px-2 py-0.5 rounded bg-rose-950/60 border border-rose-500/30 text-rose-300 font-bold text-[10px]">
-                  EXCEEDS 5.0 GB VRAM THRESHOLD
+                  EXCEEDS ALLOCATION CEILING
                 </span>
               )}
             </div>

@@ -411,3 +411,78 @@ def configure_optimizers(
         )
 
     return muon_optimizer, adamw_optimizer
+
+
+def build_optimizer(
+    model: nn.Module,
+    optimizer_type: str = "muon_adamw",
+    lr: float = 3e-4,
+    weight_decay: float = 0.01,
+    betas: tuple[float, float] = (0.9, 0.95),
+    momentum: float = 0.9,
+    eps: float = 1e-8,
+    fused: bool = False,
+    muon_lr: float = 3e-3,
+    muon_wd: float = 0.01,
+) -> tuple[Optimizer, ...]:
+    """
+    Universal optimizer factory supporting:
+    - muon_adamw: Dual hybrid optimizer (Muon on 2D weights, AdamW on 1D/embeddings)
+    - adamw: PyTorch AdamW with decay/no-decay parameter grouping
+    - adam: PyTorch Adam
+    - sgd: PyTorch SGD with momentum
+    - rmsprop: PyTorch RMSprop
+    - adagrad: PyTorch Adagrad
+    """
+    opt_name = optimizer_type.lower()
+
+    if opt_name == "muon_adamw":
+        return configure_optimizers(
+            model=model,
+            muon_lr=muon_lr,
+            muon_wd=muon_wd,
+            adamw_lr=lr,
+            adamw_wd=weight_decay,
+            adamw_betas=betas,
+            adamw_eps=eps,
+            fused=fused,
+        )
+
+    # Standard decay vs no-decay parameter grouping
+    decay_params = []
+    no_decay_params = []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if param.dim() >= 2 and not any(nd in name.lower() for nd in ("norm", "bias", "embedding")):
+            decay_params.append(param)
+        else:
+            no_decay_params.append(param)
+
+    groups = [
+        {"params": decay_params, "weight_decay": weight_decay},
+        {"params": no_decay_params, "weight_decay": 0.0},
+    ]
+
+    if opt_name == "adamw":
+        use_fused = fused and torch.cuda.is_available()
+        try:
+            opt = torch.optim.AdamW(groups, lr=lr, betas=betas, eps=eps, fused=use_fused)
+        except Exception:
+            opt = torch.optim.AdamW(groups, lr=lr, betas=betas, eps=eps, fused=False)
+        return (opt,)
+
+    elif opt_name == "adam":
+        return (torch.optim.Adam(groups, lr=lr, betas=betas, eps=eps),)
+
+    elif opt_name == "sgd":
+        return (torch.optim.SGD(groups, lr=lr, momentum=momentum, nesterov=(momentum > 0)),)
+
+    elif opt_name == "rmsprop":
+        return (torch.optim.RMSprop(groups, lr=lr, eps=eps, momentum=momentum),)
+
+    elif opt_name == "adagrad":
+        return (torch.optim.Adagrad(groups, lr=lr, eps=eps),)
+
+    # Default fallback
+    return (torch.optim.AdamW(groups, lr=lr, betas=betas, eps=eps),)

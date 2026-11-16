@@ -30,7 +30,7 @@ export const TelemetryCard: React.FC<TelemetryCardProps> = ({
     temp >= 80 ? "text-rose-400" : temp >= 72 ? "text-amber-400" : "text-emerald-400";
   const vramBarColor =
     vramPct >= 90 ? "bg-rose-500" : vramPct >= 80 ? "bg-amber-400" : "bg-cyan-400";
-  const gpuName = telemetry.device_name || (telemetry as any).gpu_name || "NVIDIA RTX 3060 Laptop (6GB)";
+  const gpuName = telemetry.device_name || (telemetry as any).gpu_name || "Detected Hardware Device";
   const gpuUtil = telemetry.gpu_util_percent ?? (telemetry as any).gpu_utilization_pct ?? 0;
   const powerW = telemetry.power_draw_watts ?? (telemetry as any).power_draw_w ?? 0;
   const coreClock = telemetry.sm_clock_mhz ?? (telemetry as any).core_clock_mhz ?? 0;

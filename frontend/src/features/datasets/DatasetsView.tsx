@@ -29,7 +29,7 @@ export const DatasetsView: React.FC = () => {
 
   // Tokenizer Inspector State
   const [tokenizerText, setTokenizerText] = useState(
-    "RoCanon-48.5M este un model hibrid antrenat pe limba română cu GQA și SwiGLU."
+    "LLM Maker: A general-purpose local neural network training workstation. Proiectare și antrenare eficientă."
   );
   const [tokenizerResult, setTokenizerResult] = useState<any | null>(null);
   const [isTokenizing, setIsTokenizing] = useState(false);

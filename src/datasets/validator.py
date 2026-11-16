@@ -47,10 +47,10 @@ class DatasetValidator:
             }
 
         suffix = path.suffix.lower()
-        if suffix not in (".txt", ".jsonl", ".json"):
+        if suffix not in (".txt", ".jsonl", ".json", ".csv"):
             return {
                 "valid": False,
-                "error": f"Unsupported file extension: {suffix}. Supported: .txt, .jsonl, .json",
+                "error": f"Unsupported file extension: {suffix}. Supported: .txt, .jsonl, .json, .csv",
                 "total_records": 0,
                 "valid_records": 0,
                 "invalid_records": 0,
@@ -76,8 +76,62 @@ class DatasetValidator:
             return self._validate_txt(path)
         elif suffix == ".jsonl":
             return self._validate_jsonl(path)
+        elif suffix == ".csv":
+            return self._validate_csv(path)
         else:
             return self._validate_json(path)
+
+    def _validate_csv(self, path: Path) -> Dict[str, Any]:
+        import csv
+        valid_samples = []
+        errors = []
+        total_rows = 0
+
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+            if not header:
+                return {
+                    "valid": False,
+                    "format": "csv",
+                    "error": "CSV file is empty or missing header.",
+                    "total_records": 0,
+                    "valid_records": 0,
+                    "invalid_records": 0,
+                    "errors": ["Empty CSV"],
+                }
+
+            header_lower = [h.strip().lower() for h in header]
+            text_idx = None
+            for candidate in ("text", "content", "prompt", "instruction", "input", "sentence"):
+                if candidate in header_lower:
+                    text_idx = header_lower.index(candidate)
+                    break
+            if text_idx is None:
+                text_idx = 0
+
+            for row_idx, row in enumerate(reader, start=2):
+                total_rows += 1
+                if not row or len(row) <= text_idx:
+                    errors.append(f"Row {row_idx}: Empty or truncated row.")
+                    continue
+                val = row[text_idx].strip()
+                if val:
+                    valid_samples.append(val)
+                else:
+                    errors.append(f"Row {row_idx}: Empty value in primary column.")
+
+        return {
+            "valid": len(valid_samples) > 0,
+            "format": "csv",
+            "total_records": total_rows,
+            "valid_records": len(valid_samples),
+            "invalid_records": total_rows - len(valid_samples),
+            "errors": errors[:50],
+            "samples_preview": valid_samples[:5],
+            "extracted_texts": valid_samples,
+            "header": header,
+        }
 
     def _validate_txt(self, path: Path) -> Dict[str, Any]:
         valid_samples = []

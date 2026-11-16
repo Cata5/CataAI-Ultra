@@ -26,7 +26,7 @@ class MemoryTracker:
     def __init__(
         self,
         device: torch.device | None = None,
-        max_budget_gb: float = 5.0,
+        max_budget_gb: float | None = None,
     ) -> None:
         if device is None:
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -34,7 +34,18 @@ class MemoryTracker:
             self.device = torch.device(device)
         else:
             self.device = device
-        self.max_budget_gb = max_budget_gb
+
+        if max_budget_gb is not None:
+            self.max_budget_gb = max_budget_gb
+        else:
+            if self.is_cuda:
+                try:
+                    _, total_b = torch.cuda.mem_get_info(self.device)
+                    self.max_budget_gb = round((total_b * 0.85) / (1024**3), 2)
+                except Exception:
+                    self.max_budget_gb = 5.0
+            else:
+                self.max_budget_gb = 16.0
         self.reset_peak_stats()
 
     @property

@@ -137,7 +137,37 @@ class StudioDatabase:
                 value_json TEXT NOT NULL,
                 updated_at REAL NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                root_path TEXT NOT NULL,
+                is_active INTEGER DEFAULT 0,
+                config_json TEXT,
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
             """)
+
+            # Safe column migrations for workspace_id
+            for tbl in ("runs", "datasets", "checkpoints", "benchmarks"):
+                try:
+                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN workspace_id TEXT DEFAULT 'default';")
+                except sqlite3.OperationalError:
+                    pass  # column already exists
+
+            # Ensure default workspace exists
+            cur = conn.execute("SELECT id FROM workspaces WHERE id = 'default'")
+            if not cur.fetchone():
+                now = time.time()
+                conn.execute(
+                    """
+                    INSERT INTO workspaces (id, name, description, root_path, is_active, config_json, created_at, updated_at)
+                    VALUES ('default', 'Default Workspace', 'Primary default experimentation workspace', '.', 1, '{}', ?, ?)
+                    """,
+                    (now, now),
+                )
 
     # ------------------- Runs -------------------
     def create_run(
@@ -620,4 +650,128 @@ class StudioDatabase:
                 except Exception:
                     res[row["key"]] = row["value_json"]
             return res
+
+    # ------------------- Workspaces -------------------
+    def create_workspace(
+        self,
+        workspace_id: str,
+        name: str,
+        description: str = "",
+        root_path: str = "",
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        now = time.time()
+        cfg_str = json.dumps(config or {})
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO workspaces (id, name, description, root_path, is_active, config_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+                """,
+                (workspace_id, name, description, root_path, cfg_str, now, now),
+            )
+        return self.get_workspace(workspace_id)
+
+    def list_workspaces(self) -> List[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM workspaces ORDER BY created_at ASC")
+            res = []
+            for r in cur.fetchall():
+                d = dict(r)
+                d["config"] = json.loads(d["config_json"]) if d.get("config_json") else {}
+                d["is_active"] = bool(d.get("is_active", 0))
+                # Add counts
+                c_runs = conn.execute("SELECT COUNT(*) FROM runs WHERE workspace_id = ?", (d["id"],)).fetchone()[0]
+                c_chk = conn.execute("SELECT COUNT(*) FROM checkpoints WHERE workspace_id = ?", (d["id"],)).fetchone()[0]
+                c_data = conn.execute("SELECT COUNT(*) FROM datasets WHERE workspace_id = ?", (d["id"],)).fetchone()[0]
+                d["run_count"] = c_runs
+                d["checkpoint_count"] = c_chk
+                d["dataset_count"] = c_data
+                res.append(d)
+            return res
+
+    def get_workspace(self, workspace_id: str) -> Optional[Dict[str, Any]]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM workspaces WHERE id = ?", (workspace_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            d = dict(row)
+            d["config"] = json.loads(d["config_json"]) if d.get("config_json") else {}
+            d["is_active"] = bool(d.get("is_active", 0))
+            return d
+
+    def get_active_workspace(self) -> Dict[str, Any]:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT * FROM workspaces WHERE is_active = 1 LIMIT 1")
+            row = cur.fetchone()
+            if row:
+                d = dict(row)
+                d["config"] = json.loads(d["config_json"]) if d.get("config_json") else {}
+                d["is_active"] = True
+                return d
+            # Fallback to default
+            cur = conn.execute("SELECT * FROM workspaces WHERE id = 'default'")
+            row = cur.fetchone()
+            if row:
+                d = dict(row)
+                d["config"] = json.loads(d["config_json"]) if d.get("config_json") else {}
+                d["is_active"] = True
+                return d
+            return {
+                "id": "default",
+                "name": "Default Workspace",
+                "description": "Primary workspace",
+                "root_path": ".",
+                "is_active": True,
+                "config": {},
+            }
+
+    def set_active_workspace(self, workspace_id: str) -> bool:
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute("SELECT id FROM workspaces WHERE id = ?", (workspace_id,))
+            if not cur.fetchone():
+                return False
+            now = time.time()
+            conn.execute("UPDATE workspaces SET is_active = 0")
+            conn.execute("UPDATE workspaces SET is_active = 1, updated_at = ? WHERE id = ?", (now, workspace_id))
+            return True
+
+    def update_workspace(
+        self,
+        workspace_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        ws = self.get_workspace(workspace_id)
+        if not ws:
+            return None
+        now = time.time()
+        new_name = name if name is not None else ws["name"]
+        new_desc = description if description is not None else ws["description"]
+        new_cfg = config if config is not None else ws["config"]
+
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE workspaces SET name = ?, description = ?, config_json = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (new_name, new_desc, json.dumps(new_cfg), now, workspace_id),
+            )
+        return self.get_workspace(workspace_id)
+
+    def delete_workspace(self, workspace_id: str) -> bool:
+        if workspace_id == "default":
+            return False  # Cannot delete default workspace
+        ws = self.get_workspace(workspace_id)
+        if not ws:
+            return False
+        if ws["is_active"]:
+            self.set_active_workspace("default")
+
+        with self._lock, self._get_connection() as conn:
+            conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
+        return True
 

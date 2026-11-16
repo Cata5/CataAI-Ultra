@@ -149,7 +149,7 @@ export const OverviewView: React.FC = () => {
               <span className="text-cyan-400">{status?.run_id || "No active run"}</span>
             </span>
             <span className="text-[10px] font-mono text-slate-400">
-              Target Architecture: RoCanon-48.5M (Strict Invariant: 48,531,968 params)
+              Active Network: {status?.active_network || "Configured Architecture"} | Local-First AI Engine
             </span>
           </div>
         </div>

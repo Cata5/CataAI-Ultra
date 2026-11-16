@@ -277,3 +277,109 @@ def clip_gradient_norm(
 
     total_norm = torch.nn.utils.clip_grad_norm_(params, max_norm=max_norm, norm_type=norm_type)
     return float(total_norm)
+
+
+class GeneralLRScheduler:
+    """
+    Universal multi-optimizer learning rate scheduler supporting all standard schedules:
+    - constant
+    - linear / linear_warmup_decay
+    - cosine / cosine_warmup
+    - wsd (warmup-stable-decay)
+    - step_decay
+    - exponential
+    """
+
+    def __init__(
+        self,
+        optimizers: Optimizer | Sequence[Optimizer],
+        schedule_type: str = "cosine",
+        warmup_steps: int = 100,
+        total_steps: int = 1000,
+        min_lr_ratio: float = 0.1,
+        gamma: float = 0.95,
+        step_size: int = 200,
+    ) -> None:
+        if isinstance(optimizers, Optimizer):
+            self.optimizers = [optimizers]
+        else:
+            self.optimizers = list(optimizers)
+
+        self.schedule_type = schedule_type.lower()
+        self.warmup_steps = max(0, warmup_steps)
+        self.total_steps = max(1, total_steps)
+        self.min_lr_ratio = max(0.0, min(1.0, min_lr_ratio))
+        self.gamma = gamma
+        self.step_size = max(1, step_size)
+
+        self.base_lrs: list[list[float]] = [
+            [group["lr"] for group in opt.param_groups]
+            for opt in self.optimizers
+        ]
+        self.current_step: int = 0
+
+    def get_factor(self, step: int) -> float:
+        """Computes learning rate scale multiplier in [min_lr_ratio, 1.0] for step."""
+        if self.warmup_steps > 0 and step < self.warmup_steps:
+            return float(step) / float(self.warmup_steps)
+
+        # After warmup
+        effective_step = step - self.warmup_steps
+        effective_total = max(1, self.total_steps - self.warmup_steps)
+        progress = min(1.0, max(0.0, effective_step / effective_total))
+
+        st = self.schedule_type
+        if st in ("constant", "none"):
+            return 1.0
+        elif st in ("linear", "linear_decay", "linear_warmup_decay"):
+            return 1.0 - progress * (1.0 - self.min_lr_ratio)
+        elif st in ("cosine", "cosine_warmup"):
+            return self.min_lr_ratio + 0.5 * (1.0 - self.min_lr_ratio) * (1.0 + math.cos(math.pi * progress))
+        elif st == "wsd":
+            # 80% stable plateau, 20% cosine decay
+            if progress < 0.8:
+                return 1.0
+            decay_prog = (progress - 0.8) / 0.2
+            return self.min_lr_ratio + 0.5 * (1.0 - self.min_lr_ratio) * (1.0 + math.cos(math.pi * decay_prog))
+        elif st == "step_decay":
+            num_decays = step // self.step_size
+            return max(self.min_lr_ratio, float(self.gamma ** num_decays))
+        elif st == "exponential":
+            return max(self.min_lr_ratio, float(self.gamma ** step))
+        return 1.0
+
+    def step(self) -> None:
+        self.current_step += 1
+        factor = self.get_factor(self.current_step)
+        for opt, base_group in zip(self.optimizers, self.base_lrs):
+            for group, base_lr in zip(opt.param_groups, base_group):
+                group["lr"] = base_lr * factor
+
+    @staticmethod
+    def preview_curve(
+        schedule_type: str = "cosine",
+        warmup_steps: int = 100,
+        total_steps: int = 1000,
+        peak_lr: float = 3e-4,
+        min_lr_ratio: float = 0.1,
+        num_points: int = 100,
+    ) -> list[dict[str, float]]:
+        """Generates (step, lr) points for UI visualization."""
+        total_steps = max(1, total_steps)
+        step_interval = max(1, total_steps // num_points)
+        points = []
+        dummy_opt = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=peak_lr)
+        sched = GeneralLRScheduler(
+            optimizers=[dummy_opt],
+            schedule_type=schedule_type,
+            warmup_steps=warmup_steps,
+            total_steps=total_steps,
+            min_lr_ratio=min_lr_ratio,
+        )
+        for s in range(0, total_steps + 1, step_interval):
+            f = sched.get_factor(s)
+            points.append({"step": s, "lr": round(peak_lr * f, 8), "factor": round(f, 4)})
+        if points[-1]["step"] < total_steps:
+            f = sched.get_factor(total_steps)
+            points.append({"step": total_steps, "lr": round(peak_lr * f, 8), "factor": round(f, 4)})
+        return points

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
+import { useHardwareTelemetry } from "@/hooks/useHardwareTelemetry";
 import { api } from "@/services/api";
 import { ChartPanel } from "@/components/ui/ChartPanel";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
@@ -44,6 +45,7 @@ export interface TrainingFormConfig {
   resumeCheckpoint: string;
   durationMode: "steps" | "epochs";
   targetEpochs: number;
+  precision: string;
   peakLr: number;
   muonLr: number;
   minLr: number;
@@ -72,6 +74,7 @@ const DEFAULT_TRAINING_CONFIG: TrainingFormConfig = {
   resumeCheckpoint: "",
   durationMode: "steps",
   targetEpochs: 3,
+  precision: "bf16",
   peakLr: 0.003,
   muonLr: 0.02,
   minLr: 0.0001,
@@ -115,6 +118,8 @@ export const TrainingView: React.FC = () => {
     activeTrainingTime,
   } = useWebSocket();
   const { status, refresh: refreshStatus } = useSystemStatus(3000);
+  const { telemetry } = useHardwareTelemetry(5000);
+  const computeLabel = telemetry?.device_name || "Detected Hardware Accelerator";
 
   // Available options from backend
   const [networks, setNetworks] = useState<NetworkConfig[]>([]);
@@ -401,7 +406,7 @@ export const TrainingView: React.FC = () => {
               {status?.run_id && <span className="text-cyan-400">({status.run_id})</span>}
             </span>
             <span className="text-[10px] text-slate-400">
-              Precision: BF16 Mixed | Compute: NVIDIA RTX 3060 (6GB)
+              Precision: {form.precision.toUpperCase()} Mixed | Compute: {computeLabel}
             </span>
           </div>
         </div>
@@ -655,10 +660,11 @@ export const TrainingView: React.FC = () => {
                   disabled={isRunning || isPaused}
                   className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-400"
                 >
-                  <option value="causal_lm">Causal LM (Autoregressive)</option>
-                  <option value="masked_lm">Masked LM (BERT)</option>
-                  <option value="classification">Classification</option>
-                  <option value="regression">Regression</option>
+                  <option value="causal_lm">Causal LM (Autoregressive Next-Token)</option>
+                  <option value="instruction_sft">Instruction Fine-Tuning (SFT & Chat)</option>
+                  <option value="masked_lm">Masked LM (Bidirectional MLM)</option>
+                  <option value="classification">Classification (Vision & Tabular)</option>
+                  <option value="regression">Regression (Continuous Numerical)</option>
                 </select>
               </div>
             </div>

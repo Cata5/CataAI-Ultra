@@ -58,6 +58,8 @@ export interface MetricPoint {
 export interface SystemStatus {
   state: RunState;
   run_id: string | null;
+  active_network?: string;
+  active_workspace?: string;
   latest_metrics: MetricPoint | null;
   alerts_count: number;
   timestamp: number;
@@ -68,6 +70,28 @@ export interface HardwareTelemetry {
   device_name?: string;
   gpu_count?: number;
   cuda_available: boolean;
+  backend_type?: string;
+  compute_capability?: string;
+  system_ram_total_mb?: number;
+  system_ram_free_mb?: number;
+  supported_precisions?: string[];
+  hardware_profile?: {
+    mode: string;
+    device_type: string;
+    total_memory_mb: number;
+    total_memory_gb: number;
+    max_memory_allocated_mb: number;
+    max_memory_allocated_gb: number;
+    usable_ratio: number;
+    warning_threshold_mb: number;
+    critical_threshold_mb: number;
+    emergency_threshold_mb: number;
+    recommended_micro_batch: number;
+    enable_grad_checkpointing: boolean;
+    supported_precisions: string[];
+    active_precision: string;
+  };
+  resource_profiles?: Record<string, any>;
   gpu_utilization_pct?: number;
   gpu_util_percent?: number;
   memory_used_mb?: number;
@@ -91,6 +115,34 @@ export interface HardwareTelemetry {
   throttle_reasons?: string[];
   timestamp: number;
   is_available?: boolean;
+}
+
+export interface WorkspaceItem {
+  id: string;
+  name: string;
+  description: string;
+  root_path: string;
+  is_active: boolean;
+  config: Record<string, any>;
+  run_count?: number;
+  checkpoint_count?: number;
+  dataset_count?: number;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface PluginItem {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  category: string;
+  author: string;
+  enabled: boolean;
+  is_valid: boolean;
+  validation_error?: string | null;
+  supported_features?: string[];
+  config_schema?: Record<string, any>;
 }
 
 export interface Alert {

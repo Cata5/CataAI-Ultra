@@ -163,7 +163,7 @@ export const SettingsView: React.FC = () => {
               className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-400"
             />
             <span className="text-[10px] text-slate-400 mt-1 block">
-              RTX 3060 Laptop (6GB VRAM) safe ceiling: 5,000 MB. Triggers automatic throttle alert if breached.
+              Dynamic accelerator safe allocation ceiling. Triggers protective checkpoint or throttle alert if breached.
             </span>
           </div>
 

@@ -43,7 +43,7 @@ export const LAYER_DOCS: Record<string, LayerDocumentation> = {
     parameterFormula: "W_q (d \\times d) + W_k (d \\times (n_{kv} \\cdot d_h)) + W_v (d \\times (n_{kv} \\cdot d_h)) + W_o (d \\times d)",
     memoryAndVram: "In RoCanon: W_q (512x512) + W_k (512x128) + W_v (512x128) + W_o (512x512) = 655,360 params/layer. Total across 16 layers = 10.48M params.",
     rocanonContext: "RoCanon uses 8 Q-heads and 2 KV-heads with head dimension d_h=64. This enables 4x faster KV-cache generation during interactive Romanian text generation.",
-    bestPractices: "For RTX 3060 6GB, GQA 8:2 or 8:4 provides optimal throughput-to-VRAM balance. Use QK-Norm to eliminate loss spikes.",
+    bestPractices: "For consumer accelerators (6GB to 16GB), GQA 8:2 or 8:4 provides optimal throughput-to-VRAM balance. Use QK-Norm to eliminate loss spikes.",
   },
   MultiheadAttention: {
     title: "Standard Multi-Head Attention (MHA)",
@@ -72,7 +72,7 @@ export const LAYER_DOCS: Record<string, LayerDocumentation> = {
     description: "Swish-Gated Linear Unit feedforward layer. Replaces traditional two-matrix ReLU/GELU MLP with three weight matrices: gate, up-projection, and down-projection. Significantly outperforms standard MLPs at the same parameter budget.",
     parameterFormula: "3 \\times (d_{\\text{model}} \\times d_{ff}) = 3 \\times (512 \\times 1280) = 1,966,080 \\text{ params/layer}",
     memoryAndVram: "16 layers = 31.45M parameters (~65% of RoCanon's total weight budget). Consumes ~62.9 MB in BF16.",
-    rocanonContext: "RoCanon uses d_ff = 1280 (approx. 2.5x d_model) to maintain high representational capacity while staying within RTX 3060 6GB VRAM budget.",
+    rocanonContext: "RoCanon uses d_ff = 1280 (approx. 2.5x d_model) to maintain high representational capacity while staying within consumer VRAM budgets.",
     bestPractices: "Maintain d_ff as a multiple of 64 or 128 for tensor core alignment. Do not include bias terms in linear projections.",
   },
   MLP: {
@@ -91,7 +91,7 @@ export const LAYER_DOCS: Record<string, LayerDocumentation> = {
     math: "\\text{RMSNorm}(x) = \\frac{x}{\\sqrt{\\frac{1}{d}\\sum_{i=1}^d x_i^2 + \\epsilon}} \\odot \\gamma",
     description: "Faster and more numerically stable alternative to LayerNorm. Enforces scale invariance without subtracting the activation mean, reducing computation time by 10-20% per layer.",
     parameterFormula: "d_{\\text{model}} \\text{ learnable scale parameters } \\gamma = 512 \\text{ params/layer} (0 \\text{ bias})",
-    memoryAndVram: "Negligible memory (< 1 KB per layer). Very high compute efficiency on RTX 3060 CUDA cores.",
+    memoryAndVram: "Negligible memory (< 1 KB per layer). Very high compute efficiency on modern CUDA and Tensor cores.",
     rocanonContext: "RoCanon applies Pre-RMSNorm before attention and SwiGLU blocks, plus a final RMSNorm before the LM Head.",
     bestPractices: "Set eps=1e-6 for BF16 precision. Avoid adding bias parameters.",
   },

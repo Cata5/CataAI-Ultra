@@ -102,6 +102,7 @@ def calculate_analytical_parameters(
         "adamw_percentage": round((adamw_total / total_params) * 100, 2),
         "static_memory_mib": round(static_mib, 1),
         "static_memory_gb": round(static_mib / 1024, 2),
+        "fits_target_hardware": (static_mib / 1024) < 4.8,
         "fits_rtx_3060": (static_mib / 1024) < 4.8,
     }
 

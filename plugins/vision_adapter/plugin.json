@@ -1,0 +1,24 @@
+{
+  "id": "vision_adapter",
+  "name": "Computer Vision & CNN Training Adapter",
+  "version": "1.0.0",
+  "description": "Enables image-based classification and CNN backbone training pipelines.",
+  "category": "task",
+  "author": "LLM Maker Core",
+  "min_llm_maker_version": "2.0.0",
+  "supported_features": [
+    "image_folder",
+    "resnet_backbone",
+    "accuracy_metrics"
+  ],
+  "config_schema": {
+    "image_size": {
+      "type": "integer",
+      "default": 224
+    },
+    "channels": {
+      "type": "integer",
+      "default": 3
+    }
+  }
+}

@@ -40,10 +40,14 @@ from ..networks import (
 from ..pipeline.manager import PipelineManager
 from ..pipeline.runner import PipelineRunner
 from ..pipeline.scheduler_math import calculate_schedule_curve
+from ..plugins.manager import PluginManager
 from ..telemetry.hardware import HardwareMonitor
+from ..telemetry.profiles import HardwareProfile
 from ..training.factory import calculate_analytical_parameters, list_checkpoints
+from ..training.tasks.registry import TaskRegistry
 from ..worker.protocol import CommandType, EventType, RunState, WorkerCommand, WorkerEvent
 from ..worker.worker_manager import WorkerManager
+from ..workspace.manager import WorkspaceManager
 from .state import STATE, MetricPoint
 from .ui import INDEX_HTML
 
@@ -51,6 +55,8 @@ logger = logging.getLogger(__name__)
 
 # Singletons for backend control plane
 DB = StudioDatabase()
+WORKSPACE_MGR = WorkspaceManager(db=DB)
+PLUGIN_MGR = PluginManager(db=DB)
 WORKER_MGR = WorkerManager(db=DB)
 CHECKPOINT_MGR = CheckpointManager(db=DB)
 DATASET_MGR = DatasetManager(db=DB)
@@ -843,6 +849,165 @@ async def handle_action(request: web.Request) -> web.Response:
     return web.json_response({"error": f"Unknown action: {action}"}, status=400)
 
 
+# ---------------- Workspaces & Product Generalization ----------------
+
+async def handle_list_workspaces(request: web.Request) -> web.Response:
+    return web.json_response(WORKSPACE_MGR.list_workspaces())
+
+
+async def handle_create_workspace(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        name = data.get("name")
+        if not name:
+            return web.json_response({"error": "Workspace name is required"}, status=400)
+        ws = WORKSPACE_MGR.create_workspace(
+            name=name,
+            workspace_id=data.get("id"),
+            description=data.get("description", ""),
+            config=data.get("config", {}),
+        )
+        return web.json_response(ws)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
+async def handle_get_active_workspace(request: web.Request) -> web.Response:
+    return web.json_response(WORKSPACE_MGR.get_active_workspace())
+
+
+async def handle_set_active_workspace(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        ws_id = data.get("workspace_id") or data.get("id")
+        if not ws_id:
+            return web.json_response({"error": "workspace_id is required"}, status=400)
+        success = WORKSPACE_MGR.set_active_workspace(ws_id)
+        if not success:
+            return web.json_response({"error": f"Workspace '{ws_id}' not found"}, status=404)
+        return web.json_response({"success": True, "active_workspace": WORKSPACE_MGR.get_active_workspace()})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
+async def handle_update_workspace(request: web.Request) -> web.Response:
+    ws_id = request.match_info["id"]
+    try:
+        data = await request.json()
+        res = WORKSPACE_MGR.update_workspace(
+            workspace_id=ws_id,
+            name=data.get("name"),
+            description=data.get("description"),
+            config=data.get("config"),
+        )
+        if not res:
+            return web.json_response({"error": f"Workspace '{ws_id}' not found"}, status=404)
+        return web.json_response(res)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
+async def handle_delete_workspace(request: web.Request) -> web.Response:
+    ws_id = request.match_info["id"]
+    if ws_id == "default":
+        return web.json_response({"error": "Cannot delete default workspace"}, status=400)
+    success = WORKSPACE_MGR.delete_workspace(ws_id, delete_files=True)
+    return web.json_response({"success": success})
+
+
+async def handle_export_workspace(request: web.Request) -> web.Response:
+    ws_id = request.match_info["id"]
+    try:
+        bundle = WORKSPACE_MGR.export_workspace(ws_id)
+        return web.json_response(bundle)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
+async def handle_import_workspace(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        res = WORKSPACE_MGR.import_workspace(data)
+        return web.json_response(res)
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
+# ---------------- Hardware Profiles ----------------
+
+async def handle_set_hardware_profile(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        mode = data.get("mode", "balanced")
+        HW_MONITOR.default_profile_mode = mode
+        DB.save_settings({"hardware_profile_mode": mode})
+        telem = HW_MONITOR.read_telemetry()
+        return web.json_response({
+            "success": True,
+            "active_mode": mode,
+            "hardware_profile": telem.hardware_profile,
+        })
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
+# ---------------- Training Tasks ----------------
+
+async def handle_list_tasks(request: web.Request) -> web.Response:
+    return web.json_response(TaskRegistry.list_tasks())
+
+
+# ---------------- Plugins ----------------
+
+async def handle_list_plugins(request: web.Request) -> web.Response:
+    return web.json_response(PLUGIN_MGR.discover_plugins())
+
+
+async def handle_toggle_plugin(request: web.Request) -> web.Response:
+    plugin_id = request.match_info["id"]
+    try:
+        data = await request.json()
+        enabled = bool(data.get("enabled", True))
+        success, msg = PLUGIN_MGR.set_plugin_enabled(plugin_id, enabled)
+        if not success:
+            return web.json_response({"error": msg}, status=400)
+        return web.json_response({"success": True, "message": msg, "plugins": PLUGIN_MGR.discover_plugins()})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
+# ---------------- Evaluation Suites ----------------
+
+async def handle_list_eval_suites(request: web.Request) -> web.Response:
+    categories = BENCHMARK_MGR.get_categories()
+    from dataclasses import asdict
+    items = [asdict(it) for it in BENCHMARK_MGR.items.values()]
+    return web.json_response({
+        "categories": categories,
+        "items": items,
+        "total_items": len(items),
+    })
+
+
+async def handle_create_eval_suite(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+        from dataclasses import asdict
+        item = BenchmarkItem(
+            id=data.get("id", f"custom_{int(time.time())}"),
+            category=data.get("category", "custom_persona"),
+            prompt=data["prompt"],
+            expected_keywords=data.get("expected_keywords", []),
+            forbidden_keywords=data.get("forbidden_keywords", []),
+            reference_answer=data.get("reference_answer"),
+            compliance_rule=data.get("compliance_rule"),
+        )
+        BENCHMARK_MGR.add_custom_item(item)
+        return web.json_response({"success": True, "item": asdict(item)})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=400)
+
+
 # ---------------- WebSocket ----------------
 
 async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
@@ -903,6 +1068,26 @@ def create_app() -> web.Application:
     # UI
     app.router.add_get("/", handle_index)
 
+    # Workspaces APIs
+    app.router.add_get("/api/workspaces", handle_list_workspaces)
+    app.router.add_post("/api/workspaces", handle_create_workspace)
+    app.router.add_get("/api/workspaces/current", handle_get_active_workspace)
+    app.router.add_post("/api/workspaces/current", handle_set_active_workspace)
+    app.router.add_put("/api/workspaces/{id}", handle_update_workspace)
+    app.router.add_delete("/api/workspaces/{id}", handle_delete_workspace)
+    app.router.add_post("/api/workspaces/{id}/export", handle_export_workspace)
+    app.router.add_post("/api/workspaces/import", handle_import_workspace)
+
+    # Hardware Profile API
+    app.router.add_post("/api/hardware/profile", handle_set_hardware_profile)
+
+    # Training Tasks & Adapters API
+    app.router.add_get("/api/tasks", handle_list_tasks)
+
+    # Plugins & Extensions APIs
+    app.router.add_get("/api/plugins", handle_list_plugins)
+    app.router.add_post("/api/plugins/{id}/toggle", handle_toggle_plugin)
+
     # Core REST APIs
     app.router.add_get("/api/system/status", handle_system_status)
     app.router.add_get("/api/hardware", handle_hardware_telemetry)
@@ -944,6 +1129,8 @@ def create_app() -> web.Application:
     app.router.add_post("/api/evaluation/compare", handle_eval_compare)
     app.router.add_post("/api/evaluation/benchmark", handle_eval_benchmark)
     app.router.add_get("/api/evaluation/results", handle_eval_results)
+    app.router.add_get("/api/evaluation/suites", handle_list_eval_suites)
+    app.router.add_post("/api/evaluation/suites", handle_create_eval_suite)
 
     # Network Studio & Registry APIs
     app.router.add_get("/api/networks", handle_list_networks)

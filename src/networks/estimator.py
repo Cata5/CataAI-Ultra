@@ -211,7 +211,7 @@ class ParameterCalculator:
 
 
 class MemoryEstimator:
-    """Estimates VRAM usage for training and inference on the RTX 3060 6GB Laptop GPU."""
+    """Estimates memory usage for training and inference across any detected hardware target."""
 
     @staticmethod
     def estimate(
@@ -221,6 +221,9 @@ class MemoryEstimator:
         dtype: str = "bfloat16",
         optimizer: str = "muon_adamw",
         gradient_checkpointing: bool = False,
+        hardware_profile: Optional[Dict[str, Any]] = None,
+        hardware_target: Optional[str] = None,
+        hardware_total_vram_gb: Optional[float] = None,
     ) -> Dict[str, Any]:
         param_stats = ParameterCalculator.calculate(config)
         total_p = param_stats["total_parameters"]
@@ -238,9 +241,13 @@ class MemoryEstimator:
         grad_mem_mb = (total_p * 4) / (1024 * 1024)
 
         # 3. Optimizer state
-        # AdamW: 8 bytes per parameter (FP32 momentum + variance)
-        # Muon: ~4 bytes per 2D parameter, 8 bytes for 1D/norm/embeddings
-        if optimizer == "adamw":
+        # AdamW / SGD / RMSprop / Adagrad / Muon
+        opt_lower = optimizer.lower()
+        if opt_lower in ("adamw", "adam"):
+            opt_mem_mb = (total_p * 8) / (1024 * 1024)
+        elif opt_lower in ("sgd", "adagrad"):
+            opt_mem_mb = (total_p * 4) / (1024 * 1024)
+        elif opt_lower == "rmsprop":
             opt_mem_mb = (total_p * 8) / (1024 * 1024)
         else:
             # Muon + AdamW
@@ -249,11 +256,9 @@ class MemoryEstimator:
             opt_mem_mb = ((attn_ffn_p * 4) + (other_p * 8)) / (1024 * 1024)
 
         # 4. Activations
-        # Memory per token per layer ~ 34 * d_model bytes for standard transformer
         tokens_per_batch = micro_batch_size * seq_len
         bytes_per_token_layer = 34 * d_model
         if gradient_checkpointing:
-            # Checkpointing reduces activation footprint to sqrt(layers) or single layer
             act_mem_bytes = tokens_per_batch * bytes_per_token_layer * 2
         else:
             act_mem_bytes = tokens_per_batch * bytes_per_token_layer * n_layers
@@ -261,7 +266,7 @@ class MemoryEstimator:
         act_mem_mb = act_mem_bytes / (1024 * 1024)
 
         # 5. KV Cache & Workspace headroom
-        workspace_headroom_mb = 350.0  # PyTorch CUDA context & caching allocator reserve
+        workspace_headroom_mb = 350.0  # PyTorch context & caching allocator reserve
 
         total_training_vram_mb = model_mem_mb + grad_mem_mb + opt_mem_mb + act_mem_mb + workspace_headroom_mb
         total_training_vram_gb = total_training_vram_mb / 1024.0
@@ -269,22 +274,48 @@ class MemoryEstimator:
         # Inference memory (weights + KV cache + small activation)
         inference_vram_mb = model_mem_mb + (act_mem_mb * 0.2) + 200.0
 
-        # Safety evaluation against 6GB RTX 3060
-        # Available VRAM on laptop is ~4.8 - 5.0 GB due to Windows DWM/OS
-        is_safe = total_training_vram_gb <= 4.8
-        is_tight = 4.8 < total_training_vram_gb <= 5.3
-        recommendation = ""
+        # Determine target hardware capability dynamically
+        target_name = hardware_target
+        target_vram_gb = hardware_total_vram_gb
+
+        if target_vram_gb is None or target_name is None:
+            try:
+                from ..telemetry.hardware import HardwareMonitor
+                telemetry = HardwareMonitor().read_telemetry()
+                if telemetry.total_vram_mb and telemetry.total_vram_mb > 0:
+                    target_vram_gb = telemetry.total_vram_mb / 1024.0
+                    target_name = f"{telemetry.device_name} ({target_vram_gb:.1f}GB)"
+                else:
+                    target_vram_gb = telemetry.system_ram_total_mb / 1024.0
+                    target_name = f"{telemetry.device_name} ({target_vram_gb:.1f}GB RAM)"
+            except Exception:
+                target_vram_gb = 6.0
+                target_name = "Detected Accelerator (6.0GB)"
+
+        # Safe allocation limits
+        usable_ratio = 0.80
+        if hardware_profile and "usable_ratio" in hardware_profile:
+            usable_ratio = float(hardware_profile["usable_ratio"])
+
+        safe_ceiling_gb = target_vram_gb * usable_ratio
+        tight_ceiling_gb = target_vram_gb * min(0.92, usable_ratio + 0.10)
+
+        is_safe = total_training_vram_gb <= safe_ceiling_gb
+        is_tight = safe_ceiling_gb < total_training_vram_gb <= tight_ceiling_gb
 
         if is_safe:
             status = "SAFE"
-            recommendation = "Fits comfortably on RTX 3060 6GB with active safety margin."
+            recommendation = f"Fits comfortably on {target_name} with active safety margin ({total_training_vram_gb:.2f} GB <= {safe_ceiling_gb:.1f} GB safe ceiling)."
         elif is_tight:
             status = "TIGHT"
-            recommendation = "Fits close to limit. Recommend setting micro_batch_size=2 or enabling gradient checkpointing."
+            recommendation = (
+                f"Close to limit on {target_name} ({total_training_vram_gb:.2f} GB / {target_vram_gb:.1f} GB). "
+                "Recommend reducing micro_batch_size or enabling gradient checkpointing."
+            )
         else:
             status = "UNLIKELY_TO_FIT"
             recommendation = (
-                f"Estimated training VRAM ({total_training_vram_gb:.2f} GB) exceeds safe 5.0 GB limit. "
+                f"Estimated training memory ({total_training_vram_gb:.2f} GB) exceeds safe {safe_ceiling_gb:.1f} GB ceiling for {target_name}. "
                 "Reduce micro_batch_size to 2 or 1, decrease seq_len, or enable gradient checkpointing."
             )
 
@@ -301,7 +332,7 @@ class MemoryEstimator:
             "inference_vram_mb": round(inference_vram_mb, 1),
             "inference_vram_gb": round(inference_vram_mb / 1024.0, 2),
             "storage_file_size_mb": round(model_mem_mb, 1),
-            "hardware_target": "NVIDIA RTX 3060 Laptop (6GB)",
+            "hardware_target": target_name,
             "safety_status": status,
             "recommendation": recommendation,
         }

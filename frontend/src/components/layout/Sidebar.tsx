@@ -16,6 +16,7 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useHardwareTelemetry } from "@/hooks/useHardwareTelemetry";
 
 interface NavItem {
   name: string;
@@ -37,6 +38,15 @@ const NAV_ITEMS: NavItem[] = [
 export const Sidebar: React.FC = () => {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  const { telemetry } = useHardwareTelemetry(5000);
+
+  const deviceShort = telemetry?.device_name
+    ? telemetry.device_name.replace("NVIDIA GeForce ", "").replace(" Laptop GPU", "")
+    : "Detected Hardware";
+
+  const ceilingStr = telemetry?.hardware_profile?.max_memory_allocated_gb
+    ? `< ${telemetry.hardware_profile.max_memory_allocated_gb} GB`
+    : "< Safe Limit";
 
   return (
     <aside
@@ -56,8 +66,8 @@ export const Sidebar: React.FC = () => {
               <span className="font-mono text-xs font-bold tracking-wider text-slate-100 flex items-center gap-1">
                 LLM Maker <span className="text-cyan-400 font-normal">v2</span>
               </span>
-              <span className="text-[10px] font-mono text-slate-400 truncate">
-                MODEL: RoCanon-48.5M
+              <span className="text-[10px] font-mono text-cyan-400/80 truncate">
+                Universal ML Platform
               </span>
             </div>
           )}
@@ -123,11 +133,13 @@ export const Sidebar: React.FC = () => {
           <div className="flex flex-col gap-1 text-[10px] font-mono text-slate-400">
             <div className="flex justify-between items-center">
               <span>TARGET</span>
-              <span className="text-slate-300">RTX 3060 (6GB)</span>
+              <span className="text-slate-300 truncate max-w-[110px]" title={telemetry?.device_name}>
+                {deviceShort}
+              </span>
             </div>
             <div className="flex justify-between items-center">
               <span>CEILING</span>
-              <span className="text-cyan-400">&lt; 5.0 GB VRAM</span>
+              <span className="text-cyan-400 font-bold">{ceilingStr}</span>
             </div>
           </div>
         ) : (
