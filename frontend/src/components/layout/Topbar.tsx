@@ -22,14 +22,14 @@ import { useHardwareTelemetry } from "@/hooks/useHardwareTelemetry";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
 import { useTranslation } from "@/i18n";
 
-const TITLES: Record<string, string> = {
-  "/": "Command Center / Overview",
-  "/studio": "Network Studio / Architecture Designer",
-  "/training": "Experiment Control / Active Training",
-  "/datasets": "Data Explorer / Dataset Manager",
-  "/evaluation": "Evaluation Lab & Inference Engine",
-  "/runs": "Runs, Checkpoints & Analytics",
-  "/settings": "System Settings & Hardware Policy",
+const TITLES: Record<string, { section: string; title: string }> = {
+  "/": { section: "Workspace", title: "Overview" },
+  "/studio": { section: "Development", title: "Architecture Studio" },
+  "/training": { section: "Development", title: "Training Console" },
+  "/datasets": { section: "Development", title: "Dataset Explorer" },
+  "/evaluation": { section: "Development", title: "Evaluation Lab" },
+  "/runs": { section: "Management", title: "Runs & Experiments" },
+  "/settings": { section: "System", title: "Hardware & Settings" },
 };
 
 export const Topbar: React.FC = () => {
@@ -88,70 +88,74 @@ export const Topbar: React.FC = () => {
     } catch {}
   };
 
-  const pageTitle = TITLES[pathname] || "LLM Maker Console";
+  const navMeta = TITLES[pathname] || { section: "Console", title: "Neural Workstation" };
   const effectiveState = currentState !== "IDLE" ? currentState : status?.state || "IDLE";
 
   return (
     <>
-      <header className="h-14 border-b border-slate-800/80 glass-panel bg-[#060a14]/90 px-4 flex items-center justify-between select-none z-20">
-        {/* Left: Breadcrumbs & Page Identity */}
-        <div className="flex items-center gap-3">
-          <Terminal className="w-4 h-4 text-cyan-400" />
-          <h1 className="font-mono text-xs font-bold text-slate-100 tracking-wider uppercase">
-            {pageTitle}
+      <header className="h-13 min-h-[52px] border-b border-[#273548] bg-[#0E1420]/95 backdrop-blur-md px-4 flex items-center justify-between select-none z-20">
+        {/* Left: Refined Breadcrumbs & Page Identity */}
+        <div className="flex items-center gap-2 text-xs font-mono">
+          <span className="text-[#5E7188] hover:text-[#91A0B4] transition-colors">
+            {navMeta.section}
+          </span>
+          <span className="text-[#384C66]">/</span>
+          <h1 className="font-semibold text-[#ECF3FC] tracking-wide flex items-center gap-2">
+            {navMeta.title}
           </h1>
         </div>
 
-        {/* Center: Command Palette Trigger */}
+        {/* Center: Linear/Raycast-grade Command Palette Trigger */}
         <button
           onClick={() => setIsCommandOpen(true)}
-          className="hidden md:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-900/80 border border-slate-800 text-slate-400 hover:border-cyan-400/50 hover:text-slate-300 transition-all font-mono text-xs w-64 justify-between"
+          className="hidden md:flex items-center gap-2.5 px-3 py-1.5 rounded-md bg-[#131C29] border border-[#273548] text-[#91A0B4] hover:border-[#384C66] hover:text-[#ECF3FC] transition-all font-mono text-xs w-72 justify-between shadow-inner"
         >
-          <span className="flex items-center gap-1.5 truncate">
-            <Search className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Search or jump...</span>
+          <span className="flex items-center gap-2 truncate">
+            <Search className="w-3.5 h-3.5 text-[#45CFFF]" />
+            <span className="truncate">Search commands, models, datasets...</span>
           </span>
-          <kbd className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-slate-300 border border-slate-700">
+          <kbd className="px-1.5 py-0.5 rounded bg-[#182333] text-[10px] text-[#91A0B4] border border-[#273548]">
             Ctrl+K
           </kbd>
         </button>
 
         {/* Right: Telemetry, State & Connection Indicators */}
-        <div className="flex items-center gap-3">
-          {/* Worker Run State */}
-          <div className="flex items-center gap-2 px-2.5 py-1 rounded bg-slate-900/70 border border-slate-800">
-            <span className="text-[10px] font-mono text-slate-400 uppercase">WORKER:</span>
+        <div className="flex items-center gap-2.5">
+          {/* Worker Run State Pill */}
+          <div className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-[#131C29] border border-[#273548] text-xs font-mono">
+            <span className="text-[10px] text-[#5E7188] uppercase font-semibold">WORKER</span>
             <StatusIndicator state={effectiveState} size="sm" />
           </div>
 
-          {/* Quick GPU Pill */}
+          {/* Quick GPU Telemetry Pill */}
           {telemetry && (
-            <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded bg-slate-900/70 border border-slate-800 text-xs font-mono">
-              <Cpu className="w-3.5 h-3.5 text-cyan-400" />
-              <span className="text-slate-300 font-bold">
+            <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-md bg-[#131C29] border border-[#273548] text-xs font-mono">
+              <Cpu className="w-3.5 h-3.5 text-[#45CFFF]" />
+              <span className="text-[#ECF3FC] font-bold font-mono-num">
                 {telemetry.gpu_utilization_pct ?? telemetry.gpu_util_percent ?? 0}%
               </span>
-              <span className="text-slate-400">
+              <span className="text-[#5E7188]">|</span>
+              <span className="text-[#91A0B4] font-mono-num">
                 {Math.round(telemetry.memory_used_mb ?? telemetry.used_vram_mb ?? 0)} MB
               </span>
             </div>
           )}
 
-          {/* WebSocket Link Status */}
+          {/* WebSocket Real-Time Link Status */}
           <div
-            className="flex items-center gap-1.5 px-2 py-1 rounded text-xs font-mono border"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-mono border transition-colors"
             style={{
-              borderColor: isConnected ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)",
-              backgroundColor: isConnected ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)",
+              borderColor: isConnected ? "rgba(53, 212, 154, 0.3)" : "rgba(255, 101, 122, 0.3)",
+              backgroundColor: isConnected ? "rgba(53, 212, 154, 0.08)" : "rgba(255, 101, 122, 0.08)",
             }}
             title={isConnected ? "WebSocket Real-Time Link Active (8081)" : "WebSocket Link Disconnected"}
           >
             {isConnected ? (
-              <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+              <Wifi className="w-3.5 h-3.5 text-[#35D49A]" />
             ) : (
-              <WifiOff className="w-3.5 h-3.5 text-rose-400" />
+              <WifiOff className="w-3.5 h-3.5 text-[#FF657A]" />
             )}
-            <span className="text-[10px] uppercase font-bold text-slate-300">
+            <span className="text-[10px] uppercase font-bold text-[#ECF3FC]">
               {isConnected ? "LIVE" : "OFFLINE"}
             </span>
           </div>
@@ -160,51 +164,51 @@ export const Topbar: React.FC = () => {
           <div className="relative">
             <button
               onClick={() => setShowAlertsDropdown(!showAlertsDropdown)}
-              className="p-1.5 rounded-lg bg-slate-900/80 border border-slate-800 hover:border-cyan-400/50 text-slate-300 hover:text-cyan-400 transition-colors relative"
+              className="p-1.5 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#384C66] text-[#91A0B4] hover:text-[#ECF3FC] transition-colors relative"
               title="Recent Alerts"
             >
               <Bell className="w-4 h-4" />
               {recentAlerts.length > 0 && (
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-cyan-400 ring-2 ring-[#060a14] animate-pulse" />
+                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#45CFFF] ring-2 ring-[#0E1420] animate-pulse" />
               )}
             </button>
 
             {showAlertsDropdown && (
-              <div className="absolute right-0 mt-2 w-80 glass-panel border border-slate-700/80 rounded-lg shadow-2xl p-3 z-50 animate-in fade-in duration-150">
-                <div className="flex justify-between items-center pb-2 border-b border-slate-800 text-xs font-mono">
-                  <span className="font-bold text-slate-200">RECENT ALERTS</span>
-                  <span className="text-slate-400">{recentAlerts.length} events</span>
+              <div className="absolute right-0 mt-2 w-80 glass-panel-elevated border border-[#384C66] rounded-lg shadow-2xl p-3 z-50 animate-in fade-in duration-150">
+                <div className="flex justify-between items-center pb-2 border-b border-[#273548] text-xs font-mono">
+                  <span className="font-bold text-[#ECF3FC]">SYSTEM ALERTS</span>
+                  <span className="text-[#91A0B4]">{recentAlerts.length} events</span>
                 </div>
                 <div className="max-h-60 overflow-y-auto space-y-1.5 mt-2">
                   {recentAlerts.length === 0 ? (
-                    <div className="p-3 text-center text-xs font-mono text-slate-400">
+                    <div className="p-3 text-center text-xs font-mono text-[#5E7188]">
                       No system alerts recorded.
                     </div>
                   ) : (
                     recentAlerts.slice(0, 10).map((alert, idx) => (
                       <div
                         key={idx}
-                        className="p-2 rounded bg-slate-900/80 border border-slate-800 text-[11px] font-mono flex flex-col gap-0.5"
+                        className="p-2 rounded bg-[#131C29] border border-[#273548] text-[11px] font-mono flex flex-col gap-0.5"
                       >
                         <div className="flex justify-between items-center">
                           <span
                             className={
                               alert.level === "CRITICAL" || alert.level === "ERROR"
-                                ? "text-rose-400 font-bold"
+                                ? "text-[#FF657A] font-bold"
                                 : alert.level === "WARNING"
-                                ? "text-amber-400 font-bold"
-                                : "text-cyan-400 font-bold"
+                                ? "text-[#F2B85B] font-bold"
+                                : "text-[#45CFFF] font-bold"
                             }
                           >
                             [{alert.level}] {alert.category}
                           </span>
                           {alert.step !== undefined && (
-                            <span className="text-slate-400 text-[10px]">
+                            <span className="text-[#5E7188] text-[10px]">
                               Step {alert.step}
                             </span>
                           )}
                         </div>
-                        <span className="text-slate-300">{alert.message}</span>
+                        <span className="text-[#91A0B4]">{alert.message}</span>
                       </div>
                     ))
                   )}
@@ -217,19 +221,19 @@ export const Topbar: React.FC = () => {
           <div className="relative hidden md:block">
             <button
               onClick={() => setShowWorkspaceDropdown(!showWorkspaceDropdown)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900/80 border border-slate-800 hover:border-cyan-400/50 text-slate-300 font-mono text-xs transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#384C66] text-[#91A0B4] font-mono text-xs transition-colors"
               title="Active Workspace"
             >
-              <Briefcase className="w-3.5 h-3.5 text-cyan-400" />
-              <span className="max-w-[100px] truncate font-bold text-slate-200">
+              <Briefcase className="w-3.5 h-3.5 text-[#45CFFF]" />
+              <span className="max-w-[100px] truncate font-semibold text-[#ECF3FC]">
                 {activeWorkspace?.name || "DEFAULT"}
               </span>
-              <ChevronDown className="w-3 h-3 text-slate-400" />
+              <ChevronDown className="w-3 h-3 text-[#5E7188]" />
             </button>
 
             {showWorkspaceDropdown && (
-              <div className="absolute right-0 mt-2 w-56 glass-panel border border-slate-700/80 rounded-lg shadow-2xl p-2 z-50 animate-in fade-in duration-150">
-                <div className="px-2 py-1 text-[10px] font-mono font-bold text-slate-400 border-b border-slate-800">
+              <div className="absolute right-0 mt-2 w-56 glass-panel-elevated border border-[#384C66] rounded-lg shadow-2xl p-2 z-50 animate-in fade-in duration-150">
+                <div className="px-2 py-1 text-[10px] font-mono font-bold text-[#5E7188] border-b border-[#273548]">
                   WORKSPACES
                 </div>
                 <div className="max-h-48 overflow-y-auto space-y-1 mt-1 font-mono text-xs">
@@ -239,13 +243,13 @@ export const Topbar: React.FC = () => {
                       onClick={() => handleSwitchWorkspace(ws.id)}
                       className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
                         activeWorkspace?.id === ws.id
-                          ? "bg-cyan-950/60 text-cyan-300 border border-cyan-500/30"
-                          : "text-slate-300 hover:bg-slate-800/60"
+                          ? "bg-[#182333] text-[#45CFFF] border border-[#45CFFF]/30"
+                          : "text-[#91A0B4] hover:bg-[#182333] hover:text-[#ECF3FC]"
                       }`}
                     >
                       <span className="truncate">{ws.name}</span>
                       {activeWorkspace?.id === ws.id && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#45CFFF]" />
                       )}
                     </button>
                   ))}
@@ -257,20 +261,20 @@ export const Topbar: React.FC = () => {
           {/* Setup Wizard Button */}
           <button
             onClick={() => setIsWizardOpen(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-cyan-950/40 border border-cyan-500/40 hover:bg-cyan-900/50 text-cyan-400 font-mono text-xs transition-all shadow-[0_0_8px_rgba(0,240,255,0.15)]"
-            title="Open Hardware & Setup Wizard"
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF]/50 text-[#45CFFF] font-mono text-xs transition-all shadow-[0_0_8px_rgba(69,207,255,0.1)]"
+            title="Open Setup Wizard"
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline font-bold">Wizard</span>
+            <span className="hidden lg:inline font-semibold">Wizard</span>
           </button>
 
           {/* Language Toggle (EN / RO) */}
           <button
             onClick={() => setLocale(locale === "en" ? "ro" : "en")}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900/80 border border-slate-800 text-slate-300 hover:text-cyan-400 font-mono text-xs transition-colors"
+            className="flex items-center gap-1 px-2 py-1 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#384C66] text-[#91A0B4] hover:text-[#ECF3FC] font-mono text-xs transition-colors"
             title="Toggle Language (English / Română)"
           >
-            <Globe className="w-3.5 h-3.5 text-cyan-400" />
+            <Globe className="w-3.5 h-3.5 text-[#45CFFF]" />
             <span className="uppercase font-bold">{locale}</span>
           </button>
         </div>

@@ -17,51 +17,51 @@ export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
 }) => {
   const normalized = state.toUpperCase();
 
-  let colorBg = "bg-slate-500";
-  let colorGlow = "rgba(100, 116, 139, 0.4)";
-  let textColor = "text-slate-400";
+  let colorBg = "bg-[#5E7188]";
+  let colorGlow = "rgba(94, 113, 136, 0.4)";
+  let textColor = "text-[#91A0B4]";
   let isPulsing = false;
 
   switch (normalized) {
     case "RUNNING":
-      colorBg = "bg-cyan-400";
-      colorGlow = "rgba(0, 240, 255, 0.6)";
-      textColor = "text-cyan-300";
+      colorBg = "bg-[#45CFFF]";
+      colorGlow = "rgba(69, 207, 255, 0.6)";
+      textColor = "text-[#45CFFF]";
       isPulsing = true;
       break;
     case "STARTING":
-      colorBg = "bg-sky-400";
-      colorGlow = "rgba(56, 189, 248, 0.5)";
-      textColor = "text-sky-300";
+      colorBg = "bg-[#80DEFF]";
+      colorGlow = "rgba(128, 222, 255, 0.5)";
+      textColor = "text-[#80DEFF]";
       isPulsing = true;
       break;
     case "PAUSED":
-      colorBg = "bg-amber-400";
-      colorGlow = "rgba(245, 158, 11, 0.5)";
-      textColor = "text-amber-300";
+      colorBg = "bg-[#F2B85B]";
+      colorGlow = "rgba(242, 184, 91, 0.5)";
+      textColor = "text-[#F2B85B]";
       break;
     case "COMPLETED":
-      colorBg = "bg-emerald-400";
-      colorGlow = "rgba(16, 185, 129, 0.5)";
-      textColor = "text-emerald-300";
+      colorBg = "bg-[#35D49A]";
+      colorGlow = "rgba(53, 212, 154, 0.5)";
+      textColor = "text-[#35D49A]";
       break;
     case "FAILED":
     case "CRITICAL":
     case "ERROR":
-      colorBg = "bg-rose-500";
-      colorGlow = "rgba(239, 68, 68, 0.6)";
-      textColor = "text-rose-400";
+      colorBg = "bg-[#FF657A]";
+      colorGlow = "rgba(255, 101, 122, 0.6)";
+      textColor = "text-[#FF657A]";
       isPulsing = true;
       break;
     case "STOPPING":
-      colorBg = "bg-orange-400";
-      colorGlow = "rgba(251, 146, 60, 0.5)";
-      textColor = "text-orange-300";
+      colorBg = "bg-[#F2B85B]";
+      colorGlow = "rgba(242, 184, 91, 0.5)";
+      textColor = "text-[#F2B85B]";
       break;
     default:
-      colorBg = "bg-slate-500";
-      colorGlow = "rgba(100, 116, 139, 0.2)";
-      textColor = "text-slate-400";
+      colorBg = "bg-[#5E7188]";
+      colorGlow = "rgba(94, 113, 136, 0.2)";
+      textColor = "text-[#91A0B4]";
       break;
   }
 

@@ -11,7 +11,7 @@ interface EmptyStateProps {
 }
 
 export const EmptyState: React.FC<EmptyStateProps> = ({
-  icon = <Inbox className="w-8 h-8 text-slate-500" />,
+  icon = <Inbox className="w-8 h-8 text-[#5E7188]" />,
   title,
   description,
   action,
@@ -20,18 +20,18 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   return (
     <div
       className={cn(
-        "glass-panel rounded-lg p-8 flex flex-col items-center justify-center text-center space-y-3",
+        "glass-panel rounded-lg p-8 flex flex-col items-center justify-center text-center space-y-3 border border-[#273548]",
         className
       )}
     >
-      <div className="p-3 bg-slate-900/80 rounded-full border border-slate-800 text-slate-400">
+      <div className="p-3 bg-[#0E1420] rounded-full border border-[#273548] text-[#91A0B4]">
         {icon}
       </div>
-      <h4 className="font-mono text-sm font-semibold text-slate-200 uppercase tracking-wider">
+      <h4 className="font-mono text-sm font-semibold text-[#ECF3FC] uppercase tracking-wider">
         {title}
       </h4>
       {description && (
-        <p className="text-xs text-slate-400 max-w-sm">{description}</p>
+        <p className="text-xs text-[#91A0B4] max-w-sm">{description}</p>
       )}
       {action && <div className="pt-2">{action}</div>}
     </div>

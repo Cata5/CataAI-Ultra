@@ -16,7 +16,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className="dark h-full antialiased">
-      <body className="h-full bg-[#050811] text-slate-100 overflow-hidden">
+      <body className="h-full bg-[#090D14] text-[#ECF3FC] overflow-hidden">
         <QueryProvider>
           <AppShell>{children}</AppShell>
         </QueryProvider>

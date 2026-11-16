@@ -14,12 +14,12 @@ export const LoadingState: React.FC<LoadingStateProps> = ({
   return (
     <div
       className={cn(
-        "glass-panel rounded-lg p-8 flex flex-col items-center justify-center text-center space-y-3",
+        "glass-panel rounded-lg p-8 flex flex-col items-center justify-center text-center space-y-3 border border-[#273548]",
         className
       )}
     >
-      <Loader2 className="w-8 h-8 text-cyan-400 animate-spin" />
-      <span className="font-mono text-xs text-slate-400 tracking-wider uppercase">
+      <Loader2 className="w-8 h-8 text-[#45CFFF] animate-spin" />
+      <span className="font-mono text-xs text-[#91A0B4] tracking-wider uppercase">
         {message}
       </span>
     </div>

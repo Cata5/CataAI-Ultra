@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import {
   Zap,
   Cpu,
-  Shield,
   Layers,
   CheckCircle2,
   ArrowRight,
@@ -13,7 +12,6 @@ import {
   X,
   HardDrive,
   Sparkles,
-  Info,
 } from "lucide-react";
 
 interface SetupWizardModalProps {
@@ -82,23 +80,23 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-      <div className="w-full max-w-2xl bg-[#090e1a] border border-cyan-500/40 rounded-xl shadow-[0_0_30px_rgba(0,240,255,0.2)] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+      <div className="w-full max-w-2xl bg-[#0E1420] border border-[#384C66] rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
+        <div className="px-6 py-4 border-b border-[#273548] flex items-center justify-between bg-[#090D14]/70">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-cyan-950/80 border border-cyan-500/50 flex items-center justify-center">
-              <Zap className="w-4 h-4 text-cyan-400" />
+            <div className="w-8 h-8 rounded-lg bg-[#45CFFF]/10 border border-[#45CFFF]/30 flex items-center justify-center">
+              <Zap className="w-4 h-4 text-[#45CFFF]" />
             </div>
             <div>
-              <h2 className="text-sm font-mono font-bold text-slate-100 uppercase tracking-wider">
+              <h2 className="text-sm font-mono font-bold text-[#ECF3FC] uppercase tracking-wider">
                 LLM Maker Onboarding Wizard
               </h2>
-              <p className="text-[11px] font-mono text-cyan-400/80">Step {step} of 5</p>
+              <p className="text-[11px] font-mono text-[#45CFFF]">Step {step} of 5</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+            className="p-1 rounded text-[#91A0B4] hover:text-[#ECF3FC] hover:bg-[#182333] transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
@@ -109,13 +107,13 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
           {/* STEP 1: Welcome */}
           {step === 1 && (
             <div className="space-y-4">
-              <div className="p-4 rounded-lg bg-cyan-950/30 border border-cyan-500/30 flex gap-3">
-                <Sparkles className="w-6 h-6 text-cyan-400 shrink-0 mt-0.5" />
+              <div className="p-4 rounded-lg bg-[#45CFFF]/10 border border-[#45CFFF]/30 flex gap-3">
+                <Sparkles className="w-6 h-6 text-[#45CFFF] shrink-0 mt-0.5" />
                 <div>
-                  <h3 className="text-sm font-mono font-bold text-slate-100">
+                  <h3 className="text-sm font-mono font-bold text-[#ECF3FC]">
                     Welcome to LLM Maker
                   </h3>
-                  <p className="text-xs text-slate-300 mt-1 leading-relaxed">
+                  <p className="text-xs text-[#91A0B4] mt-1 leading-relaxed">
                     LLM Maker is a general-purpose, local-first artificial intelligence and neural
                     network experimentation platform. Train, architect, evaluate, and benchmark
                     models on your own hardware without cloud dependencies or telemetry leaks.
@@ -124,22 +122,22 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
               </div>
 
               <div className="grid grid-cols-2 gap-3 pt-2">
-                <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800">
-                  <div className="flex items-center gap-2 text-cyan-400 font-mono text-xs font-bold mb-1">
+                <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548]">
+                  <div className="flex items-center gap-2 text-[#45CFFF] font-mono text-xs font-bold mb-1">
                     <Layers className="w-3.5 h-3.5" />
                     <span>Visual Network Studio</span>
                   </div>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-[11px] text-[#91A0B4]">
                     Design Decoder-Only Transformers, MLPs, CNNs, and Hybrid architectures with live
                     VRAM estimation.
                   </p>
                 </div>
-                <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800">
-                  <div className="flex items-center gap-2 text-emerald-400 font-mono text-xs font-bold mb-1">
+                <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548]">
+                  <div className="flex items-center gap-2 text-[#35D49A] font-mono text-xs font-bold mb-1">
                     <Cpu className="w-3.5 h-3.5" />
                     <span>Hardware-Aware Training</span>
                   </div>
-                  <p className="text-[11px] text-slate-400">
+                  <p className="text-[11px] text-[#91A0B4]">
                     Auto-configured safety thresholds, zero-OOM protection, and task-specific loss
                     adapters.
                   </p>
@@ -152,42 +150,42 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
           {step === 2 && (
             <div className="space-y-4">
               <div>
-                <h3 className="text-sm font-mono font-bold text-slate-100">
+                <h3 className="text-sm font-mono font-bold text-[#ECF3FC]">
                   Detected Hardware Environment
                 </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-xs text-[#91A0B4] mt-0.5">
                   Real physical device metrics queried via NVML & PyTorch runtime.
                 </p>
               </div>
 
-              <div className="p-4 rounded-lg bg-slate-900/80 border border-slate-800 space-y-3 font-mono text-xs">
-                <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
-                  <span className="text-slate-400">PRIMARY DEVICE:</span>
-                  <span className="text-slate-100 font-bold">{deviceName}</span>
+              <div className="p-4 rounded-lg bg-[#131C29] border border-[#273548] space-y-3 font-mono text-xs">
+                <div className="flex justify-between items-center border-b border-[#273548]/70 pb-2">
+                  <span className="text-[#91A0B4]">PRIMARY DEVICE:</span>
+                  <span className="text-[#ECF3FC] font-bold">{deviceName}</span>
                 </div>
-                <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
-                  <span className="text-slate-400">EXECUTION BACKEND:</span>
-                  <span className="text-cyan-400 font-bold">{backend}</span>
+                <div className="flex justify-between items-center border-b border-[#273548]/70 pb-2">
+                  <span className="text-[#91A0B4]">EXECUTION BACKEND:</span>
+                  <span className="text-[#45CFFF] font-bold">{backend}</span>
                 </div>
-                <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
-                  <span className="text-slate-400">ACCELERATOR VRAM:</span>
-                  <span className="text-emerald-400 font-bold">{vramGb} GB</span>
+                <div className="flex justify-between items-center border-b border-[#273548]/70 pb-2">
+                  <span className="text-[#91A0B4]">ACCELERATOR VRAM:</span>
+                  <span className="text-[#35D49A] font-bold">{vramGb} GB</span>
                 </div>
-                <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
-                  <span className="text-slate-400">SYSTEM RAM:</span>
-                  <span className="text-slate-200">{ramGb} GB</span>
+                <div className="flex justify-between items-center border-b border-[#273548]/70 pb-2">
+                  <span className="text-[#91A0B4]">SYSTEM RAM:</span>
+                  <span className="text-[#ECF3FC]">{ramGb} GB</span>
                 </div>
-                <div className="flex justify-between items-center border-b border-slate-800/80 pb-2">
-                  <span className="text-slate-400">COMPUTE CAPABILITY:</span>
-                  <span className="text-slate-200">{computeCap}</span>
+                <div className="flex justify-between items-center border-b border-[#273548]/70 pb-2">
+                  <span className="text-[#91A0B4]">COMPUTE CAPABILITY:</span>
+                  <span className="text-[#ECF3FC]">{computeCap}</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-slate-400">PRECISION MODES:</span>
-                  <span className="text-purple-400 font-bold">{precisions}</span>
+                  <span className="text-[#91A0B4]">PRECISION MODES:</span>
+                  <span className="text-[#9B8CFF] font-bold">{precisions}</span>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 p-2.5 rounded bg-emerald-950/20 border border-emerald-500/30 text-emerald-400 text-xs font-mono">
+              <div className="flex items-center gap-2 p-2.5 rounded bg-[#35D49A]/10 border border-[#35D49A]/30 text-[#35D49A] text-xs font-mono">
                 <CheckCircle2 className="w-4 h-4 shrink-0" />
                 <span>Compatible hardware profile dynamically constructed.</span>
               </div>
@@ -198,10 +196,10 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
           {step === 3 && (
             <div className="space-y-4">
               <div>
-                <h3 className="text-sm font-mono font-bold text-slate-100">
+                <h3 className="text-sm font-mono font-bold text-[#ECF3FC]">
                   Select Memory Safety Profile
                 </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-xs text-[#91A0B4] mt-0.5">
                   Governs memory allocation ceilings, gradient checkpointing defaults, and batch size suggestions.
                 </p>
               </div>
@@ -229,8 +227,8 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
                     onClick={() => setSelectedProfile(p.id)}
                     className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
                       selectedProfile === p.id
-                        ? "bg-cyan-950/40 border-cyan-500 text-slate-100 shadow-[0_0_10px_rgba(0,240,255,0.15)]"
-                        : "bg-slate-900/50 border-slate-800 text-slate-400 hover:border-slate-700"
+                        ? "bg-[#45CFFF]/10 border-[#45CFFF] text-[#ECF3FC] shadow-[0_0_12px_rgba(69,207,255,0.2)]"
+                        : "bg-[#131C29] border-[#273548] text-[#91A0B4] hover:border-[#384C66]"
                     }`}
                   >
                     <input
@@ -238,11 +236,11 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
                       name="profile"
                       checked={selectedProfile === p.id}
                       onChange={() => setSelectedProfile(p.id)}
-                      className="mt-1 text-cyan-500 focus:ring-0"
+                      className="mt-1 text-[#45CFFF] focus:ring-0"
                     />
                     <div>
-                      <div className="text-xs font-mono font-bold text-slate-200">{p.name}</div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">{p.desc}</div>
+                      <div className="text-xs font-mono font-bold text-[#ECF3FC]">{p.name}</div>
+                      <div className="text-[11px] text-[#91A0B4] mt-0.5">{p.desc}</div>
                     </div>
                   </label>
                 ))}
@@ -254,27 +252,27 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
           {step === 4 && (
             <div className="space-y-4">
               <div>
-                <h3 className="text-sm font-mono font-bold text-slate-100">
+                <h3 className="text-sm font-mono font-bold text-[#ECF3FC]">
                   Workspace Configuration
                 </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-xs text-[#91A0B4] mt-0.5">
                   Workspaces isolate checkpoints, datasets, custom models, and experiments.
                 </p>
               </div>
 
-              <div className="p-4 rounded-lg bg-slate-900/80 border border-slate-800 space-y-3 font-mono text-xs">
+              <div className="p-4 rounded-lg bg-[#131C29] border border-[#273548] space-y-3 font-mono text-xs">
                 <div>
-                  <label className="text-slate-400 block mb-1">INITIAL WORKSPACE NAME</label>
+                  <label className="text-[#91A0B4] block mb-1">INITIAL WORKSPACE NAME</label>
                   <input
                     type="text"
                     value={workspaceName}
                     onChange={(e) => setWorkspaceName(e.target.value)}
-                    className="w-full px-3 py-2 rounded bg-slate-950 border border-slate-700 text-slate-100 focus:border-cyan-500 focus:outline-none"
+                    className="w-full px-3 py-2 rounded bg-[#0E1420] border border-[#273548] text-[#ECF3FC] focus:border-[#45CFFF] focus:outline-none"
                     placeholder="e.g., Default Workspace or Research Project"
                   />
                 </div>
-                <div className="text-[11px] text-slate-400 flex items-center gap-1.5 pt-1">
-                  <HardDrive className="w-3.5 h-3.5 text-cyan-400" />
+                <div className="text-[11px] text-[#91A0B4] flex items-center gap-1.5 pt-1">
+                  <HardDrive className="w-3.5 h-3.5 text-[#45CFFF]" />
                   <span>Datasets & Checkpoints will be stored in isolated directories.</span>
                 </div>
               </div>
@@ -285,10 +283,10 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
           {step === 5 && (
             <div className="space-y-4">
               <div>
-                <h3 className="text-sm font-mono font-bold text-slate-100">
+                <h3 className="text-sm font-mono font-bold text-[#ECF3FC]">
                   Choose Starting Architecture
                 </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
+                <p className="text-xs text-[#91A0B4] mt-0.5">
                   Select one of the 3 most recognized neural network architectures, or design a custom model from scratch. You will be redirected straight to the visual builder page.
                 </p>
               </div>
@@ -329,23 +327,23 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
                     onClick={() => setSelectedTemplate(tpl.id)}
                     className={`p-3.5 rounded-lg border text-left transition-all font-mono relative flex flex-col justify-between ${
                       selectedTemplate === tpl.id
-                        ? "bg-cyan-950/40 border-cyan-500 shadow-[0_0_12px_rgba(0,240,255,0.2)] ring-1 ring-cyan-500/50"
-                        : "bg-slate-900/50 border-slate-800 hover:border-slate-700"
+                        ? "bg-[#45CFFF]/10 border-[#45CFFF] shadow-[0_0_12px_rgba(69,207,255,0.2)] ring-1 ring-[#45CFFF]/50"
+                        : "bg-[#131C29] border-[#273548] hover:border-[#384C66]"
                     }`}
                   >
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500/30 text-cyan-400 font-bold">
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#45CFFF]/15 border border-[#45CFFF]/30 text-[#45CFFF] font-bold">
                           {tpl.badge}
                         </span>
                         {selectedTemplate === tpl.id && (
-                          <CheckCircle2 className="w-3.5 h-3.5 text-cyan-400" />
+                          <CheckCircle2 className="w-3.5 h-3.5 text-[#45CFFF]" />
                         )}
                       </div>
-                      <div className="text-xs font-bold text-slate-100">{tpl.name}</div>
-                      <div className="text-[10px] text-cyan-400/80 mt-0.5">{tpl.family}</div>
+                      <div className="text-xs font-bold text-[#ECF3FC]">{tpl.name}</div>
+                      <div className="text-[10px] text-[#45CFFF] mt-0.5">{tpl.family}</div>
                     </div>
-                    <div className="text-[11px] text-slate-400 mt-2 font-sans leading-relaxed">
+                    <div className="text-[11px] text-[#91A0B4] mt-2 font-sans leading-relaxed">
                       {tpl.desc}
                     </div>
                   </button>
@@ -356,11 +354,11 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Footer Navigation */}
-        <div className="px-6 py-3.5 border-t border-slate-800 flex items-center justify-between bg-slate-900/50">
+        <div className="px-6 py-3.5 border-t border-[#273548] flex items-center justify-between bg-[#090D14]/70">
           {step > 1 ? (
             <button
               onClick={() => setStep(step - 1)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-700 text-slate-300 hover:bg-slate-800 font-mono text-xs transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#273548] text-[#91A0B4] hover:bg-[#182333] hover:text-[#ECF3FC] font-mono text-xs transition-colors"
             >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Previous</span>
@@ -372,7 +370,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
           {step < 5 ? (
             <button
               onClick={() => setStep(step + 1)}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-mono text-xs font-bold transition-all shadow-[0_0_12px_rgba(0,240,255,0.3)]"
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-mono text-xs font-bold transition-all shadow-[0_0_12px_rgba(69,207,255,0.3)]"
             >
               <span>Next Step</span>
               <ArrowRight className="w-3.5 h-3.5" />
@@ -381,7 +379,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
             <button
               disabled={loading}
               onClick={handleFinish}
-              className="flex items-center gap-1.5 px-5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-mono text-xs font-bold transition-all shadow-[0_0_15px_rgba(16,185,129,0.3)] disabled:opacity-50"
+              className="flex items-center gap-1.5 px-5 py-1.5 rounded-md bg-[#35D49A] hover:bg-[#35D49A]/90 text-[#090D14] font-mono text-xs font-bold transition-all shadow-[0_0_15px_rgba(53,212,154,0.3)] disabled:opacity-50"
             >
               <span>{loading ? "Launching..." : "Complete Setup & Launch"}</span>
               <CheckCircle2 className="w-3.5 h-3.5" />

@@ -201,25 +201,27 @@ export const ComponentPalette: React.FC<ComponentPaletteProps> = ({ onAddNode, o
   };
 
   return (
-    <div className="w-64 glass-panel rounded-lg p-3 flex flex-col h-full overflow-hidden select-none">
-      <div className="pb-2 mb-2 border-b border-slate-800">
-        <h3 className="font-mono text-xs font-bold text-slate-200 tracking-wider uppercase flex items-center gap-1.5">
-          <Layers className="w-3.5 h-3.5 text-cyan-400" /> COMPONENT PALETTE
+    <div className="w-64 glass-panel rounded-lg p-3 flex flex-col h-full overflow-hidden select-none relative">
+      <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/15 to-transparent pointer-events-none" />
+
+      <div className="pb-2 mb-2 border-b border-[#273548]">
+        <h3 className="font-mono text-xs font-semibold text-[#ECF3FC] tracking-wider uppercase flex items-center gap-1.5">
+          <Layers className="w-3.5 h-3.5 text-[#45CFFF]" /> COMPONENT PALETTE
         </h3>
-        <p className="text-[10px] font-mono text-slate-400">
-          Drag components onto the studio canvas
+        <p className="text-[10px] font-mono text-[#91A0B4] mt-0.5">
+          Click or drag layers onto the architecture canvas
         </p>
       </div>
 
       {/* Search Input */}
       <div className="relative mb-2">
-        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+        <Search className="w-3.5 h-3.5 text-[#5E7188] absolute left-2.5 top-1/2 -translate-y-1/2" />
         <input
           type="text"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter modules..."
-          className="w-full bg-slate-900/80 border border-slate-800 rounded pl-8 pr-2.5 py-1 text-xs font-mono text-slate-200 placeholder-slate-400 focus:outline-none focus:border-cyan-400/50"
+          className="w-full bg-[#0E1420] border border-[#273548] rounded-md pl-8 pr-2.5 py-1 text-xs font-mono text-[#ECF3FC] placeholder-[#5E7188] focus:outline-none focus:border-[#45CFFF]/50"
         />
       </div>
 
@@ -232,8 +234,8 @@ export const ComponentPalette: React.FC<ComponentPaletteProps> = ({ onAddNode, o
             className={cn(
               "px-2 py-0.5 rounded text-[10px] font-mono transition-colors",
               selectedCat === cat.id
-                ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
-                : "bg-slate-900/60 text-slate-400 border border-slate-800 hover:text-slate-300"
+                ? "bg-[#45CFFF]/15 text-[#45CFFF] border border-[#45CFFF]/40 font-bold"
+                : "bg-[#0E1420] text-[#91A0B4] border border-[#273548] hover:text-[#ECF3FC] hover:border-[#384C66]"
             )}
           >
             {cat.name}
@@ -249,10 +251,10 @@ export const ComponentPalette: React.FC<ComponentPaletteProps> = ({ onAddNode, o
             draggable
             onDragStart={(e) => onDragStart(e, item)}
             onClick={() => onAddNode(item)}
-            className="p-2 rounded-lg bg-slate-900/70 border border-slate-800/80 hover:border-cyan-400/40 hover:bg-slate-850 cursor-grab active:cursor-grabbing transition-all group relative text-xs font-mono"
+            className="p-2 rounded-md bg-[#0E1420] border border-[#273548] hover:border-[#45CFFF]/40 hover:bg-[#182333] cursor-grab active:cursor-grabbing transition-all group relative text-xs font-mono"
           >
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-slate-200 group-hover:text-cyan-300">
+              <span className="font-semibold text-[#ECF3FC] group-hover:text-[#45CFFF] transition-colors">
                 {item.name}
               </span>
               <div className="flex items-center gap-1">
@@ -263,7 +265,7 @@ export const ComponentPalette: React.FC<ComponentPaletteProps> = ({ onAddNode, o
                       e.stopPropagation();
                       onShowInfo(item.layerType);
                     }}
-                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-slate-400 hover:text-cyan-300 hover:bg-slate-800 transition-all"
+                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-[#91A0B4] hover:text-[#45CFFF] hover:bg-[#131C29] transition-all"
                     title="Educational Info & Docs"
                   >
                     <Info className="w-3 h-3" />
@@ -271,14 +273,14 @@ export const ComponentPalette: React.FC<ComponentPaletteProps> = ({ onAddNode, o
                 )}
                 <button
                   type="button"
-                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-500/30"
+                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded bg-[#131C29] text-[#45CFFF] border border-[#45CFFF]/30"
                   title="Add to Canvas"
                 >
                   <Plus className="w-3 h-3" />
                 </button>
               </div>
             </div>
-            <p className="text-[10px] text-slate-400 line-clamp-1 mt-0.5">
+            <p className="text-[10px] text-[#91A0B4] line-clamp-1 mt-0.5">
               {item.description}
             </p>
           </div>

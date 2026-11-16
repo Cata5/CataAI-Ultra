@@ -77,7 +77,7 @@ export const RunsView: React.FC = () => {
           onClick={() => setSelectedRunId(item.id)}
           className={cn(
             "text-left font-bold transition-colors flex items-center gap-1.5",
-            selectedRunId === item.id ? "text-cyan-400" : "text-slate-200 hover:text-cyan-300"
+            selectedRunId === item.id ? "text-[#45CFFF]" : "text-[#ECF3FC] hover:text-[#80DEFF]"
           )}
         >
           <History className="w-3.5 h-3.5" />
@@ -95,7 +95,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "total_steps",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num font-bold text-slate-100">
+        <span className="font-mono-num font-bold text-[#ECF3FC]">
           {item.total_steps?.toLocaleString() || 0}
         </span>
       ),
@@ -105,7 +105,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "total_tokens",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num text-slate-300">
+        <span className="font-mono-num text-[#91A0B4]">
           {formatCompactNumber(item.total_tokens || 0)}
         </span>
       ),
@@ -115,7 +115,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "best_val_loss",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num font-bold text-emerald-400">
+        <span className="font-mono-num font-bold text-[#35D49A]">
           {item.best_val_loss ? formatNumber(item.best_val_loss, 4) : "—"}
         </span>
       ),
@@ -124,7 +124,7 @@ export const RunsView: React.FC = () => {
       header: "STARTED AT",
       accessorKey: "started_at",
       cell: (item) => (
-        <span className="text-[10px] text-slate-400">
+        <span className="text-[10px] text-[#5E7188]">
           {item.started_at ? new Date(item.started_at).toLocaleString() : "—"}
         </span>
       ),
@@ -138,10 +138,10 @@ export const RunsView: React.FC = () => {
       sortable: true,
       cell: (item) => (
         <div className="flex items-center gap-2">
-          <Bookmark className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+          <Bookmark className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
           <div className="flex flex-col">
-            <span className="font-bold text-slate-200">{item.filename}</span>
-            <span className="text-[10px] text-slate-400 truncate max-w-xs">{item.path}</span>
+            <span className="font-bold text-[#ECF3FC]">{item.filename}</span>
+            <span className="text-[10px] text-[#5E7188] truncate max-w-xs">{item.path}</span>
           </div>
         </div>
       ),
@@ -151,7 +151,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "step",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num font-bold text-cyan-300">
+        <span className="font-mono-num font-bold text-[#80DEFF]">
           Step {item.step?.toLocaleString() || 0}
         </span>
       ),
@@ -161,7 +161,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "val_loss",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num text-emerald-400 font-bold">
+        <span className="font-mono-num text-[#35D49A] font-bold">
           {item.val_loss ? formatNumber(item.val_loss, 4) : "—"}
         </span>
       ),
@@ -171,7 +171,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "size_mb",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num text-slate-300">
+        <span className="font-mono-num text-[#91A0B4]">
           {item.size_mb ? `${item.size_mb.toFixed(1)} MB` : "—"}
         </span>
       ),
@@ -182,14 +182,14 @@ export const RunsView: React.FC = () => {
         <div className="flex items-center gap-2">
           <a
             href="/evaluation"
-            className="p-1 rounded bg-slate-900 border border-slate-700 hover:border-cyan-400 text-slate-300 hover:text-cyan-400 transition-colors"
+            className="p-1 rounded bg-[#182333] border border-[#273548] hover:border-[#45CFFF] text-[#91A0B4] hover:text-[#45CFFF] transition-colors"
             title="Load in Evaluation Lab"
           >
             <ExternalLink className="w-3 h-3" />
           </a>
           <button
             onClick={() => setDeleteTargetId(item.id || item.filename)}
-            className="p-1 rounded bg-slate-900 border border-slate-800 hover:border-rose-500 hover:text-rose-400 text-slate-400 transition-colors"
+            className="p-1 rounded bg-[#182333] border border-[#273548] hover:border-[#FF657A] hover:text-[#FF657A] text-[#91A0B4] transition-colors"
             title="Delete Checkpoint"
           >
             <Trash2 className="w-3 h-3" />
@@ -210,23 +210,23 @@ export const RunsView: React.FC = () => {
   return (
     <div className="space-y-4 font-mono text-xs">
       {/* Top Banner */}
-      <div className="glass-panel p-3.5 rounded-lg flex items-center justify-between border-l-4 border-l-cyan-400">
+      <div className="glass-panel p-3.5 rounded-lg flex items-center justify-between border-l-2 border-l-[#45CFFF]">
         <div className="flex items-center gap-2.5">
-          <History className="w-5 h-5 text-cyan-400" />
+          <History className="w-5 h-5 text-[#45CFFF]" />
           <div>
-            <h3 className="font-bold text-slate-100 uppercase tracking-wider text-xs">
+            <h3 className="font-bold text-[#ECF3FC] uppercase tracking-wider text-xs">
               RUNS & CHECKPOINT REPOSITORY
             </h3>
-            <p className="text-[10px] text-slate-400">
+            <p className="text-[10px] text-[#91A0B4]">
               Safe deserialization architecture (weights_only=True) with atomic metadata verification
             </p>
           </div>
         </div>
         <button
           onClick={fetchHistory}
-          className="inline-flex items-center gap-1.5 px-3 py-1 rounded bg-slate-900 border border-slate-700 hover:border-cyan-400 text-slate-200 transition-colors"
+          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#182333] border border-[#273548] hover:border-[#45CFFF]/50 text-[#ECF3FC] transition-colors"
         >
-          <RefreshCw className="w-3.5 h-3.5 text-cyan-400" /> REFRESH
+          <RefreshCw className="w-3.5 h-3.5 text-[#45CFFF]" /> REFRESH
         </button>
       </div>
 
@@ -234,11 +234,11 @@ export const RunsView: React.FC = () => {
       {selectedRunId && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="font-bold text-slate-200 uppercase tracking-wider text-xs flex items-center gap-1.5">
-              <LineChart className="w-3.5 h-3.5 text-cyan-400" /> METRIC DYNAMICS FOR RUN:{" "}
-              <span className="text-cyan-400">{selectedRunId}</span>
+            <span className="font-bold text-[#ECF3FC] uppercase tracking-wider text-xs flex items-center gap-1.5">
+              <LineChart className="w-3.5 h-3.5 text-[#45CFFF]" /> METRIC DYNAMICS FOR RUN:{" "}
+              <span className="text-[#45CFFF]">{selectedRunId}</span>
             </span>
-            <span className="text-[10px] text-slate-400">
+            <span className="text-[10px] text-[#91A0B4]">
               {runMetrics.length} data points recorded
             </span>
           </div>
@@ -251,8 +251,8 @@ export const RunsView: React.FC = () => {
                 {
                   label: "Train Loss",
                   data: lossSeries,
-                  borderColor: "#00f0ff",
-                  backgroundColor: "rgba(0, 240, 255, 0.08)",
+                  borderColor: "#45CFFF",
+                  backgroundColor: "rgba(69, 207, 255, 0.08)",
                   fill: true,
                 },
                 ...(hasValLoss
@@ -260,7 +260,7 @@ export const RunsView: React.FC = () => {
                       {
                         label: "Validation Loss",
                         data: valLossSeries,
-                        borderColor: "#10b981",
+                        borderColor: "#35D49A",
                         borderDash: [4, 4],
                         pointRadius: 4,
                         spanGaps: true,
@@ -279,8 +279,8 @@ export const RunsView: React.FC = () => {
                 {
                   label: "LR",
                   data: lrSeries,
-                  borderColor: "#818cf8",
-                  backgroundColor: "rgba(129, 140, 248, 0.08)",
+                  borderColor: "#9B8CFF",
+                  backgroundColor: "rgba(155, 140, 255, 0.08)",
                   fill: true,
                 },
               ]}
@@ -293,8 +293,8 @@ export const RunsView: React.FC = () => {
 
       {/* Runs History Table */}
       <div className="space-y-2">
-        <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-          <Layers className="w-3.5 h-3.5 text-cyan-400" /> TRAINING EXPERIMENTS HISTORY ({runs.length})
+        <h3 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider flex items-center gap-1.5">
+          <Layers className="w-3.5 h-3.5 text-[#45CFFF]" /> TRAINING EXPERIMENTS HISTORY ({runs.length})
         </h3>
         <DataTable
           data={runs}
@@ -306,8 +306,8 @@ export const RunsView: React.FC = () => {
 
       {/* Checkpoints Manager Table */}
       <div className="space-y-2 pt-2">
-        <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-          <Bookmark className="w-3.5 h-3.5 text-cyan-400" /> SAVED CHECKPOINTS ON DISK ({checkpoints.length})
+        <h3 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider flex items-center gap-1.5">
+          <Bookmark className="w-3.5 h-3.5 text-[#45CFFF]" /> SAVED CHECKPOINTS ON DISK ({checkpoints.length})
         </h3>
         <DataTable
           data={checkpoints}

@@ -749,11 +749,11 @@ export const NetworkStudioView: React.FC = () => {
           {/* Canvas Floating Top Info */}
           <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
             <div className="flex items-center gap-2">
-              <span className="px-2.5 py-1 rounded bg-[#060a14]/90 border border-cyan-500/30 font-mono text-xs text-cyan-300 font-bold backdrop-blur-md">
-                ACTIVE GRAPH: {globalConfig.name}
+              <span className="px-2.5 py-1 rounded-md bg-[#0E1420]/95 border border-[#273548] font-mono text-xs text-[#ECF3FC] font-semibold backdrop-blur-md shadow-sm">
+                ACTIVE GRAPH: <span className="text-[#45CFFF]">{globalConfig.name}</span>
               </span>
               {statusMessage && (
-                <span className="px-2.5 py-1 rounded bg-emerald-950/80 border border-emerald-500/40 font-mono text-xs text-emerald-300 font-bold animate-in fade-in">
+                <span className="px-2.5 py-1 rounded-md bg-[#35D49A]/15 border border-[#35D49A]/40 font-mono text-xs text-[#35D49A] font-bold animate-in fade-in">
                   {statusMessage}
                 </span>
               )}
@@ -763,7 +763,7 @@ export const NetworkStudioView: React.FC = () => {
               <button
                 type="button"
                 onClick={handleCreateScratch}
-                className="pointer-events-auto flex items-center gap-1.5 px-3 py-1 rounded bg-cyan-600/90 hover:bg-cyan-500 text-slate-950 font-mono text-xs font-bold transition-all shadow-[0_0_10px_rgba(0,240,255,0.3)]"
+                className="pointer-events-auto flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-mono text-xs font-bold transition-all shadow-sm"
                 title="Start a new architecture on a blank canvas"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -777,7 +777,7 @@ export const NetworkStudioView: React.FC = () => {
                     setEdges([]);
                     setSelectedNodeId(null);
                   }}
-                  className="pointer-events-auto flex items-center gap-1 px-2.5 py-1 rounded bg-slate-900/90 border border-slate-700 hover:border-rose-500/50 hover:bg-rose-950/40 text-slate-300 hover:text-rose-300 font-mono text-xs transition-all"
+                  className="pointer-events-auto flex items-center gap-1 px-2.5 py-1 rounded-md bg-[#0E1420] border border-[#273548] hover:border-[#FF657A]/50 hover:bg-[#FF657A]/15 text-[#91A0B4] hover:text-[#FF657A] font-mono text-xs transition-all"
                   title="Clear canvas"
                 >
                   <Trash2 className="w-3 h-3" />
@@ -790,15 +790,17 @@ export const NetworkStudioView: React.FC = () => {
           {/* Empty Canvas Overlay in Scratch Mode */}
           {nodes.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none p-6 z-10">
-              <div className="max-w-md w-full bg-[#090e1a]/95 border border-dashed border-cyan-500/40 rounded-xl p-6 backdrop-blur-md text-center pointer-events-auto shadow-[0_0_25px_rgba(0,240,255,0.1)]">
-                <div className="w-12 h-12 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center mx-auto mb-3">
-                  <Layers className="w-6 h-6 text-cyan-400" />
+              <div className="max-w-md w-full bg-[#0E1420]/95 border border-dashed border-[#384C66] rounded-xl p-6 backdrop-blur-md text-center pointer-events-auto shadow-2xl relative">
+                <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/30 to-transparent pointer-events-none" />
+
+                <div className="w-11 h-11 rounded-lg bg-[#131C29] border border-[#45CFFF]/40 flex items-center justify-center mx-auto mb-3">
+                  <Layers className="w-5 h-5 text-[#45CFFF]" />
                 </div>
-                <h3 className="font-mono font-bold text-sm text-slate-100 uppercase tracking-wide">
+                <h3 className="font-mono font-bold text-xs text-[#ECF3FC] uppercase tracking-wider">
                   Blank Architecture Canvas
                 </h3>
-                <p className="text-xs text-slate-400 mt-1 mb-4 leading-relaxed">
-                  You are in scratch mode. Drag components from the left palette, or click any quick-add action below to begin:
+                <p className="text-xs text-[#91A0B4] mt-1 mb-4 leading-relaxed">
+                  You are in custom scratch mode. Drag components from the left palette or select a quick starting block below:
                 </p>
                 <div className="grid grid-cols-2 gap-2 text-left">
                   <button
@@ -813,9 +815,9 @@ export const NetworkStudioView: React.FC = () => {
                         defaultConfig: { vocab_size: 12288, d_model: 512 },
                       })
                     }
-                    className="flex items-center gap-2 p-2 rounded bg-slate-900 border border-slate-800 hover:border-cyan-500/60 font-mono text-xs text-slate-200 transition-colors"
+                    className="flex items-center gap-2 p-2 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF]/60 font-mono text-xs text-[#ECF3FC] transition-colors"
                   >
-                    <Plus className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <Plus className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
                     <span>+ Embedding</span>
                   </button>
                   <button
@@ -830,9 +832,9 @@ export const NetworkStudioView: React.FC = () => {
                         defaultConfig: { d_model: 512, n_q: 8, n_kv: 2 },
                       })
                     }
-                    className="flex items-center gap-2 p-2 rounded bg-slate-900 border border-slate-800 hover:border-cyan-500/60 font-mono text-xs text-slate-200 transition-colors"
+                    className="flex items-center gap-2 p-2 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF]/60 font-mono text-xs text-[#ECF3FC] transition-colors"
                   >
-                    <Plus className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <Plus className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
                     <span>+ Attention (GQA)</span>
                   </button>
                   <button
@@ -847,9 +849,9 @@ export const NetworkStudioView: React.FC = () => {
                         defaultConfig: { d_model: 512, d_ff: 1280 },
                       })
                     }
-                    className="flex items-center gap-2 p-2 rounded bg-slate-900 border border-slate-800 hover:border-cyan-500/60 font-mono text-xs text-slate-200 transition-colors"
+                    className="flex items-center gap-2 p-2 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF]/60 font-mono text-xs text-[#ECF3FC] transition-colors"
                   >
-                    <Plus className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <Plus className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
                     <span>+ SwiGLU FFN</span>
                   </button>
                   <button
@@ -864,9 +866,9 @@ export const NetworkStudioView: React.FC = () => {
                         defaultConfig: { in_features: 512, out_features: 12288, bias: false },
                       })
                     }
-                    className="flex items-center gap-2 p-2 rounded bg-slate-900 border border-slate-800 hover:border-cyan-500/60 font-mono text-xs text-slate-200 transition-colors"
+                    className="flex items-center gap-2 p-2 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF]/60 font-mono text-xs text-[#ECF3FC] transition-colors"
                   >
-                    <Plus className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <Plus className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
                     <span>+ Linear Head</span>
                   </button>
                 </div>
@@ -895,66 +897,68 @@ export const NetworkStudioView: React.FC = () => {
       </div>
 
       {/* Bottom Console: Architecture Metrics & Validation */}
-      <div className="h-28 glass-panel rounded-lg p-3 flex items-center justify-between gap-6 shrink-0 font-mono text-xs select-none">
+      <div className="h-26 glass-panel rounded-lg p-3 flex items-center justify-between gap-6 shrink-0 font-mono text-xs select-none relative overflow-hidden">
+        <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/15 to-transparent pointer-events-none" />
+
         {/* Left: Parameter Calculations */}
         <div className="flex items-center gap-6">
           <div className="space-y-0.5">
-            <span className="text-[10px] text-slate-400 uppercase font-semibold">
+            <span className="text-[10px] text-[#5E7188] uppercase font-semibold">
               TOTAL PARAMETERS
             </span>
-            <div className="text-xl font-bold font-mono-num text-cyan-300">
+            <div className="text-xl font-bold font-mono-num text-[#45CFFF]">
               {formatParamCount(estimation?.parameters?.total_params || 48531968)}{" "}
-              <span className="text-xs text-slate-400 font-normal">
+              <span className="text-xs text-[#91A0B4] font-normal">
                 ({(estimation?.parameters?.total_params || 48531968).toLocaleString()})
               </span>
             </div>
-            <span className="text-[10px] text-slate-400">
+            <span className="text-[10px] text-[#91A0B4]">
               Trainable:{" "}
               {formatParamCount(estimation?.parameters?.trainable_params || 48531968)}
             </span>
           </div>
 
-          <div className="h-12 w-px bg-slate-800" />
+          <div className="h-10 w-px bg-[#273548]" />
 
           {/* Memory Estimations */}
           <div className="space-y-0.5">
-            <span className="text-[10px] text-slate-400 uppercase font-semibold flex items-center gap-1">
-              <HardDrive className="w-3 h-3 text-cyan-400" /> TRAINING VRAM
+            <span className="text-[10px] text-[#5E7188] uppercase font-semibold flex items-center gap-1">
+              <HardDrive className="w-3 h-3 text-[#45CFFF]" /> TRAINING VRAM
             </span>
-            <div className="text-xl font-bold font-mono-num text-slate-100">
+            <div className="text-xl font-bold font-mono-num text-[#ECF3FC]">
               {estimation?.memory?.total_training_vram_mb
                 ? `${Math.round(estimation.memory.total_training_vram_mb)} MB`
                 : "2,630 MB"}
             </div>
-            <span className="text-[10px] text-slate-400">
+            <span className="text-[10px] text-[#91A0B4]">
               Weights: {estimation?.memory?.model_weights_mb || 97} MB | Opt:{" "}
               {estimation?.memory?.optimizer_states_mb || 388} MB
             </span>
           </div>
 
-          <div className="h-12 w-px bg-slate-800" />
+          <div className="h-10 w-px bg-[#273548]" />
 
-          {/* 6GB Hardware Compatibility */}
+          {/* Hardware Compatibility */}
           <div className="space-y-1">
-            <span className="text-[10px] text-slate-400 uppercase font-semibold">
+            <span className="text-[10px] text-[#5E7188] uppercase font-semibold">
               HARDWARE COMPLIANCE
             </span>
             <div>
               {estimation?.memory?.safety_status === "SAFE" || estimation?.memory?.fits_6gb_gpu !== false ? (
-                <span className="px-2 py-0.5 rounded bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 font-bold text-[10px]">
+                <span className="px-2 py-0.5 rounded-md bg-[#35D49A]/15 border border-[#35D49A]/30 text-[#35D49A] font-bold text-[10px]">
                   FITS HARDWARE BUDGET ({estimation?.memory?.hardware_target || "SAFE"})
                 </span>
               ) : estimation?.memory?.safety_status === "TIGHT" ? (
-                <span className="px-2 py-0.5 rounded bg-amber-950/60 border border-amber-500/30 text-amber-300 font-bold text-[10px]">
+                <span className="px-2 py-0.5 rounded-md bg-[#F2B85B]/15 border border-[#F2B85B]/30 text-[#F2B85B] font-bold text-[10px]">
                   TIGHT BUDGET MARGIN ({estimation?.memory?.total_training_vram_gb || 0} GB)
                 </span>
               ) : (
-                <span className="px-2 py-0.5 rounded bg-rose-950/60 border border-rose-500/30 text-rose-300 font-bold text-[10px]">
+                <span className="px-2 py-0.5 rounded-md bg-[#FF657A]/15 border border-[#FF657A]/30 text-[#FF657A] font-bold text-[10px]">
                   EXCEEDS ALLOCATION CEILING
                 </span>
               )}
             </div>
-            <span className="text-[10px] text-slate-400">
+            <span className="text-[10px] text-[#91A0B4]">
               Micro-batch 4 | Seq 256 | BF16
             </span>
           </div>
@@ -966,28 +970,28 @@ export const NetworkStudioView: React.FC = () => {
             <div className="flex items-center justify-end gap-1.5 font-bold">
               {validation.valid ? (
                 <>
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span className="text-emerald-300">ARCHITECTURE VALIDATED</span>
+                  <CheckCircle2 className="w-4 h-4 text-[#35D49A]" />
+                  <span className="text-[#35D49A]">ARCHITECTURE VALIDATED</span>
                 </>
               ) : (
                 <>
-                  <AlertTriangle className="w-4 h-4 text-rose-400" />
-                  <span className="text-rose-300">VALIDATION ISSUES</span>
+                  <AlertTriangle className="w-4 h-4 text-[#FF657A]" />
+                  <span className="text-[#FF657A]">VALIDATION ISSUES</span>
                 </>
               )}
             </div>
-            <p className="text-[10px] text-slate-400 mt-0.5">
+            <p className="text-[10px] text-[#91A0B4] mt-0.5">
               {(validation?.issues && validation.issues.length > 0)
                 ? validation.issues[0]
-                : "Ready for ModelFactory instantiation & pipeline execution."}
+                : "Ready for ModelFactory instantiation & execution pipeline."}
             </p>
           </div>
 
           <a
             href="/training"
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold transition-all shadow-[0_0_12px_rgba(0,240,255,0.3)] shrink-0"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-bold transition-all shadow-sm shrink-0"
           >
-            <Play className="w-3.5 h-3.5" /> DEPLOY TO TRAINING
+            <Play className="w-3.5 h-3.5 fill-current" /> DEPLOY TO TRAINING
           </a>
         </div>
       </div>

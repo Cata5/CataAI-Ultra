@@ -24,13 +24,13 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
   const [query, setQuery] = useState("");
 
   const commands = [
-    { label: "Overview / Command Center", path: "/", icon: <LayoutDashboard className="w-4 h-4 text-cyan-400" /> },
-    { label: "Network Studio (Architecture Designer)", path: "/studio", icon: <Network className="w-4 h-4 text-indigo-400" /> },
-    { label: "Training & Experiment Control", path: "/training", icon: <Play className="w-4 h-4 text-emerald-400" /> },
-    { label: "Datasets & Data Explorer", path: "/datasets", icon: <Database className="w-4 h-4 text-amber-400" /> },
-    { label: "Evaluation Lab & Inference", path: "/evaluation", icon: <FlaskConical className="w-4 h-4 text-sky-400" /> },
-    { label: "Runs, Checkpoints & Analytics", path: "/runs", icon: <History className="w-4 h-4 text-purple-400" /> },
-    { label: "Settings & GPU Monitoring", path: "/settings", icon: <Settings className="w-4 h-4 text-slate-400" /> },
+    { label: "Overview / Command Center", path: "/", icon: <LayoutDashboard className="w-4 h-4 text-[#45CFFF]" /> },
+    { label: "Network Studio (Architecture Designer)", path: "/studio", icon: <Network className="w-4 h-4 text-[#9B8CFF]" /> },
+    { label: "Training & Experiment Control", path: "/training", icon: <Play className="w-4 h-4 text-[#35D49A]" /> },
+    { label: "Datasets & Data Explorer", path: "/datasets", icon: <Database className="w-4 h-4 text-[#F2B85B]" /> },
+    { label: "Evaluation Lab & Inference", path: "/evaluation", icon: <FlaskConical className="w-4 h-4 text-[#80DEFF]" /> },
+    { label: "Runs, Checkpoints & Analytics", path: "/runs", icon: <History className="w-4 h-4 text-[#9B8CFF]" /> },
+    { label: "Settings & GPU Monitoring", path: "/settings", icon: <Settings className="w-4 h-4 text-[#91A0B4]" /> },
   ];
 
   const filtered = commands.filter((c) =>
@@ -56,21 +56,21 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center pt-24 p-4 bg-black/70 backdrop-blur-sm">
-      <div className="glass-panel border border-cyan-500/30 rounded-xl max-w-lg w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
-        <div className="flex items-center gap-2.5 p-3.5 border-b border-slate-800">
-          <Search className="w-4 h-4 text-cyan-400" />
+    <div className="fixed inset-0 z-50 flex items-start justify-center pt-24 p-4 bg-black/80 backdrop-blur-md">
+      <div className="bg-[#0E1420] border border-[#384C66] rounded-xl max-w-lg w-full shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+        <div className="flex items-center gap-2.5 p-3.5 border-b border-[#273548]">
+          <Search className="w-4 h-4 text-[#45CFFF]" />
           <input
             autoFocus
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Type a command or jump to workspace..."
-            className="w-full bg-transparent text-sm font-mono text-slate-100 placeholder-slate-400 focus:outline-none"
+            className="w-full bg-transparent text-sm font-mono text-[#ECF3FC] placeholder-[#5E7188] focus:outline-none"
           />
           <button
             onClick={onClose}
-            className="p-1 rounded text-slate-400 hover:text-slate-200"
+            className="p-1 rounded text-[#91A0B4] hover:text-[#ECF3FC]"
           >
             <X className="w-4 h-4" />
           </button>
@@ -78,7 +78,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
 
         <div className="max-h-72 overflow-y-auto p-2 space-y-1">
           {filtered.length === 0 ? (
-            <div className="p-4 text-center font-mono text-xs text-slate-400">
+            <div className="p-4 text-center font-mono text-xs text-[#5E7188]">
               No matching commands.
             </div>
           ) : (
@@ -89,19 +89,14 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
                   router.push(item.path);
                   onClose();
                 }}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left text-xs font-mono text-slate-300 hover:bg-slate-800/80 hover:text-cyan-300 transition-colors"
+                className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left text-xs font-mono text-[#91A0B4] hover:bg-[#182333] hover:text-[#45CFFF] transition-colors"
               >
                 {item.icon}
                 <span className="flex-1 font-medium">{item.label}</span>
-                <span className="text-[10px] text-slate-400 font-mono">Jump</span>
+                <span className="text-[10px] text-[#5E7188] font-mono">Jump</span>
               </button>
             ))
           )}
-        </div>
-
-        <div className="p-2 border-t border-slate-800/80 bg-slate-900/60 flex items-center justify-between text-[10px] font-mono text-slate-400 px-3">
-          <span>Navigate with mouse or arrow keys</span>
-          <span>ESC to close</span>
         </div>
       </div>
     </div>

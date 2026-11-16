@@ -163,97 +163,101 @@ export const LayerInfoModal: React.FC<LayerInfoModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in select-none font-mono text-xs">
-      <div className="w-full max-w-2xl glass-panel rounded-xl border border-cyan-500/40 shadow-[0_0_30px_rgba(0,240,255,0.2)] overflow-hidden flex flex-col max-h-[85vh]">
+      <div className="w-full max-w-2xl bg-[#0E1420] rounded-xl border border-[#384C66] shadow-2xl overflow-hidden flex flex-col max-h-[85vh] relative">
+        <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/30 to-transparent pointer-events-none" />
+
         {/* Header */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/70">
-          <div className="flex items-center gap-2">
-            <BookOpen className="w-4 h-4 text-cyan-400" />
+        <div className="p-4 border-b border-[#273548] flex items-center justify-between bg-[#090D14]/80">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-md bg-[#131C29] border border-[#45CFFF]/40 flex items-center justify-center">
+              <BookOpen className="w-4 h-4 text-[#45CFFF]" />
+            </div>
             <div>
-              <h2 className="text-sm font-bold text-slate-100 uppercase tracking-wide">
+              <h2 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wide">
                 {doc.title}
               </h2>
-              <span className="text-[10px] text-cyan-400 uppercase font-semibold">
+              <span className="text-[10px] text-[#45CFFF] uppercase font-semibold">
                 Category: {doc.category} | Layer Identifier: {layerType}
               </span>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-md text-slate-400 hover:text-slate-100 hover:bg-slate-800 transition-colors"
+            className="p-1 rounded-md text-[#91A0B4] hover:text-[#ECF3FC] hover:bg-[#182333] transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content Body */}
-        <div className="p-5 space-y-4 overflow-y-auto text-slate-300">
+        <div className="p-5 space-y-4 overflow-y-auto text-[#91A0B4]">
           {/* Mathematical Formulation */}
-          <div className="p-3 rounded-lg bg-slate-900/90 border border-slate-800">
-            <div className="text-[10px] uppercase font-bold text-cyan-400 mb-1 flex items-center gap-1.5">
+          <div className="p-3 rounded-lg bg-[#090D14] border border-[#273548]">
+            <div className="text-[10px] uppercase font-bold text-[#45CFFF] mb-1 flex items-center gap-1.5">
               <Zap className="w-3.5 h-3.5" /> Mathematical Formulation
             </div>
-            <code className="text-xs text-amber-300 font-mono block bg-black/40 p-2 rounded border border-slate-800/80">
+            <code className="text-xs text-[#45CFFF] font-mono block bg-black/40 p-2 rounded border border-[#273548]/80 font-bold">
               {doc.math}
             </code>
           </div>
 
           {/* Description */}
           <div>
-            <div className="text-[10px] uppercase font-bold text-slate-400 mb-1">
+            <div className="text-[10px] uppercase font-bold text-[#5E7188] mb-1">
               Description & Operational Dynamics
             </div>
-            <p className="text-xs leading-relaxed text-slate-200">
+            <p className="text-xs leading-relaxed text-[#ECF3FC]">
               {doc.description}
             </p>
           </div>
 
           {/* Parameter Complexity & Memory */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="p-3 rounded-lg bg-slate-950/50 border border-slate-800">
-              <div className="text-[10px] uppercase font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
+            <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548]">
+              <div className="text-[10px] uppercase font-bold text-[#35D49A] mb-1 flex items-center gap-1.5">
                 <ShieldCheck className="w-3.5 h-3.5" /> Parameter Complexity
               </div>
-              <p className="text-[11px] text-slate-300 font-mono">
+              <p className="text-[11px] text-[#ECF3FC] font-mono">
                 {doc.parameterFormula}
               </p>
             </div>
 
-            <div className="p-3 rounded-lg bg-slate-950/50 border border-slate-800">
-              <div className="text-[10px] uppercase font-bold text-purple-400 mb-1 flex items-center gap-1.5">
-                <Cpu className="w-3.5 h-3.5" /> Memory & VRAM Dynamics (6GB GPU)
+            <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548]">
+              <div className="text-[10px] uppercase font-bold text-[#9B8CFF] mb-1 flex items-center gap-1.5">
+                <Cpu className="w-3.5 h-3.5" /> Memory & VRAM Dynamics
               </div>
-              <p className="text-[11px] text-slate-300">
+              <p className="text-[11px] text-[#91A0B4]">
                 {doc.memoryAndVram}
               </p>
             </div>
           </div>
 
-          {/* RoCanon-48.5M Context */}
-          <div className="p-3 rounded-lg bg-cyan-950/30 border border-cyan-500/20">
-            <div className="text-[10px] uppercase font-bold text-cyan-300 mb-1">
-              RoCanon-48.5M Architectural Integration
+          {/* Context */}
+          <div className="p-3 rounded-lg bg-[#131C29] border border-[#45CFFF]/30">
+            <div className="text-[10px] uppercase font-bold text-[#45CFFF] mb-1">
+              Architectural Integration Context
             </div>
-            <p className="text-xs text-slate-300 leading-relaxed">
+            <p className="text-xs text-[#ECF3FC] leading-relaxed">
               {doc.rocanonContext}
             </p>
           </div>
 
           {/* Engineering Best Practices */}
-          <div className="p-3 rounded-lg bg-slate-900/60 border border-slate-800">
-            <div className="text-[10px] uppercase font-bold text-amber-400 mb-1">
+          <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548]">
+            <div className="text-[10px] uppercase font-bold text-[#F2B85B] mb-1">
               Engineering Best Practices & Convergence Tips
             </div>
-            <p className="text-xs text-slate-400 leading-relaxed">
+            <p className="text-xs text-[#91A0B4] leading-relaxed">
               {doc.bestPractices}
             </p>
           </div>
         </div>
 
         {/* Footer */}
-        <div className="p-3 border-t border-slate-800 bg-slate-950/70 flex justify-end">
+        <div className="p-3 border-t border-[#273548] bg-[#090D14]/80 flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold transition-all shadow-[0_0_10px_rgba(0,240,255,0.3)]"
+            className="px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-bold font-mono text-xs transition-all shadow-sm"
           >
             DISMISS
           </button>

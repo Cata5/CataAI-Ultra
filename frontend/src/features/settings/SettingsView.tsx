@@ -69,10 +69,10 @@ export const SettingsView: React.FC = () => {
           className={cn(
             "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
             item.level === "CRITICAL" || item.level === "ERROR"
-              ? "bg-rose-950/60 text-rose-400 border border-rose-800"
+              ? "bg-[#FF657A]/15 text-[#FF657A] border border-[#FF657A]/30"
               : item.level === "WARNING"
-              ? "bg-amber-950/60 text-amber-400 border border-amber-800"
-              : "bg-cyan-950/60 text-cyan-400 border border-cyan-800"
+              ? "bg-[#F2B85B]/15 text-[#F2B85B] border border-[#F2B85B]/30"
+              : "bg-[#45CFFF]/15 text-[#45CFFF] border border-[#45CFFF]/30"
           )}
         >
           {item.level}
@@ -82,14 +82,14 @@ export const SettingsView: React.FC = () => {
     {
       header: "CATEGORY",
       accessorKey: "category",
-      cell: (item) => <span className="font-bold text-slate-200">{item.category}</span>,
+      cell: (item) => <span className="font-bold text-[#ECF3FC]">{item.category}</span>,
     },
     {
       header: "STEP",
       accessorKey: "step",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num text-slate-300">
+        <span className="font-mono-num text-[#91A0B4]">
           {item.step !== undefined ? `Step ${item.step}` : "—"}
         </span>
       ),
@@ -97,13 +97,13 @@ export const SettingsView: React.FC = () => {
     {
       header: "MESSAGE",
       accessorKey: "message",
-      cell: (item) => <span className="text-slate-300 max-w-md truncate">{item.message}</span>,
+      cell: (item) => <span className="text-[#ECF3FC] max-w-md truncate">{item.message}</span>,
     },
     {
       header: "TIMESTAMP",
       accessorKey: "created_at",
       cell: (item) => (
-        <span className="text-slate-400 text-[10px]">
+        <span className="text-[#5E7188] text-[10px]">
           {item.created_at ? new Date(item.created_at).toLocaleString() : "—"}
         </span>
       ),
@@ -113,14 +113,14 @@ export const SettingsView: React.FC = () => {
   return (
     <div className="space-y-4 font-mono text-xs">
       {/* Header */}
-      <div className="glass-panel p-3.5 rounded-lg flex items-center justify-between border-l-4 border-l-cyan-400">
+      <div className="glass-panel p-3.5 rounded-lg flex items-center justify-between border-l-2 border-l-[#45CFFF]">
         <div className="flex items-center gap-2.5">
-          <Settings className="w-5 h-5 text-cyan-400" />
+          <Settings className="w-5 h-5 text-[#45CFFF]" />
           <div>
-            <h3 className="font-bold text-slate-100 uppercase tracking-wider text-xs">
+            <h3 className="font-bold text-[#ECF3FC] uppercase tracking-wider text-xs">
               SYSTEM SETTINGS & HARDWARE MONITORING POLICY
             </h3>
-            <p className="text-[10px] text-slate-400">
+            <p className="text-[10px] text-[#91A0B4]">
               Configure VRAM limits, NVML polling frequency, checkpoint policies and user appearance
             </p>
           </div>
@@ -129,7 +129,7 @@ export const SettingsView: React.FC = () => {
         <button
           onClick={handleSave}
           disabled={isSaving}
-          className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white font-bold transition-all shadow-[0_0_12px_rgba(0,240,255,0.3)]"
+          className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] disabled:opacity-50 text-[#090D14] font-bold transition-all shadow-[0_0_12px_rgba(69,207,255,0.3)]"
         >
           <Save className="w-3.5 h-3.5" />
           {isSaving ? "SAVING..." : "SAVE SETTINGS"}
@@ -137,7 +137,7 @@ export const SettingsView: React.FC = () => {
       </div>
 
       {feedback && (
-        <div className="p-3 rounded-lg bg-emerald-950/80 border border-emerald-500/40 text-emerald-300 font-bold flex items-center gap-2">
+        <div className="p-3 rounded-lg bg-[#35D49A]/15 border border-[#35D49A]/30 text-[#35D49A] font-bold flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4" /> {feedback}
         </div>
       )}
@@ -146,12 +146,12 @@ export const SettingsView: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Hardware & GPU Safety Policy */}
         <div className="glass-panel p-4 rounded-lg space-y-3">
-          <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider pb-2 border-b border-slate-800 flex items-center gap-1.5">
-            <Cpu className="w-3.5 h-3.5 text-cyan-400" /> GPU SAFETY & NVML POLICIES
+          <h4 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider pb-2 border-b border-[#273548] flex items-center gap-1.5">
+            <Cpu className="w-3.5 h-3.5 text-[#45CFFF]" /> GPU SAFETY & NVML POLICIES
           </h4>
 
           <div>
-            <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
+            <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
               VRAM Hard Ceiling (MB)
             </label>
             <input
@@ -160,15 +160,15 @@ export const SettingsView: React.FC = () => {
               onChange={(e) =>
                 setSettings({ ...settings, vram_ceiling_mb: parseInt(e.target.value) || 5000 })
               }
-              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-400"
+              className="w-full bg-[#0E1420] border border-[#273548] rounded px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]"
             />
-            <span className="text-[10px] text-slate-400 mt-1 block">
+            <span className="text-[10px] text-[#5E7188] mt-1 block">
               Dynamic accelerator safe allocation ceiling. Triggers protective checkpoint or throttle alert if breached.
             </span>
           </div>
 
           <div>
-            <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
+            <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
               Thermal Alarm Threshold (°C)
             </label>
             <input
@@ -177,12 +177,12 @@ export const SettingsView: React.FC = () => {
               onChange={(e) =>
                 setSettings({ ...settings, temp_threshold_c: parseInt(e.target.value) || 80 })
               }
-              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-400"
+              className="w-full bg-[#0E1420] border border-[#273548] rounded px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]"
             />
           </div>
 
           <div>
-            <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
+            <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
               NVML Telemetry Polling Rate (ms)
             </label>
             <input
@@ -191,19 +191,19 @@ export const SettingsView: React.FC = () => {
               onChange={(e) =>
                 setSettings({ ...settings, gpu_poll_interval_ms: parseInt(e.target.value) || 2000 })
               }
-              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-400"
+              className="w-full bg-[#0E1420] border border-[#273548] rounded px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]"
             />
           </div>
         </div>
 
         {/* Checkpoint & Retention Policies */}
         <div className="glass-panel p-4 rounded-lg space-y-3">
-          <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider pb-2 border-b border-slate-800 flex items-center gap-1.5">
-            <Shield className="w-3.5 h-3.5 text-cyan-400" /> CHECKPOINT & PERSISTENCE
+          <h4 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider pb-2 border-b border-[#273548] flex items-center gap-1.5">
+            <Shield className="w-3.5 h-3.5 text-[#45CFFF]" /> CHECKPOINT & PERSISTENCE
           </h4>
 
           <div>
-            <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
+            <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
               Max Checkpoints Retained
             </label>
             <input
@@ -212,15 +212,15 @@ export const SettingsView: React.FC = () => {
               onChange={(e) =>
                 setSettings({ ...settings, max_checkpoints_kept: parseInt(e.target.value) || 4 })
               }
-              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-400"
+              className="w-full bg-[#0E1420] border border-[#273548] rounded px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]"
             />
-            <span className="text-[10px] text-slate-400 mt-1 block">
+            <span className="text-[10px] text-[#5E7188] mt-1 block">
               Keeps a rolling window of the 4 most recent step checkpoints plus the best validation checkpoint.
             </span>
           </div>
 
           <div>
-            <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
+            <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
               Default Micro-Batch Size
             </label>
             <input
@@ -229,12 +229,12 @@ export const SettingsView: React.FC = () => {
               onChange={(e) =>
                 setSettings({ ...settings, default_micro_batch_size: parseInt(e.target.value) || 4 })
               }
-              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-400"
+              className="w-full bg-[#0E1420] border border-[#273548] rounded px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]"
             />
           </div>
 
           <div>
-            <label className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
+            <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
               Default Sequence Length
             </label>
             <input
@@ -243,7 +243,7 @@ export const SettingsView: React.FC = () => {
               onChange={(e) =>
                 setSettings({ ...settings, default_seq_len: parseInt(e.target.value) || 256 })
               }
-              className="w-full bg-slate-900 border border-slate-800 rounded px-2.5 py-1.5 text-slate-200 focus:outline-none focus:border-cyan-400"
+              className="w-full bg-[#0E1420] border border-[#273548] rounded px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]"
             />
           </div>
         </div>
@@ -252,12 +252,12 @@ export const SettingsView: React.FC = () => {
       {/* System Alert History Table */}
       <div className="space-y-2 pt-2">
         <div className="flex items-center justify-between">
-          <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
-            <Bell className="w-3.5 h-3.5 text-cyan-400" /> SYSTEM ALERTS & EVENT LOG ({alerts.length})
+          <h3 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider flex items-center gap-1.5">
+            <Bell className="w-3.5 h-3.5 text-[#45CFFF]" /> SYSTEM ALERTS & EVENT LOG ({alerts.length})
           </h3>
           <button
             onClick={fetchSettingsAndAlerts}
-            className="p-1.5 rounded bg-slate-900 border border-slate-800 text-slate-400 hover:text-cyan-400"
+            className="p-1.5 rounded-md bg-[#182333] border border-[#273548] text-[#91A0B4] hover:text-[#45CFFF]"
             title="Refresh Alerts"
           >
             <RefreshCw className="w-3.5 h-3.5" />
