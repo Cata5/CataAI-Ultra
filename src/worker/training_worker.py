@@ -172,7 +172,20 @@ class TrainingWorkerProcess:
         self.manual_chk_requested = False
         self.loss_ema = None
 
-        phase = payload.get("phase", "pretrain")
+        task_name = (
+            payload.get("task")
+            or payload.get("task_type")
+            or config_arch.get("default_task")
+            or "causal_lm"
+        )
+        phase = payload.get("phase")
+        if not phase:
+            if task_name in ("instruction_sft", "chat_sft", "chat", "sft"):
+                phase = "chat_sft"
+            elif task_name in ("classification", "regression", "masked_lm"):
+                phase = task_name
+            else:
+                phase = "pretrain"
         self.current_phase = phase
         dataset_source = payload.get("dataset_source", "tech_wiki_ro")
         config_arch = payload.get("config_arch", {})
@@ -279,8 +292,13 @@ class TrainingWorkerProcess:
                 max_budget_gb=float(config_opt.get("max_budget_gb", 5.0)),
             )
 
-            # Resolve Task Adapter (Causal LM, Classification, Masked LM, Regression)
-            task_name = payload.get("task") or config_arch.get("default_task") or "causal_lm"
+            # Resolve Task Adapter (Causal LM, SFT, Classification, Masked LM, Regression)
+            task_name = (
+                payload.get("task")
+                or payload.get("task_type")
+                or config_arch.get("default_task")
+                or ("instruction_sft" if phase == "chat_sft" else "causal_lm")
+            )
             task_adapter = TaskAdapterFactory.get_adapter(task_name)
             logger.info("Configured task adapter: %s (%s)", task_adapter.task_name, task_adapter.description)
 
@@ -304,6 +322,7 @@ class TrainingWorkerProcess:
         # 3. Load Checkpoint (Full State Restoration: Weights + Optimizers + Scheduler + RNG)
         start_step = 0
         total_tokens = 0
+        start_tokens = 0
         if checkpoint_to_load:
             try:
                 cand_p = Path(checkpoint_to_load)
@@ -323,6 +342,7 @@ class TrainingWorkerProcess:
                 )
                 start_step = int(load_res.get("step", 0))
                 total_tokens = int(load_res.get("tokens_seen", 0))
+                start_tokens = total_tokens
                 trainer.global_step = start_step
                 trainer.cumulative_tokens = total_tokens
                 chk_val_loss = load_res.get("val_loss")
@@ -436,6 +456,21 @@ class TrainingWorkerProcess:
             val_len = val_inputs.size(0)
 
         val_batches = max(1, min(12, val_len // max(1, batch_len)))
+
+        # Resolve target tokens and session steps per dataset/session
+        tokens_per_step = training_cfg.micro_batch_size * max(1, training_cfg.seq_len - 1) * max(1, training_cfg.grad_accum_steps)
+        if duration_mode == "epochs":
+            session_target_tokens = int(target_epochs * train_len)
+            session_steps = max(1, math.ceil(session_target_tokens / max(1, tokens_per_step)))
+            target_steps = start_step + session_steps
+            target_tokens = start_tokens + session_target_tokens
+            logger.info(
+                "Epoch mode: target %d epochs on dataset (%d tokens/epoch). Session targets: %d steps, %d tokens. Global target step: %d.",
+                target_epochs, train_len, session_steps, session_target_tokens, target_steps,
+            )
+        else:
+            session_target_tokens = max(1, session_steps * tokens_per_step)
+            target_tokens = start_tokens + session_target_tokens
 
         self.state_machine.transition_to(RunState.RUNNING)
         self._send_event(WorkerEvent(
@@ -572,8 +607,9 @@ class TrainingWorkerProcess:
                 # Step execution with micro-batch accumulation
                 try:
                     trainer.zero_grad()
+                    session_curr_step = max(0, step - start_step - 1)
                     for accum_idx in range(training_cfg.grad_accum_steps):
-                        start_pos = (step * training_cfg.grad_accum_steps + accum_idx) * batch_len
+                        start_pos = (session_curr_step * training_cfg.grad_accum_steps + accum_idx) * batch_len
                         if is_seq_tokens:
                             if start_pos + batch_len <= train_len:
                                 batch_in = train_inputs[start_pos : start_pos + batch_len].view(
@@ -839,13 +875,14 @@ class TrainingWorkerProcess:
                             if self.state_machine.can_transition_to(RunState.PAUSING):
                                 self.state_machine.transition_to(RunState.PAUSING)
 
-                epoch_val = round(total_tokens / train_len, 3) if train_len > 0 else 0.0
-                tokens_in_curr_epoch = total_tokens % train_len if train_len > 0 else 0
+                session_tokens = max(0, total_tokens - start_tokens)
+                epoch_val = round(session_tokens / train_len, 3) if train_len > 0 else 0.0
+                tokens_in_curr_epoch = session_tokens % train_len if train_len > 0 else 0
                 epoch_pct = round((tokens_in_curr_epoch / train_len) * 100, 2) if train_len > 0 else 0.0
                 session_curr_steps = max(0, step - start_step)
                 step_pct = round((session_curr_steps / session_total_steps) * 100, 2) if session_total_steps > 0 else 0.0
-                token_pct = round((total_tokens / target_tokens) * 100, 4) if target_tokens > 0 else 0.0
-                rem_tokens = max(0, target_tokens - total_tokens)
+                token_pct = round((session_tokens / session_target_tokens) * 100, 2) if session_target_tokens > 0 else 0.0
+                rem_tokens = max(0, session_target_tokens - session_tokens)
                 eta_s = int(rem_tokens / max(tok_per_sec, 1)) if tok_per_sec > 0 else 0
 
                 metric_dict = {
@@ -926,12 +963,18 @@ class TrainingWorkerProcess:
                 # Check completion targets
                 is_completed = False
                 if duration_mode == "epochs":
-                    if total_tokens >= (target_epochs * train_len):
-                        logger.info("Target epochs reached: %d epochs (%d tokens) at step %d", target_epochs, total_tokens, step)
+                    if session_tokens >= session_target_tokens or session_curr_steps >= session_total_steps:
+                        logger.info(
+                            "Target epochs reached: %d epochs (%d session tokens, %d steps) at step %d",
+                            target_epochs, session_tokens, session_curr_steps, step,
+                        )
                         is_completed = True
                 else:
-                    if step >= target_steps:
-                        logger.info("Target steps reached: step %d (target %d, session %d/%d steps)", step, target_steps, session_curr_steps, session_total_steps)
+                    if step >= target_steps or session_curr_steps >= session_total_steps:
+                        logger.info(
+                            "Target steps reached: step %d (target %d, session %d/%d steps)",
+                            step, target_steps, session_curr_steps, session_total_steps,
+                        )
                         is_completed = True
 
                 if is_completed:

@@ -37,9 +37,33 @@ class InferenceEngine:
         self.checkpoint_manager = CheckpointManager()
 
     def load_checkpoint_weights(self, checkpoint_path: str | Path) -> Dict[str, Any]:
-        """Loads weights into the single existing model instance without allocating a second model."""
+        """Loads weights into the model, dynamically creating custom architectures if saved."""
+        import json
+        chk_path = Path(checkpoint_path)
+        meta_p = chk_path.with_suffix(".json")
+        arch_cfg = None
+        if meta_p.exists():
+            try:
+                with open(meta_p, "r", encoding="utf-8") as mf:
+                    meta = json.load(mf)
+                    arch_cfg = meta.get("config_arch") or meta.get("arch")
+                    net_id = meta.get("network_id")
+                    if not arch_cfg and net_id:
+                        from ..networks.registry import NetworkRegistry
+                        arch_cfg = NetworkRegistry().get_network(net_id)
+            except Exception:
+                pass
+
+        if arch_cfg:
+            from ..training.factory import create_model_from_dict
+            try:
+                self.model = create_model_from_dict(arch_cfg).to(device=self.device)
+                self.model.eval()
+            except Exception as e:
+                logger.warning("Could not instantiate custom architecture for inference: %s", e)
+
         return self.checkpoint_manager.load_checkpoint(
-            checkpoint_path=checkpoint_path,
+            checkpoint_path=chk_path,
             model=self.model,
             device=self.device,
             restore_training_state=False,

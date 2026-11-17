@@ -502,6 +502,8 @@ class TaskAdapterFactory:
         "pretrain": CausalLMTaskAdapter(),
         "midtrain": CausalLMTaskAdapter(),
         "chat_sft": CausalLMTaskAdapter(),
+        "instruction_sft": CausalLMTaskAdapter(),
+        "sft": CausalLMTaskAdapter(),
         "persona": CausalLMTaskAdapter(),
         "masked_lm": MaskedLMTaskAdapter(),
         "seq2seq": SequenceToSequenceTaskAdapter(),

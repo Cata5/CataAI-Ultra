@@ -32,9 +32,11 @@ logger = logging.getLogger("RoCanonDashboard")
 
 
 def main():
-    venv_py = Path(__file__).resolve().parent / ".venv" / "Scripts" / "python.exe"
-    if venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
-        print(f"[Launcher] Switching to project CUDA virtualenv: {venv_py}")
+    venv_py_win = Path(__file__).resolve().parent / ".venv" / "Scripts" / "python.exe"
+    venv_py_nix = Path(__file__).resolve().parent / ".venv" / "bin" / "python"
+    venv_py = venv_py_win if venv_py_win.exists() else (venv_py_nix if venv_py_nix.exists() else None)
+    if venv_py and venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
+        print(f"[Launcher] Switching to project virtualenv: {venv_py}")
         os.execv(str(venv_py), [str(venv_py)] + sys.argv)
 
     parser = argparse.ArgumentParser(description="RoCanon-48.5M Training WebUI v2")

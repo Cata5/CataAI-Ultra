@@ -283,7 +283,9 @@ export const TrainingView: React.FC = () => {
       const payload: Record<string, any> = {
         network_id: form.selectedNetwork,
         dataset_source: form.selectedDataset,
+        task: form.selectedTask,
         task_type: form.selectedTask,
+        phase: form.selectedTask === "instruction_sft" ? "chat_sft" : (form.selectedTask === "causal_lm" ? "pretrain" : form.selectedTask),
         optimizer: form.optimizer,
         scheduler_type: form.schedulerType,
         duration_mode: form.durationMode,

@@ -160,6 +160,8 @@ class CheckpointManager:
                 "is_best": is_best,
                 "file_size_bytes": file_size,
                 "total_params": sum(p.numel() for p in model.parameters()),
+                "network_id": (training_config or {}).get("network_id"),
+                "config_arch": (training_config or {}).get("arch") or (training_config or {}).get("config_arch"),
             }
             meta_path = target_path.with_suffix(".json")
             try:

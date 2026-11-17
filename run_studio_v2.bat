@@ -4,10 +4,9 @@ cd /d "%~dp0"
 
 echo =========================================================================
 echo   LLM Maker — NEURAL RESEARCH WORKSTATION
-echo   Active Model: RoCanon-48.5M Causal LM
 echo   Frontend: Next.js App Router (http://localhost:8080)
 echo   Backend : PyTorch CUDA Engine (http://localhost:8081)
-echo   Compute : NVIDIA RTX 3060 Laptop (6GB VRAM)
+echo   Compute : Dynamic GPU / CUDA VRAM Protection
 echo =========================================================================
 
 set PYTHON_EXE=.\.venv\Scripts\python.exe

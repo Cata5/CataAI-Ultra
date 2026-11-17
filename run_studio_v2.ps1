@@ -1,13 +1,13 @@
-# RoCanon-48.5M Sci-Fi Research Workstation Launcher (PowerShell)
+﻿# RoCanon-48.5M Sci-Fi Research Workstation Launcher (PowerShell)
 $ErrorActionPreference = "Stop"
 
 Set-Location -Path $PSScriptRoot
 
 Write-Host "=========================================================================" -ForegroundColor Cyan
-Write-Host "  RoCanon-48.5M SCI-FI RESEARCH WORKSTATION v2" -ForegroundColor Cyan
+Write-Host "  LLM Maker — NEURAL RESEARCH WORKSTATION" -ForegroundColor Cyan
 Write-Host "  Frontend: Next.js App Router (http://localhost:8080)" -ForegroundColor Green
 Write-Host "  Backend : PyTorch CUDA Engine (http://localhost:8081)" -ForegroundColor Yellow
-Write-Host "  Compute : NVIDIA RTX 3060 Laptop (6GB VRAM)" -ForegroundColor DarkCyan
+Write-Host "  Compute : Dynamic GPU / CUDA VRAM Protection" -ForegroundColor DarkCyan
 Write-Host "=========================================================================" -ForegroundColor Cyan
 
 $PythonExe = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
