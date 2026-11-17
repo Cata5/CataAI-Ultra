@@ -81,8 +81,8 @@ chmod +x setup.sh run_studio.sh
 
 #### 1. Clone the repository
 ```bash
-git clone https://github.com/your-username/llm-maker.git
-cd llm-maker
+git clone https://github.com/Cata5/CataAI-Ultra.git
+cd CataAI-Ultra
 ```
 
 #### 2. Create Python virtual environment
