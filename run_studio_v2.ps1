@@ -1,4 +1,4 @@
-﻿# RoCanon-48.5M Sci-Fi Research Workstation Launcher (PowerShell)
+# RoCanon-48.5M Sci-Fi Research Workstation Launcher (PowerShell)
 $ErrorActionPreference = "Stop"
 
 Set-Location -Path $PSScriptRoot
