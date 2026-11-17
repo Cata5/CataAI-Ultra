@@ -140,7 +140,14 @@ export const RunsView: React.FC = () => {
         <div className="flex items-center gap-2">
           <Bookmark className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
           <div className="flex flex-col">
-            <span className="font-bold text-[#ECF3FC]">{item.filename}</span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold text-[#ECF3FC]">{item.filename}</span>
+              {item.run_id && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#45CFFF]/10 text-[#45CFFF] border border-[#45CFFF]/30 font-mono">
+                  {item.run_id}
+                </span>
+              )}
+            </div>
             <span className="text-[10px] text-[#5E7188] truncate max-w-xs">{item.path}</span>
           </div>
         </div>

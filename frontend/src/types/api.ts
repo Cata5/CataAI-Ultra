@@ -172,6 +172,7 @@ export interface RunItem {
 export interface CheckpointItem {
   id: string;
   filename: string;
+  run_id?: string;
   step: number;
   val_loss?: number | null;
   size_mb: number;

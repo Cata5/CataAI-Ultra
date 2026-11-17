@@ -1,0 +1,344 @@
+{
+  "id": "custom_net_751696",
+  "name": "Custom Architecture (Scratch)",
+  "task_type": "causal_lm",
+  "architecture_type": "custom",
+  "vocab_size": 12288,
+  "d_model": 384,
+  "n_layers": 12,
+  "n_q": 8,
+  "n_kv": 4,
+  "d_ff": 1024,
+  "kernel_size": 4,
+  "tied_embeddings": false,
+  "layers": [
+    {
+      "id": "node-1794853753302",
+      "type": "Embedding",
+      "label": "Token Embedding",
+      "config": {
+        "vocab_size": 12288,
+        "d_model": 512
+      },
+      "position": {
+        "x": 250,
+        "y": 110
+      }
+    },
+    {
+      "id": "node-1794853766431",
+      "type": "RMSNorm",
+      "label": "RMSNorm",
+      "config": {
+        "d_model": 512,
+        "eps": 1e-06
+      },
+      "position": {
+        "x": 507.11477151966,
+        "y": 205.1307120085016
+      }
+    },
+    {
+      "id": "node-1794853772927",
+      "type": "MQAAttention",
+      "label": "Multi-Query Attention (MQA)",
+      "config": {
+        "d_model": 512,
+        "n_q": 8,
+        "n_kv": 1
+      },
+      "position": {
+        "x": -1.5387885228480513,
+        "y": 294.06588735387885
+      }
+    },
+    {
+      "id": "node-1794853775655",
+      "type": "SwiGLU",
+      "label": "SwiGLU FFN",
+      "config": {
+        "d_model": 512,
+        "d_ff": 1280
+      },
+      "position": {
+        "x": 251.23910733262488,
+        "y": 461.0648246546227
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "node-1794853753302",
+      "type": "archNode",
+      "position": {
+        "x": 250,
+        "y": 110
+      },
+      "data": {
+        "label": "Token Embedding",
+        "category": "embedding",
+        "layerType": "Embedding",
+        "config": {
+          "vocab_size": 12288,
+          "d_model": 512
+        },
+        "inputShape": "[B, S, D]",
+        "outputShape": "[B, S, D]",
+        "params": 0,
+        "isValid": true
+      },
+      "measured": {
+        "width": 200,
+        "height": 103
+      },
+      "selected": false
+    },
+    {
+      "id": "node-1794853766431",
+      "type": "archNode",
+      "position": {
+        "x": 507.11477151966,
+        "y": 205.1307120085016
+      },
+      "data": {
+        "label": "RMSNorm",
+        "category": "norm",
+        "layerType": "RMSNorm",
+        "config": {
+          "d_model": 512,
+          "eps": 1e-06
+        },
+        "inputShape": "[B, S, D]",
+        "outputShape": "[B, S, D]",
+        "params": 0,
+        "isValid": true
+      },
+      "measured": {
+        "width": 200,
+        "height": 103
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "node-1794853772927",
+      "type": "archNode",
+      "position": {
+        "x": -1.5387885228480513,
+        "y": 294.06588735387885
+      },
+      "data": {
+        "label": "Multi-Query Attention (MQA)",
+        "category": "attention",
+        "layerType": "MQAAttention",
+        "config": {
+          "d_model": 512,
+          "n_q": 8,
+          "n_kv": 1
+        },
+        "inputShape": "[B, S, D]",
+        "outputShape": "[B, S, D]",
+        "params": 0,
+        "isValid": true
+      },
+      "measured": {
+        "width": 272,
+        "height": 103
+      },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "node-1794853775655",
+      "type": "archNode",
+      "position": {
+        "x": 251.23910733262488,
+        "y": 461.0648246546227
+      },
+      "data": {
+        "label": "SwiGLU FFN",
+        "category": "feedforward",
+        "layerType": "SwiGLU",
+        "config": {
+          "d_model": 512,
+          "d_ff": 1280
+        },
+        "inputShape": "[B, S, D]",
+        "outputShape": "[B, S, D]",
+        "params": 0,
+        "isValid": true
+      },
+      "measured": {
+        "width": 200,
+        "height": 103
+      },
+      "selected": false,
+      "dragging": false
+    }
+  ],
+  "edges": [
+    {
+      "source": "node-1794853772927",
+      "target": "node-1794853775655",
+      "animated": true,
+      "id": "xy-edge__node-1794853772927-node-1794853775655"
+    },
+    {
+      "source": "node-1794853766431",
+      "target": "node-1794853772927",
+      "animated": true,
+      "id": "xy-edge__node-1794853766431-node-1794853772927"
+    },
+    {
+      "source": "node-1794853753302",
+      "target": "node-1794853766431",
+      "animated": true,
+      "id": "xy-edge__node-1794853753302-node-1794853766431"
+    }
+  ],
+  "parameters": {
+    "total_parameters": 24192384,
+    "trainable_parameters": 24192384,
+    "non_embedding_parameters": 19473792,
+    "embedding_parameters": 4718592,
+    "attention_parameters": 5308416,
+    "ffn_parameters": 14155776,
+    "conv_parameters": 0,
+    "norm_parameters": 9600,
+    "output_head_parameters": 0,
+    "tied_embeddings": true,
+    "layer_count": 12,
+    "layers": [
+      {
+        "layer_index": 0,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 1,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 2,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 3,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 4,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 5,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 6,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 7,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 8,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 9,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 10,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      },
+      {
+        "layer_index": 11,
+        "attention_params": 442368,
+        "ffn_params": 1179648,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 768,
+        "total_layer_params": 1622784
+      }
+    ],
+    "total_params": 24192384,
+    "trainable_params": 24192384
+  },
+  "memory": {
+    "parameter_count": 24192384,
+    "precision": "bfloat16",
+    "model_weights_mb": 46.1,
+    "gradients_mb": 92.3,
+    "optimizer_states_mb": 110.3,
+    "activations_mb": 153,
+    "workspace_headroom_mb": 350,
+    "total_training_vram_mb": 751.8,
+    "total_training_vram_gb": 0.73,
+    "inference_vram_mb": 276.7,
+    "inference_vram_gb": 0.27,
+    "storage_file_size_mb": 46.1,
+    "hardware_target": "NVIDIA GeForce RTX 3060 Laptop GPU (6.0GB)",
+    "safety_status": "SAFE",
+    "recommendation": "Fits comfortably on NVIDIA GeForce RTX 3060 Laptop GPU (6.0GB) with active safety margin (0.73 GB <= 4.8 GB safe ceiling)."
+  },
+  "total_parameters": 24192384,
+  "updated_at": 1794853809.3432765,
+  "created_at": 1794853809.3432772
+}

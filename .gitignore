@@ -18,8 +18,8 @@ htmlcov/
 .backup_pre_remediation/
 
 # Local databases and runtime checkpoints
-checkpoints/
-data/
+/checkpoints/
+/data/
 *.db
 *.sqlite
 *.sqlite3

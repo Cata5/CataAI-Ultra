@@ -702,8 +702,8 @@ export const TrainingView: React.FC = () => {
               >
                 <option value="">Start Fresh (No checkpoint restore)</option>
                 {checkpoints.map((c) => (
-                  <option key={c.id} value={c.path || c.filename}>
-                    {c.filename} (Step {c.step}
+                  <option key={c.id || c.path || c.filename} value={c.path || c.filename}>
+                    {c.filename} {c.run_id ? `[${c.run_id}]` : ""} (Step {c.step}
                     {c.val_loss ? ` | Val Loss: ${c.val_loss.toFixed(4)}` : ""})
                   </option>
                 ))}
