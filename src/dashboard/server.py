@@ -793,9 +793,11 @@ async def handle_get_dataset_info(request: web.Request) -> web.Response:
     p = Path(engine.KNOWN_DATASETS.get(src, src))
     exists = p.exists()
     sub_tag = "_full"
+    cache_bin = engine.cache_dir / f"{p.stem}{sub_tag}_tokens.bin"
     cache_file = engine.cache_dir / f"{p.stem}{sub_tag}_tokens.pt"
-    is_cached = cache_file.exists()
-    cache_size_mb = round(cache_file.stat().st_size / (1024 * 1024), 2) if is_cached else 0
+    is_cached = cache_bin.exists() or cache_file.exists()
+    target_cache = cache_bin if cache_bin.exists() else cache_file
+    cache_size_mb = round(target_cache.stat().st_size / (1024 * 1024), 2) if is_cached else 0
     return web.json_response({
         "name": p.name if exists else src,
         "exists": exists,
@@ -803,7 +805,7 @@ async def handle_get_dataset_info(request: web.Request) -> web.Response:
         "size_mb": round(p.stat().st_size / (1024 * 1024), 2) if exists else 0,
         "chars": p.stat().st_size if exists else 0,
         "cached": is_cached,
-        "cache_filename": cache_file.name if is_cached else "None",
+        "cache_filename": target_cache.name if is_cached else "None",
         "cache_size_mb": cache_size_mb,
         "preview": "Pre-tokenized dataset cache ready" if is_cached else ("Dataset ready" if exists else "File not found"),
         "total_tokens": 48419639 if is_cached else STATE.dataset_total_tokens,

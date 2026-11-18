@@ -34,6 +34,7 @@ import {
   formatNumber,
   formatDuration,
   formatStepLatency,
+  formatParamCount,
 } from "@/lib/utils";
 
 export interface TrainingFormConfig {
@@ -621,11 +622,14 @@ export const TrainingView: React.FC = () => {
                     disabled={isRunning || isPaused}
                     className="flex-1 bg-[#0E1420] border border-[#273548] rounded px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF] truncate"
                   >
-                    {networks.map((n) => (
-                      <option key={n.id} value={n.id}>
-                        {n.name} ({((n.total_params || 48531968) / 1_000_000).toFixed(1)}M)
-                      </option>
-                    ))}
+                    {networks.map((n) => {
+                      const pCount = n.total_params ?? (n as any).total_parameters;
+                      return (
+                        <option key={n.id} value={n.id}>
+                          {n.name} {pCount ? `(${formatParamCount(pCount)})` : ""}
+                        </option>
+                      );
+                    })}
                   </select>
                   <a
                     href={`/studio?network=${encodeURIComponent(form.selectedNetwork)}`}

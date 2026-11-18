@@ -91,8 +91,21 @@ def calculate_analytical_parameters(
     )
     static_mib = static_bytes / (1024 * 1024)
 
+    # Dynamic hardware ceiling calculation (85% of detected VRAM or 70% of system RAM)
+    safe_vram_ceiling = 4.8
+    try:
+        from ..telemetry.hardware import HardwareMonitor
+        tele = HardwareMonitor().read_telemetry()
+        if tele.total_vram_mb and tele.total_vram_mb > 0:
+            safe_vram_ceiling = round((tele.total_vram_mb / 1024.0) * 0.85, 2)
+        elif tele.system_ram_total_mb and tele.system_ram_total_mb > 0:
+            safe_vram_ceiling = round((tele.system_ram_total_mb / 1024.0) * 0.70, 2)
+    except Exception:
+        pass
+
     return {
         "total_parameters": total_params,
+        "total_params": total_params,
         "backbone_parameters": backbone_params,
         "embedding_parameters": emb_params,
         "parameters_per_layer": params_per_block,
@@ -102,8 +115,9 @@ def calculate_analytical_parameters(
         "adamw_percentage": round((adamw_total / total_params) * 100, 2),
         "static_memory_mib": round(static_mib, 1),
         "static_memory_gb": round(static_mib / 1024, 2),
-        "fits_target_hardware": (static_mib / 1024) < 4.8,
-        "fits_rtx_3060": (static_mib / 1024) < 4.8,
+        "safe_vram_ceiling_gb": safe_vram_ceiling,
+        "fits_target_hardware": (static_mib / 1024) <= safe_vram_ceiling,
+        "fits_rtx_3060": (static_mib / 1024) <= 4.8,
     }
 
 

@@ -34,10 +34,10 @@
 - **Hybrid Muon Optimizer**: Implements Moonshot-style Muon using quintic Newton-Schulz orthogonalization on 2D weight matrices, delivering faster loss convergence per token compared to standard AdamW.
 - **AdamW Integration**: Automatically splits 1D parameters (RMSNorm, bias, embedding tables) to AdamW while routing attention and feedforward matrices to Muon.
 
-### 5. Decoupled Web Workstation
-- **Backend**: Async Python control plane (`aiohttp`, PyTorch multiprocessing, SQLite WAL journal).
-- **Frontend**: Next.js 14 App Router, Tailwind CSS, Lucide icons, and real-time Server-Sent Events (SSE) streaming metrics and loss curves.
-- **Interactive Evaluation Lab**: Built-in inference playground with adjustable temperature, top-k, top-p, repetition penalty, and real-time token throughput benchmarking.
+### 5. Dual-Interface Web Platform
+LLM Maker offers two complementary user interfaces to fit any development workflow:
+- **Primary Workstation (Next.js 14 / TypeScript, Port 8080)**: The complete professional Sci-Fi workstation. Features the visual node-based network editor, interactive computation graph, parameter estimation cards, real-time loss charts, evaluation laboratory, and multi-phase training cockpit.
+- **Standalone Zero-Dependency Fallback (aiohttp Inline UI, Port 8081)**: A lightweight, single-page dark UI embedded directly in `src/dashboard/ui.py`. Runs instantly out of the box when `python dashboard.py` is executed—requiring **zero Node.js or npm installation**. Ideal for remote SSH tunnels, lightweight servers, and headless testing environments.
 
 ---
 
@@ -115,7 +115,9 @@ cd ..
 ```
 
 #### 5. Run the Platform
-In two separate terminals (or using the launch scripts):
+
+**Mode 1: Primary Workstation (Full Next.js Studio - Recommended)**
+In two separate terminals (or using `run_studio_v2.bat` / `./run_studio.sh`):
 ```bash
 # Terminal 1: Python ML Backend (Port 8081)
 python dashboard.py --port 8081
@@ -125,6 +127,13 @@ cd frontend
 npm run start -- -p 8080
 ```
 Open **[http://localhost:8080](http://localhost:8080)** in your browser.
+
+**Mode 2: Standalone Fallback UI (Zero Node.js / Zero npm Dependency)**
+If you do not have Node.js installed or are running in a lightweight environment, simply start the backend:
+```bash
+python dashboard.py --port 8081
+```
+Open **[http://localhost:8081](http://localhost:8081)** directly in your browser. The embedded dashboard provides full control over training, live loss telemetry, dataset inspection, and checkpoint management with zero setup friction.
 
 ---
 

@@ -210,6 +210,7 @@ export interface NetworkConfig {
   d_ff?: number;
   kernel_size?: number;
   total_params?: number;
+  total_parameters?: number;
   parameters?: {
     total_params: number;
     trainable_params: number;

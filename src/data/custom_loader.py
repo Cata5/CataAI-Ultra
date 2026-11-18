@@ -12,8 +12,9 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
+import numpy as np
 import torch
 
 from ..tokenizer.tokenizer import RoCanonTokenizer
@@ -178,14 +179,28 @@ class CustomDatasetEngine:
         max_samples: Optional[int] = None,
         progress_callback: Optional[Callable[[str, float], None]] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        """Tokenizes continuous pretraining text into packed token array using multi-threaded Rust batch encoding."""
+        """Tokenizes continuous pretraining text into packed token array using multi-threaded Rust batch encoding with streaming memmap support."""
         sub_tag = f"_sub{max_samples}" if max_samples else "_full"
+        cache_bin = self.cache_dir / f"{file_path.stem}{sub_tag}_tokens.bin"
         cache_file = self.cache_dir / f"{file_path.stem}{sub_tag}_tokens.pt"
+
+        # 1. Zero-copy binary memmap check (< 50ms load time, zero RAM consumption)
+        if cache_bin.exists():
+            print(f"[DatasetEngine] Zero-copy loading binary memmap shard: {cache_bin.name}")
+            if progress_callback:
+                progress_callback(f"Zero-copy loading memmap shard: {cache_bin.name}...", 50.0)
+            mmap_arr = np.memmap(cache_bin, dtype=np.int64, mode="r")
+            return torch.from_numpy(mmap_arr).to(device=device), None
+
+        # 2. PyTorch .pt cache fallback (using mmap where supported)
         if cache_file.exists():
             print(f"[DatasetEngine] Loading pre-tokenized cache: {cache_file.name}")
             if progress_callback:
                 progress_callback(f"Loading cached token array: {cache_file.name}...", 50.0)
-            data = torch.load(cache_file, map_location=device)
+            try:
+                data = torch.load(cache_file, map_location=device, mmap=True, weights_only=True)
+            except Exception:
+                data = torch.load(cache_file, map_location=device)
             return data["input_ids"], None
 
         # Read text file
@@ -248,8 +263,12 @@ class CustomDatasetEngine:
         if progress_callback:
             progress_callback(f"Saving {len(all_ids):,} tokens to cache...", 95.0)
 
-        input_tensor = torch.tensor(all_ids, dtype=torch.long, device=device)
-        print(f"[DatasetEngine] Tokenized {len(input_tensor):,} tokens. Saving cache to {cache_file.name}...")
+        # Save binary memmap shard for zero-copy OS paging and low RAM footprint
+        token_arr = np.array(all_ids, dtype=np.int64)
+        token_arr.tofile(cache_bin)
+
+        input_tensor = torch.from_numpy(token_arr).to(device=device)
+        print(f"[DatasetEngine] Tokenized {len(input_tensor):,} tokens. Saved memmap shard {cache_bin.name} and cache {cache_file.name}...")
         torch.save({"input_ids": input_tensor.cpu()}, cache_file)
 
         return input_tensor, None
@@ -267,12 +286,28 @@ class CustomDatasetEngine:
         Assistant tokens -> label: token_id
         """
         sub_tag = f"_sub{max_samples}" if max_samples else "_full"
+        cache_bin_in = self.cache_dir / f"{file_path.stem}{sub_tag}_sft_in.bin"
+        cache_bin_lbl = self.cache_dir / f"{file_path.stem}{sub_tag}_sft_lbl.bin"
         cache_file = self.cache_dir / f"{file_path.stem}{sub_tag}_sft.pt"
+
+        # 1. Zero-copy binary memmap check
+        if cache_bin_in.exists() and cache_bin_lbl.exists():
+            print(f"[DatasetEngine] Zero-copy loading binary SFT memmap shards: {cache_bin_in.name}")
+            if progress_callback:
+                progress_callback(f"Zero-copy loading SFT memmap shards...", 50.0)
+            in_arr = np.memmap(cache_bin_in, dtype=np.int64, mode="r")
+            lbl_arr = np.memmap(cache_bin_lbl, dtype=np.int64, mode="r")
+            return torch.from_numpy(in_arr).to(device=device), torch.from_numpy(lbl_arr).to(device=device)
+
+        # 2. PyTorch .pt cache fallback (with mmap)
         if cache_file.exists():
             print(f"[DatasetEngine] Loading pre-tokenized chat cache: {cache_file.name}")
             if progress_callback:
                 progress_callback(f"Loading cached chat SFT array: {cache_file.name}...", 50.0)
-            data = torch.load(cache_file, map_location=device)
+            try:
+                data = torch.load(cache_file, map_location=device, mmap=True, weights_only=True)
+            except Exception:
+                data = torch.load(cache_file, map_location=device)
             return data["input_ids"], data["labels"]
 
         if progress_callback:
@@ -369,10 +404,16 @@ class CustomDatasetEngine:
         if progress_callback:
             progress_callback(f"Saving {len(all_input_ids):,} SFT tokens to cache...", 95.0)
 
-        input_tensor = torch.tensor(all_input_ids, dtype=torch.long, device=device)
-        labels_tensor = torch.tensor(all_labels, dtype=torch.long, device=device)
+        # Save binary memmap shards for zero-copy OS paging
+        in_arr = np.array(all_input_ids, dtype=np.int64)
+        lbl_arr = np.array(all_labels, dtype=np.int64)
+        in_arr.tofile(cache_bin_in)
+        lbl_arr.tofile(cache_bin_lbl)
 
-        print(f"[DatasetEngine] Tokenized {len(input_tensor):,} SFT tokens. Saving cache to {cache_file.name}...")
+        input_tensor = torch.from_numpy(in_arr).to(device=device)
+        labels_tensor = torch.from_numpy(lbl_arr).to(device=device)
+
+        print(f"[DatasetEngine] Tokenized {len(input_tensor):,} SFT tokens. Saved memmap shards and cache {cache_file.name}...")
         torch.save({"input_ids": input_tensor.cpu(), "labels": labels_tensor.cpu()}, cache_file)
 
         return input_tensor, labels_tensor

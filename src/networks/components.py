@@ -219,13 +219,13 @@ class GroupedQueryAttention(nn.Module):
             k = k.repeat_interleave(repeat_factor, dim=1)
             v = v.repeat_interleave(repeat_factor, dim=1)
 
-        # PyTorch SDPA (scaled dot product attention)
-        is_causal = self.causal if context is None else False
+        # PyTorch SDPA (scaled dot product attention with FlashAttention-2 / MemEfficient fallback)
+        use_causal = (self.causal and context is None and mask is None)
         attn_out = F.scaled_dot_product_attention(
             q, k, v,
-            attn_mask=mask,
+            attn_mask=mask if not use_causal else None,
             dropout_p=self.dropout_p if self.training else 0.0,
-            is_causal=is_causal,
+            is_causal=use_causal,
         )
 
         attn_out = attn_out.transpose(1, 2).contiguous().view(b, s, self.n_q * self.d_h)

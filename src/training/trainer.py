@@ -72,11 +72,21 @@ class Trainer:
         self.config = config or TrainingConfig()
         self.task_adapter = task_adapter or TaskAdapterFactory.get_adapter("causal_lm")
 
-        # Determine target device
+        # Determine target device with cross-platform fallback (CUDA -> MPS -> CPU)
         if self.config.device is not None:
             self.device = torch.device(self.config.device)
         else:
-            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda")
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                self.device = torch.device("mps")
+            else:
+                self.device = torch.device("cpu")
+
+        # Configure PyTorch SDPA / FlashAttention-2 kernels
+        if self.device.type == "cuda":
+            from ..model.architecture import configure_sdpa_kernels
+            configure_sdpa_kernels(enable_flash=True, enable_mem_efficient=True, enable_math=True)
 
         # Move model to target device (master weights kept in FP32)
         self.model = model.to(device=self.device, dtype=torch.float32)

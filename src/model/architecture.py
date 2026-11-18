@@ -23,6 +23,30 @@ import torch.nn.functional as F
 from .canon import CausalDepthwiseConv1d
 
 
+def configure_sdpa_kernels(
+    enable_flash: bool = True,
+    enable_mem_efficient: bool = True,
+    enable_math: bool = True,
+) -> dict[str, bool]:
+    """
+    Explicitly configures PyTorch Scaled Dot-Product Attention (SDPA) backends,
+    enabling FlashAttention-2 and Cutlass Memory-Efficient kernels on CUDA
+    while ensuring safe math fallback when needed.
+    """
+    status: dict[str, bool] = {"flash": False, "mem_efficient": False, "math": True}
+    if torch.cuda.is_available():
+        if hasattr(torch.backends.cuda, "enable_flash_sdp"):
+            torch.backends.cuda.enable_flash_sdp(enable_flash)
+            status["flash"] = bool(torch.backends.cuda.flash_sdp_enabled())
+        if hasattr(torch.backends.cuda, "enable_mem_efficient_sdp"):
+            torch.backends.cuda.enable_mem_efficient_sdp(enable_mem_efficient)
+            status["mem_efficient"] = bool(torch.backends.cuda.mem_efficient_sdp_enabled())
+        if hasattr(torch.backends.cuda, "enable_math_sdp"):
+            torch.backends.cuda.enable_math_sdp(enable_math)
+            status["math"] = bool(torch.backends.cuda.math_sdp_enabled())
+    return status
+
+
 @dataclass
 class RoCanonConfig:
     """
