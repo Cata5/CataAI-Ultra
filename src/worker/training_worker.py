@@ -279,6 +279,7 @@ class TrainingWorkerProcess:
                 plateau_tokens=int(config_opt.get("plateau_tokens", 5_000_000_000)),
                 total_tokens=int(config_opt.get("total_tokens", 6_800_000_000)),
                 min_lr_ratio=float(config_opt.get("min_lr_ratio", 0.1)),
+                min_lr_floor=float(config_opt.get("min_lr_floor", config_opt.get("min_lr", 0.0))),
                 decay_style=str(config_opt.get("decay_style", "cosine")),
             )
 
@@ -786,6 +787,16 @@ class TrainingWorkerProcess:
                             run_id=run_id,
                             is_best=True,
                         )
+                        try:
+                            from ..notifications.webhook import get_notifier
+                            get_notifier(db=self.db).notify_best_checkpoint(
+                                step=step,
+                                val_loss=float(val_loss),
+                                checkpoint_path="best_model.pt",
+                                run_id=run_id,
+                            )
+                        except Exception as n_err:
+                            logger.debug("Webhook notification error: %s", n_err)
                     elif save_freq > 0 and step % save_freq == 0:
                         self.checkpoint_manager.save_checkpoint(
                             model=model,
@@ -988,6 +999,17 @@ class TrainingWorkerProcess:
                         run_id=run_id,
                         filename_prefix="final_phase_completed",
                     )
+                    try:
+                        from ..notifications.webhook import get_notifier
+                        get_notifier(db=self.db).notify_run_completed(
+                            run_id=run_id,
+                            step=step,
+                            final_loss=float(val_loss) if val_loss is not None else None,
+                            tokens_seen=total_tokens,
+                        )
+                    except Exception as n_err:
+                        logger.debug("Webhook notification error: %s", n_err)
+
                     self.state_machine.transition_to(RunState.COMPLETED)
                     self._send_event(WorkerEvent(
                         event_type=EventType.RUN_COMPLETED,

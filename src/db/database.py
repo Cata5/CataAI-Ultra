@@ -441,6 +441,19 @@ class StudioDatabase:
                 (run_id, level, category, message, step, now),
             )
 
+        if level.upper() in ("WARNING", "CRITICAL", "ERROR"):
+            try:
+                from ..notifications.webhook import get_notifier
+                get_notifier(db=self).notify_alert(
+                    category=category,
+                    level=level,
+                    message=message,
+                    step=step,
+                    run_id=run_id,
+                )
+            except Exception:
+                pass
+
     def list_alerts(self, run_id: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
         with self._lock, self._get_connection() as conn:
             if run_id:

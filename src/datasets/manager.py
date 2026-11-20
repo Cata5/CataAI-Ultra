@@ -197,3 +197,113 @@ class DatasetManager:
                 u["total_tokens"] = u["token_count"]
         return presets + uploaded
 
+    def curate_dataset(
+        self,
+        dataset_id: str,
+        jaccard_threshold: float = 0.80,
+        lid_threshold: float = 0.80,
+        target_languages: tuple[str, ...] = ("ron", "eng", "ro", "en"),
+        save_curated: bool = True,
+        max_samples: Optional[int] = 5000,
+    ) -> Dict[str, Any]:
+        """Runs quality evaluation heuristics, LID, and MinHash LSH deduplication on a dataset."""
+        from ..data.curation import TextCurator
+
+        ds_info = self.get_dataset_details(dataset_id)
+        if not ds_info or not ds_info.get("file_path"):
+            raise FileNotFoundError(f"Dataset '{dataset_id}' not found or has no valid file path.")
+
+        path = Path(ds_info["file_path"])
+        if not path.exists():
+            raise FileNotFoundError(f"Dataset file does not exist on disk: {path}")
+
+        curator = TextCurator(
+            lid_threshold=lid_threshold,
+            target_languages=target_languages,
+            jaccard_threshold=jaccard_threshold,
+            num_perm=128,
+        )
+
+        total_read = 0
+        quality_rejected = 0
+        lang_rejected = 0
+        duplicates_purged = 0
+        accepted_samples: List[str] = []
+
+        is_jsonl = path.suffix.lower() == ".jsonl"
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                raw_sample = line.strip()
+                if not raw_sample:
+                    continue
+                total_read += 1
+
+                # Extract text field if jsonl
+                sample_text = raw_sample
+                if is_jsonl:
+                    try:
+                        obj = json.loads(raw_sample)
+                        sample_text = obj.get("text") or obj.get("output") or obj.get("instruction") or raw_sample
+                    except Exception:
+                        pass
+
+                # 1. Quality heuristic check
+                if not curator.filter_quality(sample_text):
+                    quality_rejected += 1
+                    continue
+
+                # 2. Language identification
+                if not curator.filter_language(sample_text):
+                    lang_rejected += 1
+                    continue
+
+                accepted_samples.append(raw_sample)
+                if max_samples and total_read >= max_samples:
+                    break
+
+        # 3. MinHash LSH deduplication
+        deduped = list(curator.deduplicate_minhash(accepted_samples))
+        duplicates_purged = len(accepted_samples) - len(deduped)
+
+        curated_file_path = None
+        curated_dataset_id = None
+        if save_curated and deduped:
+            out_stem = f"{path.stem}_curated"
+            curated_file_path = self.upload_dir / f"{out_stem}{path.suffix}"
+            with open(curated_file_path, "w", encoding="utf-8") as out_f:
+                for s in deduped:
+                    out_f.write(s + "\n")
+
+            # Register curated dataset in DB
+            curated_dataset_id = f"{dataset_id}_curated"
+            try:
+                self.register_uploaded_file(curated_file_path, name=f"{ds_info.get('name', dataset_id)} (Curated)")
+            except Exception as reg_e:
+                logger.debug("Curated dataset auto-registration: %s", reg_e)
+
+        pass_rate = round((len(deduped) / max(1, total_read)) * 100, 2)
+        dup_rate = round((duplicates_purged / max(1, len(accepted_samples))) * 100, 2)
+
+        return {
+            "dataset_id": dataset_id,
+            "total_samples_analyzed": total_read,
+            "total_samples": total_read,
+            "accepted_samples": len(deduped),
+            "curated_samples": len(deduped),
+            "quality_rejected": quality_rejected,
+            "language_rejected": lang_rejected,
+            "low_lid_dropped": lang_rejected,
+            "duplicates_purged": duplicates_purged,
+            "exact_duplicates_dropped": duplicates_purged,
+            "minhash_duplicates_dropped": duplicates_purged,
+            "pii_masked_count": 0,
+            "quality_pass_rate_pct": pass_rate,
+            "retention_rate": pass_rate,
+            "duplicate_rate_pct": dup_rate,
+            "jaccard_threshold": jaccard_threshold,
+            "lid_threshold": lid_threshold,
+            "curated_file_path": str(curated_file_path) if curated_file_path else None,
+            "curated_dataset_id": curated_dataset_id,
+            "preview_samples": deduped[:5],
+        }
+

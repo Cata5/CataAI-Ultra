@@ -443,6 +443,47 @@ async def handle_tokenize_dataset(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Tokenization error: {e}"}, status=500)
 
 
+async def handle_curate_dataset(request: web.Request) -> web.Response:
+    ds_id = request.match_info.get("id")
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    if not ds_id:
+        ds_id = data.get("id") or data.get("dataset_id")
+    if not ds_id:
+        return web.json_response({"error": "No dataset_id provided"}, status=400)
+
+    try:
+        score_res = DATASET_MGR.curate_dataset(
+            dataset_id=ds_id,
+            jaccard_threshold=float(data.get("jaccard_threshold", 0.80)),
+            lid_threshold=float(data.get("lid_threshold", 0.80)),
+            save_curated=bool(data.get("save_curated", True)),
+            max_samples=int(data.get("max_samples", 5000)) if data.get("max_samples") else None,
+        )
+        return web.json_response(score_res)
+    except Exception as e:
+        logger.exception("Dataset curation failed for %s: %s", ds_id, e)
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_test_notification(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    from ..notifications.webhook import get_notifier
+    notifier = get_notifier(db=DB)
+    res = notifier.test_notification(
+        discord_url=data.get("discord_webhook_url"),
+        telegram_token=data.get("telegram_bot_token"),
+        telegram_chat_id=data.get("telegram_chat_id"),
+    )
+    return web.json_response(res)
+
+
 # ---------------- Evaluation Lab ----------------
 
 async def handle_eval_generate(request: web.Request) -> web.Response:
@@ -497,6 +538,85 @@ async def handle_eval_generate(request: web.Request) -> web.Response:
         res["checkpoint_val_loss"] = loaded_chk_meta.get("val_loss")
 
     return web.json_response(res)
+
+
+async def handle_eval_stream(request: web.Request) -> web.StreamResponse:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    prompt = data.get("prompt", "")
+    chat_mode = bool(data.get("chat_mode", False))
+    max_tokens = int(data.get("max_new_tokens", 128))
+    temp = float(data.get("temperature", 0.7))
+    top_p = float(data.get("top_p", 0.9))
+    top_k = int(data.get("top_k", 50))
+    rep_pen = float(data.get("repetition_penalty", 1.15))
+    no_repeat_ngram = int(data.get("no_repeat_ngram_size", 3))
+    checkpoint_req = data.get("checkpoint") or data.get("checkpoint_path")
+
+    is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)
+    engine = get_inference_engine(force_cpu=is_training_active)
+
+    if checkpoint_req:
+        chk_path = Path(checkpoint_req)
+        if not chk_path.exists():
+            chk_path = Path("checkpoints") / checkpoint_req
+        if chk_path.exists():
+            try:
+                engine.load_checkpoint_weights(chk_path)
+            except Exception as e:
+                logger.error("Failed to load checkpoint %s for stream inference: %s", chk_path, e)
+                return web.json_response({"error": f"Failed to load checkpoint: {e}"}, status=400)
+
+    response = web.StreamResponse(
+        status=200,
+        reason="OK",
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+        },
+    )
+    await response.prepare(request)
+
+    t0 = time.time()
+    tok_count = 0
+    try:
+        for chunk in engine.stream_generate(
+            prompt=prompt,
+            max_new_tokens=max_tokens,
+            temperature=temp,
+            top_p=top_p,
+            top_k=top_k,
+            repetition_penalty=rep_pen,
+            no_repeat_ngram_size=no_repeat_ngram,
+            chat_mode=chat_mode,
+        ):
+            tok_count += 1
+            payload = json.dumps({"token": chunk, "done": False, "index": tok_count})
+            await response.write(f"data: {payload}\n\n".encode("utf-8"))
+
+        dt = time.time() - t0
+        tok_per_sec = round(tok_count / max(1e-5, dt), 1)
+        final_payload = json.dumps({
+            "done": True,
+            "tokens_generated": tok_count,
+            "generation_time_sec": round(dt, 3),
+            "tokens_per_sec": tok_per_sec,
+            "device": str(engine.device),
+        })
+        await response.write(f"data: {final_payload}\n\n".encode("utf-8"))
+    except Exception as e:
+        logger.error("Streaming generation error: %s", e)
+        err_payload = json.dumps({"error": str(e), "done": True})
+        await response.write(f"data: {err_payload}\n\n".encode("utf-8"))
+    finally:
+        await response.write_eof()
+
+    return response
 
 
 async def handle_eval_compare(request: web.Request) -> web.Response:
@@ -1124,10 +1244,14 @@ def create_app() -> web.Application:
     app.router.add_get("/api/datasets/{id}/stats", handle_get_dataset_stats)
     app.router.add_post("/api/datasets/{id}/tokenize", handle_tokenize_dataset)
     app.router.add_post("/api/datasets/tokenize", handle_tokenize_dataset)
+    app.router.add_post("/api/datasets/{id}/curate", handle_curate_dataset)
+    app.router.add_post("/api/datasets/curate", handle_curate_dataset)
     app.router.add_delete("/api/datasets/{id}", handle_delete_dataset)
     app.router.add_post("/api/tokenizer/inspect", handle_tokenizer_inspect)
+    app.router.add_post("/api/notifications/test", handle_test_notification)
 
     app.router.add_post("/api/evaluation/generate", handle_eval_generate)
+    app.router.add_post("/api/evaluation/stream", handle_eval_stream)
     app.router.add_post("/api/evaluation/compare", handle_eval_compare)
     app.router.add_post("/api/evaluation/benchmark", handle_eval_benchmark)
     app.router.add_get("/api/evaluation/results", handle_eval_results)

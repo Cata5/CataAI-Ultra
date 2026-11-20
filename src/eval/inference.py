@@ -182,6 +182,100 @@ class InferenceEngine:
             "total_tokens": len(input_ids) + tok_count,
         }
 
+    @torch.inference_mode()
+    def stream_generate(
+        self,
+        prompt: str,
+        max_new_tokens: int = 128,
+        temperature: float = 0.7,
+        top_p: float = 0.9,
+        top_k: int = 50,
+        repetition_penalty: float = 1.15,
+        no_repeat_ngram_size: int = 3,
+        stop_tokens: Optional[List[int]] = None,
+        chat_mode: bool = False,
+    ):
+        """Streams generated tokens one by one as they are decoded for interactive typewriter effects."""
+        formatted_prompt = prompt
+        if chat_mode and not ("<|user|>" in prompt or "<|im_start|>" in prompt):
+            formatted_prompt = f"<|user|>\n{prompt.strip()}\n<|assistant|>\n"
+
+        input_ids = self.tokenizer.encode(formatted_prompt)
+        curr_ids = torch.tensor([input_ids], dtype=torch.long, device=self.device)
+
+        default_stops = set()
+        if self.tokenizer.eos_token_id is not None:
+            default_stops.add(self.tokenizer.eos_token_id)
+        for stop_tag in ["<|end_turn|>", "<|im_end|>", "<|eos|>", "<|endoftext|>"]:
+            tid = self.tokenizer._tokenizer.token_to_id(stop_tag)
+            if tid is not None:
+                default_stops.add(tid)
+
+        stops = set(stop_tokens) if stop_tokens is not None else default_stops
+        generated_token_ids: List[int] = []
+        max_seq_len = getattr(self.model.config, "max_seq_len", 2048)
+
+        prev_decoded = ""
+        for _ in range(max_new_tokens):
+            if curr_ids.shape[1] > max_seq_len:
+                context_ids = curr_ids[:, -max_seq_len:]
+            else:
+                context_ids = curr_ids
+
+            logits = self.model(context_ids)
+            if isinstance(logits, tuple):
+                logits = logits[0]
+            next_token_logits = logits[0, -1, :].clone()
+
+            # Repetition penalty
+            if repetition_penalty != 1.0:
+                for tid in set(curr_ids[0].tolist()):
+                    if next_token_logits[tid] > 0:
+                        next_token_logits[tid] /= repetition_penalty
+                    else:
+                        next_token_logits[tid] *= repetition_penalty
+
+            # Ban duplicate n-grams
+            if no_repeat_ngram_size > 0 and len(generated_token_ids) >= no_repeat_ngram_size - 1:
+                prefix = tuple(generated_token_ids[-(no_repeat_ngram_size - 1):])
+                for i in range(len(generated_token_ids) - no_repeat_ngram_size + 1):
+                    if tuple(generated_token_ids[i : i + no_repeat_ngram_size - 1]) == prefix:
+                        banned_token = generated_token_ids[i + no_repeat_ngram_size - 1]
+                        next_token_logits[banned_token] = -float("Inf")
+
+            # Temperature & Sampling
+            if temperature > 0:
+                next_token_logits = next_token_logits / temperature
+                if top_k > 0:
+                    v, _ = torch.topk(next_token_logits, min(top_k, next_token_logits.size(-1)))
+                    next_token_logits[next_token_logits < v[-1]] = -float("Inf")
+                if top_p < 1.0:
+                    sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                    sorted_indices_to_remove = cumulative_probs > top_p
+                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                    sorted_indices_to_remove[..., 0] = 0
+                    indices_to_remove = sorted_indices[sorted_indices_to_remove]
+                    next_token_logits[indices_to_remove] = -float("Inf")
+
+                probs = F.softmax(next_token_logits, dim=-1)
+                next_token = torch.multinomial(probs, num_samples=1).item()
+            else:
+                next_token = torch.argmax(next_token_logits, dim=-1).item()
+
+            if next_token in stops:
+                break
+
+            generated_token_ids.append(next_token)
+            curr_ids = torch.cat([curr_ids, torch.tensor([[next_token]], device=self.device)], dim=1)
+
+            # Incremental decoding to yield text diff
+            full_decoded = self.tokenizer.decode(generated_token_ids)
+            chunk = full_decoded[len(prev_decoded):]
+            prev_decoded = full_decoded
+            if chunk:
+                yield chunk
+
     def compare_checkpoints_sequential(
         self,
         prompt: str,

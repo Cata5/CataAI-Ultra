@@ -39,6 +39,7 @@ class WSDScheduler:
         plateau_tokens: int = 5_000_000_000,
         total_tokens: int = 6_800_000_000,
         min_lr_ratio: float = 0.1,
+        min_lr_floor: float = 0.0,
         decay_style: str = "cosine",
     ) -> None:
         """
@@ -48,6 +49,7 @@ class WSDScheduler:
             plateau_tokens: Cumulative tokens at which stable plateau ends (default: 5.0B).
             total_tokens: Cumulative tokens at which decay ends (default: 6.8B).
             min_lr_ratio: Final LR as fraction of peak LR (default: 0.1 = 10%).
+            min_lr_floor: Absolute learning rate minimum floor to prevent decay to zero (default: 0.0).
             decay_style: 'cosine' (default) or 'linear'.
         """
         if isinstance(optimizers, Optimizer):
@@ -59,6 +61,7 @@ class WSDScheduler:
         self.plateau_tokens = plateau_tokens
         self.total_tokens = total_tokens
         self.min_lr_ratio = min_lr_ratio
+        self.min_lr_floor = max(0.0, float(min_lr_floor))
         self.decay_style = decay_style.lower()
 
         # Store initial learning rates for each param group of each optimizer
@@ -148,7 +151,7 @@ class WSDScheduler:
             opt_lrs: list[float] = []
             for group_idx, group in enumerate(opt.param_groups):
                 base_lr = self.base_lrs[opt_idx][group_idx]
-                new_lr = base_lr * factor
+                new_lr = max(self.min_lr_floor, base_lr * factor)
                 group["lr"] = new_lr
                 opt_lrs.append(new_lr)
             current_lrs.append(opt_lrs)
@@ -297,6 +300,7 @@ class GeneralLRScheduler:
         warmup_steps: int = 100,
         total_steps: int = 1000,
         min_lr_ratio: float = 0.1,
+        min_lr_floor: float = 0.0,
         gamma: float = 0.95,
         step_size: int = 200,
     ) -> None:
@@ -309,6 +313,7 @@ class GeneralLRScheduler:
         self.warmup_steps = max(0, warmup_steps)
         self.total_steps = max(1, total_steps)
         self.min_lr_ratio = max(0.0, min(1.0, min_lr_ratio))
+        self.min_lr_floor = max(0.0, float(min_lr_floor))
         self.gamma = gamma
         self.step_size = max(1, step_size)
 
@@ -353,7 +358,7 @@ class GeneralLRScheduler:
         factor = self.get_factor(self.current_step)
         for opt, base_group in zip(self.optimizers, self.base_lrs):
             for group, base_lr in zip(opt.param_groups, base_group):
-                group["lr"] = base_lr * factor
+                group["lr"] = max(self.min_lr_floor, base_lr * factor)
 
     @staticmethod
     def preview_curve(

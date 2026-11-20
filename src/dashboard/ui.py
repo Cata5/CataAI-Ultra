@@ -77,6 +77,7 @@ INDEX_HTML = """<!DOCTYPE html>
             if (typeof refreshCheckpointsTable === 'function') refreshCheckpointsTable();
           } else if (tabId === 'settings') {
             if (typeof refreshAlertsTable === 'function') refreshAlertsTable();
+            if (typeof loadWebhookSettings === 'function') loadWebhookSettings();
           }
         } catch (tabErr) {
           console.warn('Tab initialization warning:', tabErr);
@@ -1458,6 +1459,70 @@ INDEX_HTML = """<!DOCTYPE html>
               <span class="text-emerald-400">12,288 (Tied In/Out Embeddings)</span>
             </div>
           </div>
+        </div>
+
+        <!-- Webhook Notifications Card (Discord & Telegram) -->
+        <div class="bg-darkcard border border-darkborder rounded-xl p-5 space-y-4 col-span-1 md:col-span-2">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-bold text-white flex items-center gap-2">
+              <span>📢</span> Discord & Telegram Real-Time Webhooks
+            </h2>
+            <span class="text-xs text-slate-400">Notifies phone or server on Completion, Loss Spikes, & Best Checkpoints</span>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+            <!-- Discord Setup -->
+            <div class="space-y-2 p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-indigo-400 flex items-center gap-1.5">
+                  <span>💬</span> Discord Webhook URL
+                </span>
+                <span class="text-[10px] text-slate-500">Channel Integration</span>
+              </div>
+              <input type="url" id="setting-discord-webhook" placeholder="https://discord.com/api/webhooks/..." class="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 font-mono text-[11px] focus:outline-none focus:border-cyan-500">
+            </div>
+
+            <!-- Telegram Setup -->
+            <div class="space-y-2 p-3 bg-slate-900/60 rounded-lg border border-slate-800">
+              <div class="flex items-center justify-between">
+                <span class="font-bold text-cyan-400 flex items-center gap-1.5">
+                  <span>✈️</span> Telegram Bot API
+                </span>
+                <span class="text-[10px] text-slate-500">Direct Push Notifications</span>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <input type="text" id="setting-telegram-token" placeholder="Bot Token (123456:ABC...)" class="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 font-mono text-[11px] focus:outline-none focus:border-cyan-500">
+                <input type="text" id="setting-telegram-chat" placeholder="Chat ID (-100... or @user)" class="w-full bg-slate-950 border border-slate-700 rounded px-2.5 py-1.5 text-slate-200 font-mono text-[11px] focus:outline-none focus:border-cyan-500">
+              </div>
+            </div>
+          </div>
+
+          <!-- Controls -->
+          <div class="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <div class="flex items-center gap-4 text-xs text-slate-400">
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" id="setting-notify-complete" checked class="accent-cyan-400 rounded">
+                <span>Run Completed</span>
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" id="setting-notify-best" checked class="accent-cyan-400 rounded">
+                <span>Best Checkpoint</span>
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" id="setting-notify-spikes" checked class="accent-cyan-400 rounded">
+                <span>Loss Spikes / OOM</span>
+              </label>
+            </div>
+            <div class="flex items-center gap-2">
+              <button onclick="testWebhookNotifications()" id="btn-test-webhook" class="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 text-xs font-semibold transition">
+                <span>🧪 Test Webhook</span>
+              </button>
+              <button onclick="saveWebhookSettings()" class="px-3.5 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold transition shadow-lg shadow-cyan-600/20">
+                <span>Save Notifications</span>
+              </button>
+            </div>
+          </div>
+          <div id="webhook-test-status" class="hidden text-xs font-mono p-2.5 rounded bg-slate-950 border border-slate-800"></div>
         </div>
 
         <!-- System Alerts History Table -->
@@ -3005,24 +3070,79 @@ INDEX_HTML = """<!DOCTYPE html>
       };
 
       try {
-        const res = await fetch('/api/evaluation/generate', {
+        const outContainer = document.getElementById('infer-output-container');
+        const respText = document.getElementById('infer-response-text');
+        outContainer.classList.remove('hidden');
+        respText.innerText = '';
+        btn.innerHTML = '<span class="animate-spin">⏳</span> <span>Streaming...</span>';
+
+        const res = await fetch('/api/evaluation/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const d = await res.json();
-        document.getElementById('infer-output-container').classList.remove('hidden');
-        document.getElementById('infer-time-label').innerText = `${d.generation_time_sec} s`;
-        document.getElementById('infer-speed-label').innerText = `${d.tokens_per_sec} tok/s`;
-        if (document.getElementById('infer-device-badge')) {
-          document.getElementById('infer-device-badge').innerText = d.device ? `Device: ${d.device}` : '';
+
+        if (!res.ok) {
+          throw new Error('Stream request failed with status ' + res.status);
         }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith('data:')) {
+              try {
+                const chunkData = JSON.parse(trimmed.substring(5).trim());
+                if (chunkData.token) {
+                  respText.innerText += chunkData.token;
+                  respText.scrollTop = respText.scrollHeight;
+                }
+                if (chunkData.done) {
+                  if (chunkData.generation_time_sec !== undefined) {
+                    document.getElementById('infer-time-label').innerText = `${chunkData.generation_time_sec} s`;
+                  }
+                  if (chunkData.tokens_per_sec !== undefined) {
+                    document.getElementById('infer-speed-label').innerText = `${chunkData.tokens_per_sec} tok/s`;
+                  }
+                  if (document.getElementById('infer-device-badge')) {
+                    document.getElementById('infer-device-badge').innerText = chunkData.device ? `Device: ${chunkData.device}` : '';
+                  }
+                }
+              } catch (err) {
+                console.error('SSE Chunk parse error:', err);
+              }
+            }
+          }
+        }
+
         if (document.getElementById('infer-checkpoint-badge')) {
-          document.getElementById('infer-checkpoint-badge').innerText = d.checkpoint_loaded ? `Checkpoint: ${d.checkpoint_loaded}` : 'Base Model';
+          document.getElementById('infer-checkpoint-badge').innerText = payload.checkpoint ? `Checkpoint: ${payload.checkpoint}` : 'Base Model';
         }
-        document.getElementById('infer-response-text').innerText = d.generated_text;
       } catch (e) {
-        console.error('Generation error:', e);
+        console.warn('Streaming failed, falling back to batch generate:', e);
+        try {
+          const fallbackRes = await fetch('/api/evaluation/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const d = await fallbackRes.json();
+          document.getElementById('infer-output-container').classList.remove('hidden');
+          document.getElementById('infer-time-label').innerText = `${d.generation_time_sec} s`;
+          document.getElementById('infer-speed-label').innerText = `${d.tokens_per_sec} tok/s`;
+          document.getElementById('infer-response-text').innerText = d.generated_text;
+        } catch (fErr) {
+          console.error('Generation error:', fErr);
+        }
       } finally {
         btn.disabled = false;
         btn.innerHTML = '<span>✨</span> <span>Generate</span>';
@@ -3223,6 +3343,13 @@ INDEX_HTML = """<!DOCTYPE html>
               <div>Estimated Tokens: <span class="text-cyan-400">${Number(ds.token_count).toLocaleString()}</span></div>
               <div>File Size: <span class="text-slate-200">${(ds.file_size_bytes / (1024*1024)).toFixed(1)} MB</span></div>
             </div>
+            <div class="flex items-center justify-between pt-2 border-t border-slate-800/80">
+              <span class="text-[10px] text-slate-400">Quality Filter & MinHash Deduplication</span>
+              <button onclick="actionCurateDataset('${ds.id}')" id="btn-curate-${ds.id}" class="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-cyan-400 border border-slate-700 text-[11px] font-semibold transition">
+                🧹 Curate & Deduplicate
+              </button>
+            </div>
+            <div id="curate-stats-${ds.id}" class="hidden p-2.5 rounded bg-slate-950 border border-slate-800 text-[11px] font-mono space-y-1"></div>
           `;
           container.appendChild(card);
         });
@@ -3397,6 +3524,136 @@ INDEX_HTML = """<!DOCTYPE html>
       } catch (e) {}
     }
 
+    async function actionCurateDataset(dsId) {
+      const btn = document.getElementById(`btn-curate-${dsId}`);
+      const statsBox = document.getElementById(`curate-stats-${dsId}`);
+      if (btn) {
+        btn.disabled = true;
+        btn.innerText = 'Curating...';
+      }
+      if (statsBox) {
+        statsBox.classList.remove('hidden');
+        statsBox.innerHTML = '<span class="text-cyan-400 italic">Running MinHash LSH deduplication & Romanian LID filters...</span>';
+      }
+      try {
+        const res = await fetch(`/api/datasets/${dsId}/curate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jaccard_threshold: 0.80, lid_threshold: 0.80, save_curated: true })
+        });
+        const d = await res.json();
+        if (d.error) {
+          if (statsBox) statsBox.innerHTML = `<span class="text-rose-400">Error: ${d.error}</span>`;
+          return;
+        }
+        if (statsBox) {
+          statsBox.innerHTML = `
+            <div class="text-emerald-400 font-bold mb-1">✓ Curation Complete: ${d.retention_rate}% retained (${d.curated_samples} / ${d.total_samples} samples)</div>
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-slate-300">
+              <div>Exact Dupes: <span class="text-amber-400 font-semibold">${d.exact_duplicates_dropped}</span></div>
+              <div>MinHash Dupes: <span class="text-rose-400 font-semibold">${d.minhash_duplicates_dropped}</span></div>
+              <div>Low LID Rej: <span class="text-amber-400 font-semibold">${d.low_lid_dropped}</span></div>
+              <div>PII Masked: <span class="text-cyan-400 font-semibold">${d.pii_masked_count}</span></div>
+            </div>
+          `;
+        }
+        refreshRegisteredDatasets();
+      } catch (e) {
+        if (statsBox) statsBox.innerHTML = `<span class="text-rose-400">Curation failed: ${e}</span>`;
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = '🧹 Curate & Deduplicate';
+        }
+      }
+    }
+
+    async function loadWebhookSettings() {
+      try {
+        const res = await fetch('/api/settings');
+        const s = await res.json();
+        if (s) {
+          const dUrl = document.getElementById('setting-discord-webhook');
+          if (dUrl && s.discord_webhook_url) dUrl.value = s.discord_webhook_url;
+          const tgToken = document.getElementById('setting-telegram-token');
+          if (tgToken && s.telegram_bot_token) tgToken.value = s.telegram_bot_token;
+          const tgChat = document.getElementById('setting-telegram-chat');
+          if (tgChat && s.telegram_chat_id) tgChat.value = s.telegram_chat_id;
+          const nComp = document.getElementById('setting-notify-complete');
+          if (nComp && s.notify_on_complete !== undefined) nComp.checked = Boolean(s.notify_on_complete);
+          const nBest = document.getElementById('setting-notify-best');
+          if (nBest && s.notify_on_best_checkpoint !== undefined) nBest.checked = Boolean(s.notify_on_best_checkpoint);
+          const nSpike = document.getElementById('setting-notify-spikes');
+          if (nSpike && s.notify_on_loss_spike !== undefined) nSpike.checked = Boolean(s.notify_on_loss_spike);
+        }
+      } catch (e) {
+        console.debug('Failed to load webhook settings:', e);
+      }
+    }
+
+    async function saveWebhookSettings() {
+      const payload = {
+        discord_webhook_url: (document.getElementById('setting-discord-webhook')?.value || '').trim(),
+        telegram_bot_token: (document.getElementById('setting-telegram-token')?.value || '').trim(),
+        telegram_chat_id: (document.getElementById('setting-telegram-chat')?.value || '').trim(),
+        notify_on_complete: Boolean(document.getElementById('setting-notify-complete')?.checked),
+        notify_on_best_checkpoint: Boolean(document.getElementById('setting-notify-best')?.checked),
+        notify_on_loss_spike: Boolean(document.getElementById('setting-notify-spikes')?.checked),
+        enable_webhooks: true,
+      };
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          alert('Webhook notification settings saved successfully!');
+        } else {
+          alert('Failed to save webhook settings.');
+        }
+      } catch (e) {
+        alert('Error saving webhook settings: ' + e);
+      }
+    }
+
+    async function testWebhookNotifications() {
+      const btn = document.getElementById('btn-test-webhook');
+      const statusDiv = document.getElementById('webhook-test-status');
+      if (btn) btn.disabled = true;
+      if (statusDiv) {
+        statusDiv.classList.remove('hidden');
+        statusDiv.innerHTML = '<span class="text-cyan-400">Sending test payload to Discord & Telegram...</span>';
+      }
+      const payload = {
+        discord_webhook_url: (document.getElementById('setting-discord-webhook')?.value || '').trim(),
+        telegram_bot_token: (document.getElementById('setting-telegram-token')?.value || '').trim(),
+        telegram_chat_id: (document.getElementById('setting-telegram-chat')?.value || '').trim(),
+      };
+      try {
+        const res = await fetch('/api/notifications/test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const d = await res.json();
+        if (statusDiv) {
+          let html = '<div class="space-y-1">';
+          html += `<div>Discord: <span class="${d.discord ? 'text-emerald-400 font-bold' : 'text-slate-400'}">${d.discord ? '✓ Success' : (payload.discord_webhook_url ? '✗ Failed' : 'Not configured')}</span></div>`;
+          html += `<div>Telegram: <span class="${d.telegram ? 'text-emerald-400 font-bold' : 'text-slate-400'}">${d.telegram ? '✓ Success' : (payload.telegram_bot_token ? '✗ Failed' : 'Not configured')}</span></div>`;
+          if (d.errors && d.errors.length > 0) {
+            html += `<div class="text-rose-400">${d.errors.join('<br>')}</div>`;
+          }
+          html += '</div>';
+          statusDiv.innerHTML = html;
+        }
+      } catch (e) {
+        if (statusDiv) statusDiv.innerHTML = `<span class="text-rose-400">Dispatch error: ${e}</span>`;
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+
     // Startup
     window.addEventListener('DOMContentLoaded', () => {
       connectWebSocket();
@@ -3406,6 +3663,7 @@ INDEX_HTML = """<!DOCTYPE html>
       setInterval(pollTelemetry, 1500);
       refreshCheckpointsTable();
       refreshOverviewNetworkOptions();
+      loadWebhookSettings();
     });
   </script>
 </body>
