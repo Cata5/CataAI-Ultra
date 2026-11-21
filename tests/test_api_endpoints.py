@@ -20,9 +20,10 @@ class TestStudioAPI(AioHTTPTestCase):
     async def test_get_index(self):
         resp = await self.client.request("GET", "/")
         assert resp.status == 200
-        text = await resp.text()
-        assert "RoCanon-48.5M" in text
-        assert "Studio v2" in text
+        data = await resp.json()
+        assert data["service"] == "CataAI Ultra ML Engine Backend"
+        assert data["status"] == "online"
+        assert data["workstation_ui"] == "http://localhost:8080"
 
     async def test_get_system_status(self):
         resp = await self.client.request("GET", "/api/system/status")

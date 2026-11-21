@@ -363,14 +363,22 @@ export const EvaluationView: React.FC = () => {
 
               <div>
                 <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-                  No Repeat N-Gram
+                  No Repeat N-Gram (0 = Off)
                 </label>
                 <input
                   type="number"
                   min="0"
                   max="10"
                   value={noRepeatNgram}
-                  onChange={(e) => setNoRepeatNgram(parseInt(e.target.value) || 3)}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === "") {
+                      setNoRepeatNgram(0);
+                      return;
+                    }
+                    const parsed = parseInt(raw, 10);
+                    setNoRepeatNgram(isNaN(parsed) ? 0 : Math.max(0, parsed));
+                  }}
                   className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC]"
                 />
               </div>

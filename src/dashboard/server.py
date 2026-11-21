@@ -49,7 +49,6 @@ from ..worker.protocol import CommandType, EventType, RunState, WorkerCommand, W
 from ..worker.worker_manager import WorkerManager
 from ..workspace.manager import WorkspaceManager
 from .state import STATE, MetricPoint
-from .ui import INDEX_HTML
 
 logger = logging.getLogger(__name__)
 
@@ -118,12 +117,17 @@ WORKER_MGR.subscribe(on_worker_event)
 # ================= HTTP HANDLERS =================
 
 async def handle_index(request: web.Request) -> web.Response:
-    """Serves the primary single-page dark technical UI."""
-    try:
-        from . import ui
-        return web.Response(text=ui.INDEX_HTML, content_type="text/html", charset="utf-8")
-    except Exception:
-        return web.Response(text=INDEX_HTML, content_type="text/html", charset="utf-8")
+    """Headless ML Engine status endpoint. Browser traffic redirects to Next.js workstation on port 8080."""
+    accept = request.headers.get("Accept", "")
+    if "text/html" in accept:
+        raise web.HTTPFound(location="http://localhost:8080/")
+    return web.json_response({
+        "service": "CataAI Ultra ML Engine Backend",
+        "status": "online",
+        "port": 8081,
+        "workstation_ui": "http://localhost:8080",
+        "docs": "/api/system/status",
+    })
 
 
 # ---------------- System & Telemetry ----------------
@@ -499,7 +503,8 @@ async def handle_eval_generate(request: web.Request) -> web.Response:
     top_p = float(data.get("top_p", 0.9))
     top_k = int(data.get("top_k", 50))
     rep_pen = float(data.get("repetition_penalty", 1.15))
-    no_repeat_ngram = int(data.get("no_repeat_ngram_size", 3))
+    raw_ngram = data.get("no_repeat_ngram_size")
+    no_repeat_ngram = int(raw_ngram) if raw_ngram is not None else 3
     checkpoint_req = data.get("checkpoint") or data.get("checkpoint_path")
 
     is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)
@@ -553,7 +558,8 @@ async def handle_eval_stream(request: web.Request) -> web.StreamResponse:
     top_p = float(data.get("top_p", 0.9))
     top_k = int(data.get("top_k", 50))
     rep_pen = float(data.get("repetition_penalty", 1.15))
-    no_repeat_ngram = int(data.get("no_repeat_ngram_size", 3))
+    raw_ngram = data.get("no_repeat_ngram_size")
+    no_repeat_ngram = int(raw_ngram) if raw_ngram is not None else 3
     checkpoint_req = data.get("checkpoint") or data.get("checkpoint_path")
 
     is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)

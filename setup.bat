@@ -42,6 +42,6 @@ cd ..
 
 echo =========================================================================
 echo   Setup Complete!
-echo   Run "run_studio_v2.bat" to start the workstation.
+echo   Run "run_studio.bat" to start the workstation.
 echo =========================================================================
 pause

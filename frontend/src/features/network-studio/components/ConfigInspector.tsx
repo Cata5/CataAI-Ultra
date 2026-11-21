@@ -136,9 +136,14 @@ export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
 
             return (
               <div key={k}>
-                <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-                  {k.replace(/_/g, " ")}
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[10px] text-[#91A0B4] uppercase font-semibold">
+                    {k.replace(/_/g, " ")}
+                  </label>
+                  {k === "d_model" && (
+                    <span className="text-[9px] text-[#45CFFF] font-mono">syncs all layers</span>
+                  )}
+                </div>
                 {isBool ? (
                   <button
                     type="button"
@@ -287,9 +292,12 @@ export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
         {/* Hyperparameter Inputs */}
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-              d_model
-            </label>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-[10px] text-[#91A0B4] uppercase font-semibold">
+                d_model
+              </label>
+              <span className="text-[9px] text-[#45CFFF] font-mono">auto-syncs layers</span>
+            </div>
             <input
               type="number"
               value={globalConfig.d_model}

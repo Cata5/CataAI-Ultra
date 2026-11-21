@@ -140,14 +140,9 @@ The visual design system combines the aesthetic of a futuristic scientific resea
 
 To launch the complete platform (Backend on 8081 + Next.js on 8080):
 
-#### Windows Batch Launcher (`run_studio_v2.bat`):
+#### Windows Batch Launcher (`run_studio.bat`):
 ```cmd
-run_studio_v2.bat
-```
-
-#### Windows PowerShell Launcher (`run_studio_v2.ps1`):
-```powershell
-.\run_studio_v2.ps1
+run_studio.bat
 ```
 
 #### Manual Development Startup:

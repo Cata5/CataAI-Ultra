@@ -50,9 +50,10 @@ def main():
     gpu_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU Only"
 
     print("=" * 75)
-    print("      RoCanon-48.5M TRAINING WEBUI v2 — EXPERIMENTATION PLATFORM")
+    print("      RoCanon-48.5M TRAINING STUDIO — ML ENGINE BACKEND")
     print("=" * 75)
-    print(f" Web Interface: http://{args.host}:{args.port}")
+    print(f" ML Backend API: http://{args.host}:{args.port}")
+    print(" Workstation UI: http://localhost:8080")
     print(f" Target Compute: {device_str} ({gpu_name})")
     print(" Architecture: Decoupled Multiprocessing Worker + NVML Telemetry + SQLite")
     print(" VRAM Protection: Active ceiling < 5.0 GB on 6GB RTX 3060 Laptop")

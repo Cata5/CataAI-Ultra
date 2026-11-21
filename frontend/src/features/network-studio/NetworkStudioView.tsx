@@ -22,7 +22,7 @@ import { ConfigInspector } from "./components/ConfigInspector";
 import { LayerInfoModal } from "./components/LayerInfoModal";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { api } from "@/services/api";
-import { formatParamCount } from "@/lib/utils";
+import { formatParamCount, cn } from "@/lib/utils";
 import {
   HardDrive,
   CheckCircle2,
@@ -33,7 +33,66 @@ import {
   Layers,
   Save,
   ChevronDown,
+  Lightbulb,
+  ArrowDown,
+  Sparkles,
+  X,
+  Check,
 } from "lucide-react";
+
+// Canonical 5-stage autoregressive LLM blueprint flow
+const LLM_BLUEPRINT_STAGES = [
+  {
+    step: 1,
+    id: "step-embed",
+    name: "Token & Position Embedding",
+    layerType: "Embedding",
+    category: "embedding" as const,
+    shape: (d: number, _v: number) => `[B, S] → [B, S, ${d}]`,
+    role: "Input Discrete-to-Dense Mapping",
+    description: "Transforms discrete vocabulary token IDs into dense semantic vector representations of dimension d_model.",
+  },
+  {
+    step: 2,
+    id: "step-norm",
+    name: "Input RMSNorm",
+    layerType: "RMSNorm",
+    category: "norm" as const,
+    shape: (d: number) => `[B, S, ${d}] → [B, S, ${d}]`,
+    role: "Root Mean Square Variance Stabilizer",
+    description: "Pre-normalizes hidden representations before attention blocks to eliminate internal covariate shift.",
+  },
+  {
+    step: 3,
+    id: "step-attn",
+    name: "Causal Attention (GQA / MHA)",
+    layerType: "GQAAttention",
+    category: "attention" as const,
+    shape: (d: number) => `[B, S, ${d}] → [B, S, ${d}]`,
+    role: "Contextual Token Interaction",
+    description: "Attends to preceding context using causal masking, rotary positional embeddings (RoPE), and grouped KV cache.",
+  },
+  {
+    step: 4,
+    id: "step-ffn",
+    name: "SwiGLU Feed-Forward Network",
+    layerType: "SwiGLU",
+    category: "feedforward" as const,
+    shape: (d: number) => `[B, S, ${d}] → [B, S, ${d}]`,
+    role: "Non-Linear Feature Expansion",
+    description: "Expands token vectors to intermediate dimension (d_ff ≈ 2.5x d_model) with SiLU activation gating.",
+  },
+  {
+    step: 5,
+    id: "step-head",
+    name: "Language Model Head (Linear)",
+    layerType: "Linear",
+    category: "embedding" as const,
+    shape: (d: number, v: number) => `[B, S, ${d}] → [B, S, ${v}]`,
+    role: "Vocabulary Logits Projection",
+    description: "Projects final hidden states back to vocabulary logits for next-token probability distribution sampling.",
+  },
+];
 
 // Canonical layer type to category mapping
 const LAYER_TYPE_CATEGORY_MAP: Record<string, "embedding" | "attention" | "feedforward" | "norm" | "convolution" | "structural"> = {
@@ -503,6 +562,37 @@ export const NetworkStudioView: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [infoModalLayer, setInfoModalLayer] = useState<string | null>(null);
   const [confirmDeleteNet, setConfirmDeleteNet] = useState<boolean>(false);
+  const [showBlueprintGuide, setShowBlueprintGuide] = useState<boolean>(true);
+
+  // Computes which layers exist in the current canvas graph to provide shadow guidance
+  const blueprintStatus = useMemo(() => {
+    const hasEmbed = nodes.some((n) => {
+      const d = n.data as any;
+      return d?.category === "embedding" && d?.layerType !== "Linear";
+    });
+    const hasNorm = nodes.some((n) => (n.data as any)?.category === "norm");
+    const hasAttn = nodes.some((n) => (n.data as any)?.category === "attention");
+    const hasFFN = nodes.some((n) => (n.data as any)?.category === "feedforward");
+    const hasHead = nodes.some((n) => {
+      const d = n.data as any;
+      return d?.layerType === "Linear" || String(d?.label || "").toLowerCase().includes("head");
+    });
+
+    const placedMap: Record<number, boolean> = {
+      1: hasEmbed,
+      2: hasNorm,
+      3: hasAttn,
+      4: hasFFN,
+      5: hasHead,
+    };
+
+    return LLM_BLUEPRINT_STAGES.map((s) => ({
+      ...s,
+      placed: Boolean(placedMap[s.step]),
+    }));
+  }, [nodes]);
+
+  const placedStagesCount = blueprintStatus.filter((s) => s.placed).length;
 
   // Custom node types definition for ReactFlow
   const nodeTypes = useMemo(() => ({ archNode: ArchitectureNode as any }), []);
@@ -597,23 +687,339 @@ export const NetworkStudioView: React.FC = () => {
     setSelectedNodeId(id);
   };
 
-  const handleUpdateNodeConfig = (nodeId: string, newConfig: Record<string, any>) => {
-    setNodes((nds) =>
-      nds.map((n) => {
-        if (n.id === nodeId) {
-          return {
-            ...n,
-            data: {
-              ...n.data,
-              config: newConfig,
-              label: newConfig.label || n.data.label,
-            },
-          };
+  const handleUpdateGlobalConfig = useCallback(
+    (updates: Partial<any>) => {
+      setGlobalConfig((prev) => {
+        const next = { ...prev, ...updates };
+
+        // Automatically propagate d_model to all existing nodes in canvas and their shapes
+        if (updates.d_model !== undefined && updates.d_model !== prev.d_model) {
+          const newD = Number(updates.d_model);
+          const oldD = Number(prev.d_model);
+          setNodes((nds) =>
+            nds.map((n) => {
+              const d = n.data as any;
+              const cfg = { ...(d?.config || {}) };
+              let changed = false;
+              if ("d_model" in cfg) {
+                cfg.d_model = newD;
+                changed = true;
+              }
+              if ("in_features" in cfg && (cfg.in_features === oldD || d?.layerType === "Linear")) {
+                cfg.in_features = newD;
+                changed = true;
+              }
+              if (changed) {
+                const inShape = typeof d?.inputShape === "string"
+                  ? d.inputShape.replace(String(oldD), String(newD))
+                  : d?.inputShape;
+                const outShape = typeof d?.outputShape === "string"
+                  ? d.outputShape.replace(String(oldD), String(newD))
+                  : d?.outputShape;
+                return {
+                  ...n,
+                  data: {
+                    ...d,
+                    config: cfg,
+                    inputShape: inShape,
+                    outputShape: outShape,
+                  },
+                };
+              }
+              return n;
+            })
+          );
+          setStatusMessage(`d_model synchronized to ${newD} across all layers`);
+          setTimeout(() => setStatusMessage(null), 3000);
         }
-        return n;
-      })
-    );
-  };
+
+        // Automatically propagate vocab_size to Embedding and Linear LM Head
+        if (updates.vocab_size !== undefined && updates.vocab_size !== prev.vocab_size) {
+          const newV = Number(updates.vocab_size);
+          const oldV = Number(prev.vocab_size);
+          setNodes((nds) =>
+            nds.map((n) => {
+              const d = n.data as any;
+              const cfg = { ...(d?.config || {}) };
+              let changed = false;
+              if ("vocab_size" in cfg) {
+                cfg.vocab_size = newV;
+                changed = true;
+              }
+              if ("out_features" in cfg && (cfg.out_features === oldV || d?.layerType === "Linear")) {
+                cfg.out_features = newV;
+                changed = true;
+              }
+              if (changed) {
+                const outShape = typeof d?.outputShape === "string"
+                  ? d.outputShape.replace(String(oldV), String(newV))
+                  : d?.outputShape;
+                return {
+                  ...n,
+                  data: {
+                    ...d,
+                    config: cfg,
+                    outputShape: outShape,
+                  },
+                };
+              }
+              return n;
+            })
+          );
+        }
+
+        return next;
+      });
+    },
+    [setNodes]
+  );
+
+  const handleUpdateNodeConfig = useCallback(
+    (nodeId: string, newConfig: Record<string, any>) => {
+      const targetNode = nodes.find((n) => n.id === nodeId);
+      const oldD = (targetNode?.data as any)?.config?.d_model;
+      const newD = newConfig.d_model;
+
+      // If user changed d_model on this node, auto-sync across all layers and globalConfig!
+      if (newD !== undefined && oldD !== undefined && newD !== oldD) {
+        handleUpdateGlobalConfig({ d_model: Number(newD) });
+        return;
+      }
+
+      setNodes((nds) =>
+        nds.map((n) => {
+          if (n.id === nodeId) {
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                config: newConfig,
+                label: newConfig.label || n.data.label,
+              },
+            };
+          }
+          return n;
+        })
+      );
+    },
+    [nodes, setNodes, handleUpdateGlobalConfig]
+  );
+
+  // Auto-places the complete recommended 5-stage architecture pipeline
+  const handleAutoPlaceRecommendedPipeline = useCallback(() => {
+    const d_m = globalConfig.d_model || 512;
+    const v_s = globalConfig.vocab_size || 12288;
+    const n_q = globalConfig.n_q || 8;
+    const n_kv = globalConfig.n_kv || 2;
+    const d_ff = globalConfig.d_ff || Math.round(d_m * 2.5);
+
+    const recommendedNodes: Node[] = [
+      {
+        id: "node-embed",
+        type: "archNode",
+        position: { x: 250, y: 30 },
+        data: {
+          label: "Token & Position Embed",
+          category: "embedding",
+          layerType: "Embedding",
+          config: { vocab_size: v_s, d_model: d_m },
+          inputShape: "[B, S]",
+          outputShape: `[B, S, ${d_m}]`,
+          params: v_s * d_m,
+          isValid: true,
+        },
+      },
+      {
+        id: "node-norm1",
+        type: "archNode",
+        position: { x: 250, y: 150 },
+        data: {
+          label: "Input RMSNorm",
+          category: "norm",
+          layerType: "RMSNorm",
+          config: { d_model: d_m, eps: 1e-6 },
+          inputShape: `[B, S, ${d_m}]`,
+          outputShape: `[B, S, ${d_m}]`,
+          params: d_m,
+          isValid: true,
+        },
+      },
+      {
+        id: "node-attn",
+        type: "archNode",
+        position: { x: 250, y: 270 },
+        data: {
+          label: `GQA Attention Blocks (${globalConfig.n_layers || 16}x)`,
+          category: "attention",
+          layerType: "GQAAttention",
+          config: { d_model: d_m, n_q, n_kv },
+          inputShape: `[B, S, ${d_m}]`,
+          outputShape: `[B, S, ${d_m}]`,
+          params: Math.round(d_m * d_m * 2),
+          isValid: true,
+        },
+      },
+      {
+        id: "node-ffn",
+        type: "archNode",
+        position: { x: 250, y: 390 },
+        data: {
+          label: `SwiGLU FFN Blocks (${globalConfig.n_layers || 16}x)`,
+          category: "feedforward",
+          layerType: "SwiGLU",
+          config: { d_model: d_m, d_ff },
+          inputShape: `[B, S, ${d_m}]`,
+          outputShape: `[B, S, ${d_m}]`,
+          params: Math.round(d_m * d_ff * 3),
+          isValid: true,
+        },
+      },
+      {
+        id: "node-head",
+        type: "archNode",
+        position: { x: 250, y: 510 },
+        data: {
+          label: "LM Head (Tied)",
+          category: "embedding",
+          layerType: "Linear",
+          config: { in_features: d_m, out_features: v_s, bias: false },
+          inputShape: `[B, S, ${d_m}]`,
+          outputShape: `[B, S, ${v_s}]`,
+          params: globalConfig.tied_embeddings ? 0 : d_m * v_s,
+          isValid: true,
+        },
+      },
+    ];
+
+    const recommendedEdges: Edge[] = [
+      { id: "e1-2", source: "node-embed", target: "node-norm1", animated: true },
+      { id: "e2-3", source: "node-norm1", target: "node-attn", animated: true },
+      { id: "e3-4", source: "node-attn", target: "node-ffn", animated: true },
+      { id: "e4-5", source: "node-ffn", target: "node-head", animated: true },
+    ];
+
+    setNodes(recommendedNodes);
+    setEdges(recommendedEdges);
+    setSelectedNodeId("node-embed");
+    setStatusMessage("Recommended 5-stage autoregressive LLM pipeline placed!");
+    setTimeout(() => setStatusMessage(null), 3500);
+  }, [globalConfig, setNodes, setEdges]);
+
+  // Places an individual step from the shadow blueprint guide
+  const handlePlaceBlueprintStage = useCallback(
+    (stepNum: number) => {
+      const d_m = globalConfig.d_model || 512;
+      const v_s = globalConfig.vocab_size || 12288;
+      const n_q = globalConfig.n_q || 8;
+      const n_kv = globalConfig.n_kv || 2;
+      const d_ff = globalConfig.d_ff || Math.round(d_m * 2.5);
+
+      const stepConfigs: Record<
+        number,
+        {
+          id: string;
+          label: string;
+          layerType: string;
+          category: any;
+          config: any;
+          inShape: string;
+          outShape: string;
+          y: number;
+        }
+      > = {
+        1: {
+          id: `node_embed_${Date.now()}`,
+          label: "Token Embedding",
+          layerType: "Embedding",
+          category: "embedding",
+          config: { vocab_size: v_s, d_model: d_m },
+          inShape: "[B, S]",
+          outShape: `[B, S, ${d_m}]`,
+          y: 30,
+        },
+        2: {
+          id: `node_norm_${Date.now()}`,
+          label: "Input RMSNorm",
+          layerType: "RMSNorm",
+          category: "norm",
+          config: { d_model: d_m, eps: 1e-6 },
+          inShape: `[B, S, ${d_m}]`,
+          outShape: `[B, S, ${d_m}]`,
+          y: 150,
+        },
+        3: {
+          id: `node_attn_${Date.now()}`,
+          label: "GQA Attention",
+          layerType: "GQAAttention",
+          category: "attention",
+          config: { d_model: d_m, n_q, n_kv },
+          inShape: `[B, S, ${d_m}]`,
+          outShape: `[B, S, ${d_m}]`,
+          y: 270,
+        },
+        4: {
+          id: `node_ffn_${Date.now()}`,
+          label: "SwiGLU FFN",
+          layerType: "SwiGLU",
+          category: "feedforward",
+          config: { d_model: d_m, d_ff },
+          inShape: `[B, S, ${d_m}]`,
+          outShape: `[B, S, ${d_m}]`,
+          y: 390,
+        },
+        5: {
+          id: `node_head_${Date.now()}`,
+          label: "LM Head",
+          layerType: "Linear",
+          category: "embedding",
+          config: { in_features: d_m, out_features: v_s, bias: false },
+          inShape: `[B, S, ${d_m}]`,
+          outShape: `[B, S, ${v_s}]`,
+          y: 510,
+        },
+      };
+
+      const target = stepConfigs[stepNum];
+      if (!target) return;
+
+      const newNode: Node = {
+        id: target.id,
+        type: "archNode",
+        position: { x: 250, y: target.y },
+        data: {
+          label: target.label,
+          category: target.category,
+          layerType: target.layerType,
+          config: target.config,
+          inputShape: target.inShape,
+          outputShape: target.outShape,
+          params: 0,
+          isValid: true,
+        },
+      };
+
+      setNodes((nds) => [...nds, newNode]);
+      setSelectedNodeId(target.id);
+
+      // Auto-wire to last existing node
+      if (nodes.length > 0) {
+        const lastNode = nodes[nodes.length - 1];
+        setEdges((eds) => [
+          ...eds,
+          {
+            id: `e_${lastNode.id}_${target.id}`,
+            source: lastNode.id,
+            target: target.id,
+            animated: true,
+          },
+        ]);
+      }
+
+      setStatusMessage(`Step ${stepNum} (${target.label}) placed on canvas`);
+      setTimeout(() => setStatusMessage(null), 3000);
+    },
+    [globalConfig, nodes, setNodes, setEdges]
+  );
 
   const handleDeleteNode = (nodeId: string) => {
     setNodes((nds) => nds.filter((n) => n.id !== nodeId));
@@ -1047,6 +1453,31 @@ export const NetworkStudioView: React.FC = () => {
             <div className="flex items-center gap-2 pointer-events-auto">
               <button
                 type="button"
+                onClick={() => setShowBlueprintGuide((prev) => !prev)}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md font-mono text-xs font-semibold transition-all shadow-sm border",
+                  showBlueprintGuide
+                    ? "bg-[#45CFFF]/15 border-[#45CFFF]/50 text-[#45CFFF]"
+                    : "bg-[#131C29] border-[#273548] text-[#91A0B4] hover:text-[#ECF3FC]"
+                )}
+                title="Toggle Architecture Blueprint & Layer Order Guide"
+              >
+                <Lightbulb className="w-3.5 h-3.5 text-[#45CFFF]" />
+                <span className="hidden sm:inline">Layer Order Guide</span>
+                <span
+                  className={cn(
+                    "text-[10px] px-1.5 py-0.2 rounded font-bold font-mono",
+                    placedStagesCount === 5
+                      ? "bg-[#35D49A]/20 text-[#35D49A]"
+                      : "bg-[#F59E0B]/20 text-[#F59E0B]"
+                  )}
+                >
+                  {placedStagesCount}/5
+                </span>
+              </button>
+
+              <button
+                type="button"
                 onClick={handleSaveNetwork}
                 disabled={isSaving}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-mono text-xs font-bold transition-all shadow-md disabled:opacity-50"
@@ -1084,90 +1515,177 @@ export const NetworkStudioView: React.FC = () => {
             </div>
           </div>
 
-          {/* Empty Canvas Overlay in Scratch Mode */}
-          {nodes.length === 0 && (
-            <div className="absolute inset-0 flex items-center justify-center pointer-events-none p-6 z-10">
-              <div className="max-w-md w-full bg-[#0E1420]/95 border border-dashed border-[#384C66] rounded-xl p-6 backdrop-blur-md text-center pointer-events-auto shadow-2xl relative">
-                <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/30 to-transparent pointer-events-none" />
-
-                <div className="w-11 h-11 rounded-lg bg-[#131C29] border border-[#45CFFF]/40 flex items-center justify-center mx-auto mb-3">
-                  <Layers className="w-5 h-5 text-[#45CFFF]" />
+          {/* Floating Shadow Architecture Blueprint Guide (When canvas has nodes) */}
+          {showBlueprintGuide && nodes.length > 0 && (
+            <div className="absolute top-14 right-4 z-20 w-84 max-h-[calc(100%-80px)] overflow-y-auto glass-panel p-3.5 rounded-xl border border-[#45CFFF]/30 shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150 space-y-3 font-mono text-xs">
+              <div className="flex items-center justify-between pb-2 border-b border-[#273548]">
+                <div className="flex items-center gap-2">
+                  <Lightbulb className="w-4 h-4 text-[#45CFFF]" />
+                  <span className="font-bold text-[#ECF3FC] uppercase tracking-wider text-[11px]">
+                    SHADOW BLUEPRINT ORDER
+                  </span>
                 </div>
-                <h3 className="font-mono font-bold text-xs text-[#ECF3FC] uppercase tracking-wider">
-                  Blank Architecture Canvas
-                </h3>
-                <p className="text-xs text-[#91A0B4] mt-1 mb-4 leading-relaxed">
-                  You are in custom scratch mode. Drag components from the left palette or select a quick starting block below:
-                </p>
-                <div className="grid grid-cols-2 gap-2 text-left">
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className={cn(
+                      "text-[10px] px-2 py-0.5 rounded font-bold font-mono",
+                      placedStagesCount === 5
+                        ? "bg-[#35D49A]/20 text-[#35D49A] border border-[#35D49A]/30"
+                        : "bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/30"
+                    )}
+                  >
+                    {placedStagesCount}/5 STAGES
+                  </span>
+                  <button
+                    onClick={() => setShowBlueprintGuide(false)}
+                    className="p-1 rounded text-[#91A0B4] hover:text-[#ECF3FC] hover:bg-[#182333]"
+                    title="Close Guide"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              <p className="text-[10px] text-[#91A0B4] leading-relaxed">
+                Standard causal autoregressive LLM layer execution flow. Follow this order for proper forward/backward dynamics:
+              </p>
+
+              <div className="space-y-1.5">
+                {blueprintStatus.map((stage, idx) => (
+                  <React.Fragment key={stage.step}>
+                    <div
+                      className={cn(
+                        "p-2.5 rounded-lg border text-[11px] transition-all relative",
+                        stage.placed
+                          ? "bg-[#0E1420]/80 border-[#35D49A]/30"
+                          : "bg-[#131C29]/70 border-dashed border-[#F59E0B]/40 hover:border-[#45CFFF]/60"
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-1.5 mb-1">
+                        <div className="flex items-center gap-1.5 font-bold">
+                          <span className="text-[#45CFFF] text-[10px]">#{stage.step}</span>
+                          <span className="text-[#ECF3FC]">{stage.name}</span>
+                        </div>
+                        {stage.placed ? (
+                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#35D49A]/15 text-[#35D49A] font-bold flex items-center gap-1">
+                            <Check className="w-2.5 h-2.5" /> PLACED
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handlePlaceBlueprintStage(stage.step)}
+                            className="text-[9px] px-2 py-0.5 rounded bg-[#45CFFF]/15 hover:bg-[#45CFFF]/25 text-[#45CFFF] border border-[#45CFFF]/40 font-bold transition-colors"
+                          >
+                            + INSERT
+                          </button>
+                        )}
+                      </div>
+                      <div className="text-[9px] text-[#5E7188] mb-0.5 font-mono">
+                        {stage.shape(globalConfig.d_model || 512, globalConfig.vocab_size || 12288)}
+                      </div>
+                      <div className="text-[10px] text-[#91A0B4] leading-tight">
+                        {stage.description}
+                      </div>
+                    </div>
+
+                    {idx < blueprintStatus.length - 1 && (
+                      <div className="flex justify-center -my-0.5 text-[#45CFFF]/40">
+                        <ArrowDown className="w-3 h-3" />
+                      </div>
+                    )}
+                  </React.Fragment>
+                ))}
+              </div>
+
+              <div className="pt-2 border-t border-[#273548]">
+                <button
+                  type="button"
+                  onClick={handleAutoPlaceRecommendedPipeline}
+                  className="w-full py-1.5 px-3 rounded-md bg-[#45CFFF]/15 hover:bg-[#45CFFF]/25 border border-[#45CFFF]/40 text-[#45CFFF] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+                >
+                  <Sparkles className="w-3.5 h-3.5" /> Reset & Align Recommended Pipeline
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Empty Canvas Overlay with Architectural Shadow Section */}
+          {nodes.length === 0 && (
+            <div className="absolute inset-0 flex items-center justify-center pointer-events-none p-6 z-10 overflow-y-auto">
+              <div className="max-w-xl w-full bg-[#0E1420]/95 border border-[#384C66] rounded-xl p-6 backdrop-blur-xl pointer-events-auto shadow-2xl relative my-auto">
+                <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/40 to-transparent pointer-events-none" />
+
+                <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#273548]">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-9 h-9 rounded-lg bg-[#131C29] border border-[#45CFFF]/40 flex items-center justify-center shadow-[0_0_12px_rgba(69,207,255,0.2)]">
+                      <Layers className="w-4 h-4 text-[#45CFFF]" />
+                    </div>
+                    <div>
+                      <h3 className="font-mono font-bold text-xs text-[#ECF3FC] uppercase tracking-wider">
+                        LLM ARCHITECTURE BLUEPRINT & SHADOW ORDER
+                      </h3>
+                      <p className="text-[10px] text-[#91A0B4] mt-0.5">
+                        Follow the canonical 5-stage pipeline for causal autoregressive models:
+                      </p>
+                    </div>
+                  </div>
                   <button
                     type="button"
-                    onClick={() =>
-                      handleAddPaletteNode({
-                        id: "quick-embed",
-                        name: "Token Embedding",
-                        category: "embedding",
-                        layerType: "Embedding",
-                        description: "Learned discrete token embeddings",
-                        defaultConfig: { vocab_size: 12288, d_model: 512 },
-                      })
-                    }
-                    className="flex items-center gap-2 p-2 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF]/60 font-mono text-xs text-[#ECF3FC] transition-colors"
+                    onClick={handleAutoPlaceRecommendedPipeline}
+                    className="py-1.5 px-3 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-bold text-xs flex items-center gap-1.5 transition-all shadow-md shrink-0"
                   >
-                    <Plus className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
-                    <span>+ Embedding</span>
+                    <Sparkles className="w-3.5 h-3.5" /> Place Full Flow
                   </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleAddPaletteNode({
-                        id: "quick-attn",
-                        name: "GQA Attention Block",
-                        category: "attention",
-                        layerType: "GQAAttention",
-                        description: "Grouped Query Attention block",
-                        defaultConfig: { d_model: 512, n_q: 8, n_kv: 2 },
-                      })
-                    }
-                    className="flex items-center gap-2 p-2 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF]/60 font-mono text-xs text-[#ECF3FC] transition-colors"
-                  >
-                    <Plus className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
-                    <span>+ Attention (GQA)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleAddPaletteNode({
-                        id: "quick-ffn",
-                        name: "SwiGLU FFN Block",
-                        category: "feedforward",
-                        layerType: "SwiGLU",
-                        description: "Gated SwiGLU feed-forward network",
-                        defaultConfig: { d_model: 512, d_ff: 1280 },
-                      })
-                    }
-                    className="flex items-center gap-2 p-2 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF]/60 font-mono text-xs text-[#ECF3FC] transition-colors"
-                  >
-                    <Plus className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
-                    <span>+ SwiGLU FFN</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      handleAddPaletteNode({
-                        id: "quick-head",
-                        name: "Linear Head",
-                        category: "embedding",
-                        layerType: "Linear",
-                        description: "Projection / Output LM head",
-                        defaultConfig: { in_features: 512, out_features: 12288, bias: false },
-                      })
-                    }
-                    className="flex items-center gap-2 p-2 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF]/60 font-mono text-xs text-[#ECF3FC] transition-colors"
-                  >
-                    <Plus className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
-                    <span>+ Linear Head</span>
-                  </button>
+                </div>
+
+                {/* 5-Stage Shadow Flow in Order */}
+                <div className="space-y-2 mb-4">
+                  {blueprintStatus.map((stage, idx) => (
+                    <React.Fragment key={stage.step}>
+                      <div className="p-2.5 rounded-lg bg-[#131C29]/80 border border-[#273548] hover:border-[#45CFFF]/50 flex items-center justify-between gap-3 text-xs transition-colors">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="w-5 h-5 rounded-full bg-[#45CFFF]/15 border border-[#45CFFF]/40 text-[#45CFFF] text-[10px] font-bold flex items-center justify-center shrink-0">
+                            {stage.step}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-[#ECF3FC] truncate">{stage.name}</span>
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#0E1420] border border-[#273548] text-[#5E7188] font-mono shrink-0">
+                                {stage.layerType}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-[#91A0B4] truncate mt-0.5">
+                              {stage.description}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[9px] text-[#5E7188] font-mono hidden md:inline">
+                            {stage.shape(globalConfig.d_model || 512, globalConfig.vocab_size || 12288)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => handlePlaceBlueprintStage(stage.step)}
+                            className="px-2.5 py-1 rounded bg-[#45CFFF]/10 hover:bg-[#45CFFF]/20 border border-[#45CFFF]/40 text-[#45CFFF] text-[10px] font-bold transition-all"
+                          >
+                            + Place
+                          </button>
+                        </div>
+                      </div>
+
+                      {idx < blueprintStatus.length - 1 && (
+                        <div className="flex justify-center -my-1 text-[#45CFFF]/40">
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </div>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-[#0E1420] border border-[#273548] flex items-center justify-between text-[11px] text-[#91A0B4]">
+                  <span>Active Dimensions: <strong className="text-[#ECF3FC]">d_model={globalConfig.d_model || 512}</strong> | <strong className="text-[#ECF3FC]">vocab={globalConfig.vocab_size || 12288}</strong></span>
+                  <span className="text-[#45CFFF] text-[10px]">d_model auto-syncs across all sections</span>
                 </div>
               </div>
             </div>
@@ -1180,9 +1698,7 @@ export const NetworkStudioView: React.FC = () => {
           onUpdateNodeConfig={handleUpdateNodeConfig}
           onDeleteNode={handleDeleteNode}
           globalConfig={globalConfig}
-          onUpdateGlobalConfig={(updates) =>
-            setGlobalConfig((prev) => ({ ...prev, ...updates }))
-          }
+          onUpdateGlobalConfig={handleUpdateGlobalConfig}
           onSaveNetwork={handleSaveNetwork}
           onCloneNetwork={handleCloneNetwork}
           onLoadTemplate={handleLoadNetwork}
