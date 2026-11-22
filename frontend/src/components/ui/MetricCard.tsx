@@ -2,7 +2,7 @@ import React from "react";
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type Accent = "cyan" | "violet" | "emerald" | "amber" | "rose";
+type Accent = "cyan" | "violet" | "emerald" | "amber" | "rose" | "gray";
 
 interface MetricCardProps {
   title: string;
@@ -12,27 +12,16 @@ interface MetricCardProps {
   icon?: React.ReactNode;
   trend?: "up" | "down" | "neutral";
   trendValue?: string;
-  /** Accent applied to the icon and trend chip. No glow, no colored borders. */
   glowColor?: Accent;
-  /** Shows placeholder skeleton lines while the first payload is loading. */
   loading?: boolean;
-  /** Native tooltip for the metric label (what the number means). */
   hint?: string;
   className?: string;
 }
 
-const ACCENT_ICON: Record<Accent, string> = {
-  cyan: "text-[#45CFFF]",
-  violet: "text-[#9B8CFF]",
-  emerald: "text-[#35D49A]",
-  amber: "text-[#F2B85B]",
-  rose: "text-[#FF657A]",
-};
-
 const TREND_STYLE: Record<NonNullable<MetricCardProps["trend"]>, string> = {
-  up: "text-[#35D49A] bg-[rgba(53,212,154,0.08)] border-[rgba(53,212,154,0.24)]",
-  down: "text-[#FF657A] bg-[rgba(255,101,122,0.08)] border-[rgba(255,101,122,0.24)]",
-  neutral: "text-[#91A0B4] bg-[var(--bg-subtle)] border-[var(--border-default)]",
+  up: "text-[#4ade80] bg-[rgba(74,222,128,0.08)] border-[rgba(74,222,128,0.2)]",
+  down: "text-[#f87171] bg-[rgba(248,113,113,0.08)] border-[rgba(248,113,113,0.2)]",
+  neutral: "text-[#737373] bg-[#262626] border-[#333333]",
 };
 
 export const MetricCard: React.FC<MetricCardProps> = ({
@@ -43,7 +32,6 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   icon,
   trend = "neutral",
   trendValue,
-  glowColor = "cyan",
   loading = false,
   hint,
   className,
@@ -54,24 +42,20 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   return (
     <div
       className={cn(
-        "panel group p-3.5 flex flex-col justify-between transition-colors duration-150",
-        "hover:border-[var(--border-default)]",
+        "panel group p-3 flex flex-col justify-between transition-colors bg-[#202020] border-[#333333] hover:border-[#404040]",
         className
       )}
     >
       <div className="flex items-center justify-between gap-2">
         <span
-          className="font-mono text-[10px] font-semibold uppercase tracking-[0.08em] text-[#91A0B4] truncate"
+          className="font-mono text-[10px] font-medium uppercase tracking-[0.06em] text-[#737373] truncate"
           title={hint || title}
         >
           {title}
         </span>
         {icon && (
           <span
-            className={cn(
-              "shrink-0 opacity-70 transition-opacity group-hover:opacity-100",
-              ACCENT_ICON[glowColor]
-            )}
+            className="shrink-0 text-[#737373] transition-colors group-hover:text-[#A3A3A3]"
             aria-hidden="true"
           >
             {icon}
@@ -79,16 +63,16 @@ export const MetricCard: React.FC<MetricCardProps> = ({
         )}
       </div>
 
-      <div className="mt-2 min-h-[30px] flex items-baseline gap-1.5">
+      <div className="mt-1.5 min-h-[26px] flex items-baseline gap-1.5">
         {loading ? (
-          <span className="skeleton block h-6 w-24" aria-label="Loading value" />
+          <span className="skeleton block h-5 w-20" aria-label="Loading value" />
         ) : (
           <>
-            <span className="font-mono-num text-[22px] leading-none font-semibold tracking-tight text-[#ECF3FC] truncate">
+            <span className="font-mono-num text-[20px] leading-none font-medium tracking-tight text-[#F2F2F2] truncate">
               {value}
             </span>
             {unit && (
-              <span className="font-mono text-[10px] font-medium text-[#5E7188] shrink-0">
+              <span className="font-mono text-[10px] text-[#737373] shrink-0">
                 {unit}
               </span>
             )}
@@ -97,20 +81,20 @@ export const MetricCard: React.FC<MetricCardProps> = ({
       </div>
 
       {(subtitle || trendValue) && (
-        <div className="mt-2.5 pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between gap-2 min-h-[22px]">
+        <div className="mt-2 pt-1.5 border-t border-[#262626] flex items-center justify-between gap-2 min-h-[18px]">
           {subtitle && (
-            <span className="truncate font-mono text-[10px] text-[#5E7188]" title={subtitle}>
+            <span className="truncate font-mono text-[10px] text-[#737373]" title={subtitle}>
               {subtitle}
             </span>
           )}
           {trendValue && (
             <span
               className={cn(
-                "inline-flex shrink-0 items-center gap-0.5 rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold",
+                "inline-flex shrink-0 items-center gap-0.5 rounded border px-1.5 py-0.2 font-mono text-[9px] font-medium",
                 TREND_STYLE[trend]
               )}
             >
-              <TrendIcon className="w-3 h-3" aria-hidden="true" />
+              <TrendIcon className="w-2.5 h-2.5" aria-hidden="true" />
               {trendValue}
             </span>
           )}

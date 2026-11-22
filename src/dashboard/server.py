@@ -193,10 +193,22 @@ async def handle_get_alerts(request: web.Request) -> web.Response:
 
 # ---------------- Runs & Training Controls ----------------
 
+def get_request_workspace_id(request: web.Request) -> str:
+    """Resolves active workspace ID from query param, X-Workspace-Id header, or current state."""
+    if "workspace_id" in request.query:
+        return request.query["workspace_id"]
+    header_ws = request.headers.get("X-Workspace-Id")
+    if header_ws:
+        return header_ws
+    active_ws = WORKSPACE_MGR.get_active_workspace()
+    return active_ws.get("id", "default") if active_ws else "default"
+
+
 async def handle_list_runs(request: web.Request) -> web.Response:
-    """Lists runs from database."""
+    """Lists runs from database filtered by active workspace."""
     limit = int(request.query.get("limit", 50))
-    runs = DB.list_runs(limit=limit)
+    ws_id = get_request_workspace_id(request)
+    runs = DB.list_runs(limit=limit, workspace_id=ws_id)
     return web.json_response(runs)
 
 
@@ -206,6 +218,10 @@ async def handle_create_run(request: web.Request) -> web.Response:
         data = await request.json()
     except Exception:
         return web.json_response({"error": "Invalid JSON"}, status=400)
+
+    ws_id = get_request_workspace_id(request)
+    if "workspace_id" not in data:
+        data["workspace_id"] = ws_id
 
     success = WORKER_MGR.start_run(data)
     if success:
@@ -278,8 +294,9 @@ async def handle_run_metrics(request: web.Request) -> web.Response:
 # ---------------- Checkpoints & Local Model Packages ----------------
 
 async def handle_get_checkpoints(request: web.Request) -> web.Response:
-    """Scans and returns all checkpoints on disk."""
-    list_files = CHECKPOINT_MGR.list_checkpoints_on_disk()
+    """Scans and returns all checkpoints on disk, filtered by workspace."""
+    ws_id = get_request_workspace_id(request)
+    list_files = CHECKPOINT_MGR.list_checkpoints_on_disk(workspace_id=ws_id)
     return web.json_response(list_files)
 
 
@@ -316,6 +333,8 @@ async def handle_save_local_model(request: web.Request) -> web.Response:
     active_cfg_dict = vars(active_cfg) if active_cfg and hasattr(active_cfg, "__dict__") else None
 
     try:
+        ws = WORKSPACE_MGR.get_active_workspace()
+        ws_id = ws.get("id", "default") if ws else "default"
         result = CHECKPOINT_MGR.save_local_model_package(
             model_id=model_id,
             custom_name=custom_name,
@@ -324,6 +343,7 @@ async def handle_save_local_model(request: web.Request) -> web.Response:
             active_optimizers=active_opts,
             active_scheduler=active_sched,
             training_config=active_cfg_dict,
+            workspace_id=ws_id,
         )
         STATE.active_model_name = result.get("name", custom_name)
         return web.json_response({"success": True, "package": result})
@@ -435,7 +455,8 @@ async def handle_upload_dataset(request: web.Request) -> web.Response:
             f.write(chunk)
 
     try:
-        res = DATASET_MGR.register_uploaded_file(temp_path, name=filename)
+        ws_id = get_request_workspace_id(request)
+        res = DATASET_MGR.register_uploaded_file(temp_path, name=filename, workspace_id=ws_id)
         return web.json_response(res)
     finally:
         if temp_path.exists():
@@ -443,7 +464,8 @@ async def handle_upload_dataset(request: web.Request) -> web.Response:
 
 
 async def handle_list_datasets(request: web.Request) -> web.Response:
-    datasets = DATASET_MGR.list_all_datasets()
+    ws_id = get_request_workspace_id(request)
+    datasets = DATASET_MGR.list_all_datasets(workspace_id=ws_id)
     return web.json_response(datasets)
 
 
@@ -737,7 +759,8 @@ async def handle_eval_results(request: web.Request) -> web.Response:
 # ---------------- Network Studio & Registry ----------------
 
 async def handle_list_networks(request: web.Request) -> web.Response:
-    networks = NETWORK_REGISTRY.list_networks()
+    ws_id = get_request_workspace_id(request)
+    networks = NETWORK_REGISTRY.list_networks(workspace_id=ws_id)
     return web.json_response(networks)
 
 
@@ -770,6 +793,10 @@ async def handle_save_network(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
+    ws_id = get_request_workspace_id(request)
+    if "workspace_id" not in data:
+        data["workspace_id"] = ws_id
+
     net_id = data.get("id", f"network_{int(time.time())}")
     try:
         saved = NETWORK_REGISTRY.save_network(net_id, data)
@@ -789,8 +816,10 @@ async def handle_clone_network(request: web.Request) -> web.Response:
         data = {}
     new_id = data.get("new_id", f"{orig_id}_clone")
     new_name = data.get("new_name", f"Clone of {orig_id}")
+    ws = WORKSPACE_MGR.get_active_workspace()
+    ws_id = ws.get("id", "default") if ws else "default"
     try:
-        cloned = NETWORK_REGISTRY.clone_network(orig_id, new_id, new_name)
+        cloned = NETWORK_REGISTRY.clone_network(orig_id, new_id, new_name, workspace_id=ws_id)
         if not cloned:
             return web.json_response({"error": "Failed to clone network"}, status=400)
         return web.json_response(cloned)
@@ -876,8 +905,8 @@ async def handle_delete_dataset(request: web.Request) -> web.Response:
         except Exception as e:
             logger.warning("Could not delete cache file %s: %s", p, e)
 
-    # 3. Remove DB record
-    DB.delete_dataset(dataset_id)
+    # 3. Remove DB record and register as deleted in manager
+    DATASET_MGR.delete_dataset(dataset_id)
     return web.json_response({"success": True, "id": dataset_id, "deleted_files": deleted_files})
 
 
@@ -900,25 +929,32 @@ async def handle_estimate_network(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "Invalid JSON"}, status=400)
 
-    config = data.get("config", data)
-    bs = int(data.get("micro_batch_size", 4))
-    sl = int(data.get("seq_len", 256))
-    dt = data.get("dtype", "bfloat16")
-    opt = data.get("optimizer", "muon_adamw")
-    gc = bool(data.get("gradient_checkpointing", False))
+    try:
+        config = data.get("config", data)
+        bs = int(data.get("micro_batch_size", 4) or 4)
+        sl = int(data.get("seq_len", 256) or 256)
+        dt = data.get("dtype", "bfloat16")
+        opt = data.get("optimizer", "muon_adamw")
+        gc = bool(data.get("gradient_checkpointing", False))
 
-    params = ParameterCalculator.calculate(config)
-    params["total_params"] = params.get("total_parameters", 0)
-    params["trainable_params"] = params.get("trainable_parameters", 0)
-    mem = MemoryEstimator.estimate(
-        config=config,
-        micro_batch_size=bs,
-        seq_len=sl,
-        dtype=dt,
-        optimizer=opt,
-        gradient_checkpointing=gc,
-    )
-    return web.json_response({"parameters": params, "memory": mem})
+        params = ParameterCalculator.calculate(config)
+        params["total_params"] = params.get("total_parameters", 0)
+        params["trainable_params"] = params.get("trainable_parameters", 0)
+        mem = MemoryEstimator.estimate(
+            config=config,
+            micro_batch_size=bs,
+            seq_len=sl,
+            dtype=dt,
+            optimizer=opt,
+            gradient_checkpointing=gc,
+        )
+        return web.json_response({"parameters": params, "memory": mem})
+    except Exception as e:
+        logger.warning("Error in handle_estimate_network: %s", e)
+        return web.json_response({
+            "parameters": {"total_params": 0, "trainable_params": 0, "error": str(e)},
+            "memory": {"error": str(e), "total_training_vram_gb": 0.0}
+        })
 
 
 async def handle_budget_recommend(request: web.Request) -> web.Response:

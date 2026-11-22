@@ -30,6 +30,7 @@ import {
   Play,
   Plus,
   Trash2,
+  Copy,
   Layers,
   Save,
   ChevronDown,
@@ -1003,11 +1004,64 @@ export const NetworkStudioView: React.FC = () => {
     [globalConfig, nodes, setNodes, setEdges]
   );
 
-  const handleDeleteNode = (nodeId: string) => {
-    setNodes((nds) => nds.filter((n) => n.id !== nodeId));
-    setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
-    setSelectedNodeId(null);
-  };
+  const handleDeleteNode = useCallback(
+    (nodeId: string) => {
+      setNodes((nds) => nds.filter((n) => n.id !== nodeId));
+      setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
+      setSelectedNodeId(null);
+    },
+    [setNodes, setEdges]
+  );
+
+  const handleDuplicateSelectedNode = useCallback(() => {
+    if (!selectedNodeId) return;
+    const nodeToDup = nodes.find((n) => n.id === selectedNodeId);
+    if (!nodeToDup) return;
+    const newId = `node_${Date.now().toString().slice(-6)}`;
+    const newNode: Node = {
+      ...nodeToDup,
+      id: newId,
+      position: {
+        x: nodeToDup.position.x + 30,
+        y: nodeToDup.position.y + 30,
+      },
+      data: {
+        ...nodeToDup.data,
+        label: `${nodeToDup.data.label} (Copy)`,
+      },
+    };
+    setNodes((nds) => [...nds, newNode]);
+    setSelectedNodeId(newId);
+    setStatusMessage(`Duplicated '${nodeToDup.data.label}'`);
+    setTimeout(() => setStatusMessage(null), 2500);
+  }, [selectedNodeId, nodes, setNodes]);
+
+  // Canvas building zone keyboard shortcuts: Del/Backspace to delete selected, Ctrl+D to duplicate
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedNodeId) {
+        e.preventDefault();
+        handleDeleteNode(selectedNodeId);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d" && selectedNodeId) {
+        e.preventDefault();
+        handleDuplicateSelectedNode();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedNodeId, handleDeleteNode, handleDuplicateSelectedNode]);
 
   const handleCreateScratch = useCallback(() => {
     setNodes([]);
@@ -1345,7 +1399,7 @@ export const NetworkStudioView: React.FC = () => {
         />
 
         {/* Center Canvas */}
-        <div className="flex-1 h-full min-h-[450px] glass-panel rounded-lg overflow-hidden relative border border-[#273548]">
+        <div className="flex-1 h-full min-h-[450px] bg-[#171717] rounded-lg overflow-hidden relative border border-[#333333]">
           <ReactFlowProvider>
             <ReactFlow
               nodes={nodes.map((n) => ({
@@ -1361,98 +1415,118 @@ export const NetworkStudioView: React.FC = () => {
               onConnect={onConnect}
               onNodeClick={onNodeClick}
               onPaneClick={onPaneClick}
+              onNodesDelete={(deleted) => {
+                deleted.forEach((n) => handleDeleteNode(n.id));
+              }}
+              deleteKeyCode={["Delete", "Backspace"]}
               nodeTypes={nodeTypes}
               fitView
-              className="sci-fi-grid"
             >
               <Background
                 variant={BackgroundVariant.Dots}
                 gap={24}
                 size={1}
-                color="rgba(69, 207, 255, 0.15)"
+                color="rgba(255, 255, 255, 0.05)"
               />
-              <Controls className="!bg-[#0E1420] !border-[#273548] !rounded-lg !text-[#45CFFF]" />
+              <Controls className="!bg-[#202020] !border-[#333333] !rounded !text-[#A3A3A3]" />
               <MiniMap
-                nodeColor="#45CFFF"
-                maskColor="rgba(9, 13, 20, 0.8)"
-                className="!bg-[#0E1420]/90 !border !border-[#273548] !rounded-lg"
+                nodeColor="#737373"
+                maskColor="rgba(20, 20, 20, 0.85)"
+                className="!bg-[#202020] !border !border-[#333333] !rounded"
               />
             </ReactFlow>
           </ReactFlowProvider>
 
           {/* Canvas Floating Top Info & Model Switcher Toolbar */}
-          <div className="absolute top-3 left-3 right-3 flex flex-wrap items-center justify-between gap-2 pointer-events-none z-10">
+          <div className="absolute top-2.5 left-2.5 right-2.5 flex flex-wrap items-center justify-between gap-2 pointer-events-none z-10">
             {/* Left: Active Model Switcher */}
             <div className="flex items-center gap-2 pointer-events-auto">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#0E1420]/95 border border-[#273548] backdrop-blur-md shadow-md">
-                <span className="text-[10px] text-[#91A0B4] font-bold uppercase font-mono">MODEL:</span>
+              <div className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#202020]/95 border border-[#333333] shadow-sm">
+                <span className="text-[10px] text-[#737373] uppercase font-mono">MODEL:</span>
                 <div className="relative flex items-center">
                   <select
                     value={globalConfig.id}
                     onChange={(e) => handleLoadNetwork(e.target.value)}
-                    className="bg-transparent text-[#45CFFF] font-bold text-xs font-mono pr-5 focus:outline-none cursor-pointer appearance-none"
+                    className="bg-transparent text-[#F2F2F2] font-medium text-xs font-mono pr-4 focus:outline-none cursor-pointer appearance-none"
                   >
                     {userCustomNetworks.length > 0 && (
-                      <optgroup label="MY REGISTERED ARCHITECTURES">
+                      <optgroup label="Custom Models">
                         {userCustomNetworks.map((m) => (
-                          <option key={m.id} value={m.id} className="bg-[#0E1420] text-[#ECF3FC]">
+                          <option key={m.id} value={m.id} className="bg-[#202020] text-[#F2F2F2]">
                             {m.name} ({formatParamCount(m.total_parameters || 0)})
                           </option>
                         ))}
                       </optgroup>
                     )}
-                    <optgroup label="BASE ARCHITECTURE TEMPLATES">
+                    <optgroup label="Templates">
                       {baseTemplates.map((t) => (
-                        <option key={t.id} value={t.id} className="bg-[#0E1420] text-[#ECF3FC]">
+                        <option key={t.id} value={t.id} className="bg-[#202020] text-[#F2F2F2]">
                           {t.name}
                         </option>
                       ))}
                     </optgroup>
                   </select>
-                  <ChevronDown className="w-3 h-3 text-[#45CFFF] absolute right-0 pointer-events-none" />
+                  <ChevronDown className="w-3 h-3 text-[#737373] absolute right-0 pointer-events-none" />
                 </div>
               </div>
 
               {isCustomModel ? (
-                <span className="px-2 py-0.5 rounded-md bg-[#45CFFF]/15 border border-[#45CFFF]/30 text-[#45CFFF] text-[10px] font-bold font-mono">
-                  CUSTOM (EDITABLE)
+                <span className="px-1.5 py-0.5 rounded bg-[#262626] border border-[#333333] text-[#A3A3A3] text-[10px] font-mono">
+                  Custom
                 </span>
               ) : (
-                <span className="px-2 py-0.5 rounded-md bg-[#91A0B4]/15 border border-[#91A0B4]/30 text-[#91A0B4] text-[10px] font-bold font-mono">
-                  BASE TEMPLATE
+                <span className="px-1.5 py-0.5 rounded bg-[#1B1B1B] border border-[#262626] text-[#737373] text-[10px] font-mono">
+                  Template
                 </span>
               )}
 
               {statusMessage && (
-                <span className="px-2.5 py-1 rounded-md bg-[#35D49A]/15 border border-[#35D49A]/40 font-mono text-xs text-[#35D49A] font-bold animate-in fade-in">
+                <span className="px-2 py-0.5 rounded bg-[#262626] border border-[#333333] font-mono text-xs text-[#F2F2F2]">
                   {statusMessage}
                 </span>
               )}
             </div>
 
             {/* Right: Quick Action Buttons */}
-            <div className="flex items-center gap-2 pointer-events-auto">
+            <div className="flex items-center gap-1.5 pointer-events-auto">
+              {selectedNodeId && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleDuplicateSelectedNode}
+                    className="btn btn-secondary btn-sm flex items-center gap-1"
+                    title="Duplicate selected block (Ctrl+D)"
+                  >
+                    <Copy className="w-3 h-3" />
+                    <span className="hidden sm:inline">Duplicate</span>
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-[#303030] text-[#A3A3A3] font-mono">^D</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteNode(selectedNodeId)}
+                    className="btn btn-sm bg-[#262626] border border-[#333333] hover:border-[#f87171]/50 text-[#f87171] flex items-center gap-1"
+                    title="Delete selected block (Del / Backspace)"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span className="hidden sm:inline">Delete</span>
+                    <span className="text-[9px] px-1 py-0.2 rounded bg-[#303030] text-[#f87171] font-mono">Del</span>
+                  </button>
+                </>
+              )}
+
               <button
                 type="button"
                 onClick={() => setShowBlueprintGuide((prev) => !prev)}
                 className={cn(
-                  "flex items-center gap-1.5 px-3 py-1.5 rounded-md font-mono text-xs font-semibold transition-all shadow-sm border",
-                  showBlueprintGuide
-                    ? "bg-[#45CFFF]/15 border-[#45CFFF]/50 text-[#45CFFF]"
-                    : "bg-[#131C29] border-[#273548] text-[#91A0B4] hover:text-[#ECF3FC]"
+                  "btn btn-sm",
+                  showBlueprintGuide ? "btn-primary" : "btn-secondary"
                 )}
                 title="Toggle Architecture Blueprint & Layer Order Guide"
               >
-                <Lightbulb className="w-3.5 h-3.5 text-[#45CFFF]" />
-                <span className="hidden sm:inline">Layer Order Guide</span>
-                <span
-                  className={cn(
-                    "text-[10px] px-1.5 py-0.2 rounded font-bold font-mono",
-                    placedStagesCount === 5
-                      ? "bg-[#35D49A]/20 text-[#35D49A]"
-                      : "bg-[#F59E0B]/20 text-[#F59E0B]"
-                  )}
-                >
+                <Lightbulb className="w-3 h-3" />
+                <span className="hidden sm:inline">Guide</span>
+                <span className="text-[10px] opacity-75">
                   {placedStagesCount}/5
                 </span>
               </button>
@@ -1461,21 +1535,21 @@ export const NetworkStudioView: React.FC = () => {
                 type="button"
                 onClick={handleSaveNetwork}
                 disabled={isSaving}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-mono text-xs font-bold transition-all shadow-md disabled:opacity-50"
+                className="btn btn-primary btn-sm flex items-center gap-1"
                 title="Save current model configuration and layers"
               >
-                <Save className="w-3.5 h-3.5" />
-                <span>{isSaving ? "SAVING..." : isCustomModel ? "SAVE CHANGES" : "SAVE TO REGISTRY"}</span>
+                <Save className="w-3 h-3" />
+                <span>{isSaving ? "Saving..." : isCustomModel ? "Save Changes" : "Save Model"}</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleCreateScratch}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF] text-[#ECF3FC] font-mono text-xs font-semibold transition-all shadow-sm"
+                className="btn btn-secondary btn-sm flex items-center gap-1"
                 title="Start a new architecture on a blank canvas"
               >
-                <Plus className="w-3.5 h-3.5 text-[#45CFFF]" />
-                <span className="hidden sm:inline">+ New Architecture</span>
+                <Plus className="w-3 h-3" />
+                <span className="hidden sm:inline">New</span>
               </button>
 
               {nodes.length > 0 && (
@@ -1486,7 +1560,7 @@ export const NetworkStudioView: React.FC = () => {
                     setEdges([]);
                     setSelectedNodeId(null);
                   }}
-                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-[#0E1420] border border-[#273548] hover:border-[#FF657A]/50 hover:bg-[#FF657A]/15 text-[#91A0B4] hover:text-[#FF657A] font-mono text-xs transition-all"
+                  className="btn btn-ghost btn-sm text-[#737373] hover:text-[#f87171]"
                   title="Clear canvas"
                 >
                   <Trash2 className="w-3 h-3" />
@@ -1498,175 +1572,146 @@ export const NetworkStudioView: React.FC = () => {
 
           {/* Floating Shadow Architecture Blueprint Guide (When canvas has nodes) */}
           {showBlueprintGuide && nodes.length > 0 && (
-            <div className="absolute top-14 right-4 z-20 w-84 max-h-[calc(100%-80px)] overflow-y-auto glass-panel p-3.5 rounded-xl border border-[#45CFFF]/30 shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150 space-y-3 font-mono text-xs">
-              <div className="flex items-center justify-between pb-2 border-b border-[#273548]">
-                <div className="flex items-center gap-2">
-                  <Lightbulb className="w-4 h-4 text-[#45CFFF]" />
-                  <span className="font-bold text-[#ECF3FC] uppercase tracking-wider text-[11px]">
-                    SHADOW BLUEPRINT ORDER
+            <div className="absolute top-12 right-3 z-20 w-80 max-h-[calc(100%-60px)] overflow-y-auto bg-[#202020] p-3 rounded-lg border border-[#333333] shadow-xl space-y-2.5 font-mono text-xs">
+              <div className="flex items-center justify-between pb-1.5 border-b border-[#262626]">
+                <div className="flex items-center gap-1.5">
+                  <Lightbulb className="w-3.5 h-3.5 text-[#737373]" />
+                  <span className="font-semibold text-[#F2F2F2] uppercase text-[11px]">
+                    Blueprint Flow
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  <span
-                    className={cn(
-                      "text-[10px] px-2 py-0.5 rounded font-bold font-mono",
-                      placedStagesCount === 5
-                        ? "bg-[#35D49A]/20 text-[#35D49A] border border-[#35D49A]/30"
-                        : "bg-[#F59E0B]/20 text-[#F59E0B] border border-[#F59E0B]/30"
-                    )}
-                  >
-                    {placedStagesCount}/5 STAGES
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-[#1B1B1B] text-[#A3A3A3]">
+                    {placedStagesCount}/5 Stages
                   </span>
                   <button
                     onClick={() => setShowBlueprintGuide(false)}
-                    className="p-1 rounded text-[#91A0B4] hover:text-[#ECF3FC] hover:bg-[#182333]"
-                    title="Close Guide"
+                    className="p-1 rounded text-[#737373] hover:text-[#F2F2F2]"
                   >
-                    <X className="w-3.5 h-3.5" />
+                    <X className="w-3 h-3" />
                   </button>
                 </div>
               </div>
 
-              <p className="text-[10px] text-[#91A0B4] leading-relaxed">
-                Standard causal autoregressive LLM layer execution flow. Follow this order for proper forward/backward dynamics:
+              <p className="text-[10px] text-[#737373] leading-relaxed">
+                Standard autoregressive LLM layer execution flow:
               </p>
 
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 {blueprintStatus.map((stage, idx) => (
                   <React.Fragment key={stage.step}>
                     <div
                       className={cn(
-                        "p-2.5 rounded-lg border text-[11px] transition-all relative",
+                        "p-2 rounded border text-[11px] transition-colors",
                         stage.placed
-                          ? "bg-[#0E1420]/80 border-[#35D49A]/30"
-                          : "bg-[#131C29]/70 border-dashed border-[#F59E0B]/40 hover:border-[#45CFFF]/60"
+                          ? "bg-[#1B1B1B] border-[#262626]"
+                          : "bg-[#202020] border-dashed border-[#404040]"
                       )}
                     >
-                      <div className="flex items-center justify-between gap-1.5 mb-1">
-                        <div className="flex items-center gap-1.5 font-bold">
-                          <span className="text-[#45CFFF] text-[10px]">#{stage.step}</span>
-                          <span className="text-[#ECF3FC]">{stage.name}</span>
+                      <div className="flex items-center justify-between gap-1 mb-0.5">
+                        <div className="flex items-center gap-1.5 font-medium">
+                          <span className="text-[#737373] text-[10px]">#{stage.step}</span>
+                          <span className="text-[#F2F2F2]">{stage.name}</span>
                         </div>
                         {stage.placed ? (
-                          <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#35D49A]/15 text-[#35D49A] font-bold flex items-center gap-1">
-                            <Check className="w-2.5 h-2.5" /> PLACED
+                          <span className="text-[9px] px-1 py-0.2 rounded bg-[#262626] text-[#4ade80] flex items-center gap-0.5">
+                            <Check className="w-2.5 h-2.5" /> Placed
                           </span>
                         ) : (
                           <button
                             type="button"
                             onClick={() => handlePlaceBlueprintStage(stage.step)}
-                            className="text-[9px] px-2 py-0.5 rounded bg-[#45CFFF]/15 hover:bg-[#45CFFF]/25 text-[#45CFFF] border border-[#45CFFF]/40 font-bold transition-colors"
+                            className="text-[9px] px-1.5 py-0.2 rounded bg-[#262626] hover:bg-[#333333] text-[#D4D4D4] border border-[#333333]"
                           >
-                            + INSERT
+                            + Insert
                           </button>
                         )}
                       </div>
-                      <div className="text-[9px] text-[#5E7188] mb-0.5 font-mono">
+                      <div className="text-[9px] text-[#525252] mb-0.5 font-mono">
                         {stage.shape(globalConfig.d_model || 512, globalConfig.vocab_size || 12288)}
                       </div>
-                      <div className="text-[10px] text-[#91A0B4] leading-tight">
+                      <div className="text-[10px] text-[#737373] leading-tight">
                         {stage.description}
                       </div>
                     </div>
 
                     {idx < blueprintStatus.length - 1 && (
-                      <div className="flex justify-center -my-0.5 text-[#45CFFF]/40">
-                        <ArrowDown className="w-3 h-3" />
+                      <div className="flex justify-center -my-0.5 text-[#404040]">
+                        <ArrowDown className="w-2.5 h-2.5" />
                       </div>
                     )}
                   </React.Fragment>
                 ))}
               </div>
 
-              <div className="pt-2 border-t border-[#273548]">
+              <div className="pt-1.5 border-t border-[#262626]">
                 <button
                   type="button"
                   onClick={handleAutoPlaceRecommendedPipeline}
-                  className="w-full py-1.5 px-3 rounded-md bg-[#45CFFF]/15 hover:bg-[#45CFFF]/25 border border-[#45CFFF]/40 text-[#45CFFF] font-bold text-xs flex items-center justify-center gap-1.5 transition-colors shadow-sm"
+                  className="btn btn-secondary btn-sm w-full"
                 >
-                  <Sparkles className="w-3.5 h-3.5" /> Reset & Align Recommended Pipeline
+                  <Sparkles className="w-3 h-3 text-[#A3A3A3]" /> Align Recommended Flow
                 </button>
               </div>
             </div>
           )}
 
-          {/* Empty Canvas Overlay with Architectural Shadow Section */}
+          {/* Empty Canvas Overlay */}
           {nodes.length === 0 && (
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none p-6 z-10 overflow-y-auto">
-              <div className="max-w-xl w-full bg-[#0E1420]/95 border border-[#384C66] rounded-xl p-6 backdrop-blur-xl pointer-events-auto shadow-2xl relative my-auto">
-                <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/40 to-transparent pointer-events-none" />
-
-                <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#273548]">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-lg bg-[#131C29] border border-[#45CFFF]/40 flex items-center justify-center shadow-[0_0_12px_rgba(69,207,255,0.2)]">
-                      <Layers className="w-4 h-4 text-[#45CFFF]" />
-                    </div>
-                    <div>
-                      <h3 className="font-mono font-bold text-xs text-[#ECF3FC] uppercase tracking-wider">
-                        LLM ARCHITECTURE BLUEPRINT & SHADOW ORDER
-                      </h3>
-                      <p className="text-[10px] text-[#91A0B4] mt-0.5">
-                        Follow the canonical 5-stage pipeline for causal autoregressive models:
-                      </p>
-                    </div>
+              <div className="max-w-md w-full bg-[#202020] border border-[#333333] rounded-lg p-5 pointer-events-auto shadow-xl space-y-3 font-mono">
+                <div className="flex items-center justify-between pb-2 border-b border-[#262626]">
+                  <div className="flex items-center gap-2">
+                    <Layers className="w-4 h-4 text-[#737373]" />
+                    <h3 className="text-xs font-semibold text-[#F2F2F2] uppercase">
+                      Architecture Blueprint
+                    </h3>
                   </div>
                   <button
                     type="button"
                     onClick={handleAutoPlaceRecommendedPipeline}
-                    className="py-1.5 px-3 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-bold text-xs flex items-center gap-1.5 transition-all shadow-md shrink-0"
+                    className="btn btn-primary btn-sm flex items-center gap-1"
                   >
-                    <Sparkles className="w-3.5 h-3.5" /> Place Full Flow
+                    <Sparkles className="w-3 h-3" /> Place Full Flow
                   </button>
                 </div>
 
                 {/* 5-Stage Shadow Flow in Order */}
-                <div className="space-y-2 mb-4">
+                <div className="space-y-1.5">
                   {blueprintStatus.map((stage, idx) => (
                     <React.Fragment key={stage.step}>
-                      <div className="p-2.5 rounded-lg bg-[#131C29]/80 border border-[#273548] hover:border-[#45CFFF]/50 flex items-center justify-between gap-3 text-xs transition-colors">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <span className="w-5 h-5 rounded-full bg-[#45CFFF]/15 border border-[#45CFFF]/40 text-[#45CFFF] text-[10px] font-bold flex items-center justify-center shrink-0">
+                      <div className="p-2 rounded bg-[#1B1B1B] border border-[#262626] flex items-center justify-between gap-2 text-xs">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="w-4 h-4 rounded-full bg-[#262626] text-[#A3A3A3] text-[9px] flex items-center justify-center shrink-0">
                             {stage.step}
                           </span>
                           <div className="min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className="font-bold text-[#ECF3FC] truncate">{stage.name}</span>
-                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#0E1420] border border-[#273548] text-[#5E7188] font-mono shrink-0">
-                                {stage.layerType}
-                              </span>
-                            </div>
-                            <p className="text-[10px] text-[#91A0B4] truncate mt-0.5">
-                              {stage.description}
-                            </p>
+                            <span className="font-medium text-[#F2F2F2] truncate block">{stage.name}</span>
+                            <span className="text-[10px] text-[#737373] truncate block">{stage.description}</span>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-[9px] text-[#5E7188] font-mono hidden md:inline">
-                            {stage.shape(globalConfig.d_model || 512, globalConfig.vocab_size || 12288)}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handlePlaceBlueprintStage(stage.step)}
-                            className="px-2.5 py-1 rounded bg-[#45CFFF]/10 hover:bg-[#45CFFF]/20 border border-[#45CFFF]/40 text-[#45CFFF] text-[10px] font-bold transition-all"
-                          >
-                            + Place
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handlePlaceBlueprintStage(stage.step)}
+                          className="btn btn-secondary btn-sm px-2 text-[10px] shrink-0"
+                        >
+                          + Place
+                        </button>
                       </div>
 
                       {idx < blueprintStatus.length - 1 && (
-                        <div className="flex justify-center -my-1 text-[#45CFFF]/40">
-                          <ArrowDown className="w-3.5 h-3.5" />
+                        <div className="flex justify-center -my-0.5 text-[#333333]">
+                          <ArrowDown className="w-2.5 h-2.5" />
                         </div>
                       )}
                     </React.Fragment>
                   ))}
                 </div>
 
-                <div className="p-2.5 rounded-lg bg-[#0E1420] border border-[#273548] flex items-center justify-between text-[11px] text-[#91A0B4]">
-                  <span>Active Dimensions: <strong className="text-[#ECF3FC]">d_model={globalConfig.d_model || 512}</strong> | <strong className="text-[#ECF3FC]">vocab={globalConfig.vocab_size || 12288}</strong></span>
-                  <span className="text-[#45CFFF] text-[10px]">d_model auto-syncs across all sections</span>
+                <div className="p-2 rounded bg-[#1B1B1B] border border-[#262626] flex items-center justify-between text-[10px] text-[#737373]">
+                  <span>d_model: <strong className="text-[#F2F2F2]">{globalConfig.d_model || 512}</strong> | vocab: <strong className="text-[#F2F2F2]">{globalConfig.vocab_size || 12288}</strong></span>
+                  <span>Syncs automatically across layers</span>
                 </div>
               </div>
             </div>
@@ -1693,101 +1738,97 @@ export const NetworkStudioView: React.FC = () => {
       </div>
 
       {/* Bottom Console: Architecture Metrics & Validation */}
-      <div className="h-26 glass-panel rounded-lg p-3 flex items-center justify-between gap-6 shrink-0 font-mono text-xs select-none relative overflow-hidden">
-        <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/15 to-transparent pointer-events-none" />
-
+      <div className="h-20 panel bg-[#202020] border-[#333333] rounded-lg p-2.5 flex items-center justify-between gap-6 shrink-0 font-mono text-xs select-none">
         {/* Left: Parameter Calculations */}
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-5">
           <div className="space-y-0.5">
-            <span className="text-[10px] text-[#5E7188] uppercase font-semibold">
-              TOTAL PARAMETERS
+            <span className="text-[10px] text-[#737373] uppercase font-medium">
+              Parameters
             </span>
-            <div className="text-xl font-bold font-mono-num text-[#45CFFF]">
+            <div className="text-base font-semibold font-mono-num text-[#F2F2F2]">
               {formatParamCount(estimation?.parameters?.total_params || 48531968)}{" "}
-              <span className="text-xs text-[#91A0B4] font-normal">
+              <span className="text-[10px] text-[#737373] font-normal">
                 ({(estimation?.parameters?.total_params || 48531968).toLocaleString()})
               </span>
             </div>
-            <span className="text-[10px] text-[#91A0B4]">
-              Trainable:{" "}
-              {formatParamCount(estimation?.parameters?.trainable_params || 48531968)}
+            <span className="text-[10px] text-[#525252]">
+              Trainable: {formatParamCount(estimation?.parameters?.trainable_params || 48531968)}
             </span>
           </div>
 
-          <div className="h-10 w-px bg-[#273548]" />
+          <div className="h-8 w-px bg-[#262626]" />
 
           {/* Memory Estimations */}
           <div className="space-y-0.5">
-            <span className="text-[10px] text-[#5E7188] uppercase font-semibold flex items-center gap-1">
-              <HardDrive className="w-3 h-3 text-[#45CFFF]" /> TRAINING VRAM
+            <span className="text-[10px] text-[#737373] uppercase font-medium flex items-center gap-1">
+              <HardDrive className="w-3 h-3 text-[#737373]" /> Training VRAM
             </span>
-            <div className="text-xl font-bold font-mono-num text-[#ECF3FC]">
+            <div className="text-base font-semibold font-mono-num text-[#F2F2F2]">
               {estimation?.memory?.total_training_vram_mb
                 ? `${Math.round(estimation.memory.total_training_vram_mb)} MB`
                 : "2,630 MB"}
             </div>
-            <span className="text-[10px] text-[#91A0B4]">
-              Weights: {estimation?.memory?.model_weights_mb || 97} MB | Opt:{" "}
-              {estimation?.memory?.optimizer_states_mb || 388} MB
+            <span className="text-[10px] text-[#525252]">
+              Weights: {estimation?.memory?.model_weights_mb || 97} MB | Opt: {estimation?.memory?.optimizer_states_mb || 388} MB
             </span>
           </div>
 
-          <div className="h-10 w-px bg-[#273548]" />
+          <div className="h-8 w-px bg-[#262626]" />
 
           {/* Hardware Compatibility */}
-          <div className="space-y-1">
-            <span className="text-[10px] text-[#5E7188] uppercase font-semibold">
-              HARDWARE COMPLIANCE
+          <div className="space-y-0.5">
+            <span className="text-[10px] text-[#737373] uppercase font-medium">
+              Hardware
             </span>
             <div>
               {estimation?.memory?.safety_status === "SAFE" || estimation?.memory?.fits_6gb_gpu !== false ? (
-                <span className="px-2 py-0.5 rounded-md bg-[#35D49A]/15 border border-[#35D49A]/30 text-[#35D49A] font-bold text-[10px]">
-                  FITS HARDWARE BUDGET ({estimation?.memory?.hardware_target || "SAFE"})
+                <span className="px-1.5 py-0.2 rounded bg-[rgba(74,222,128,0.08)] border border-[rgba(74,222,128,0.25)] text-[#4ade80] text-[10px] font-medium">
+                  Fits Budget ({estimation?.memory?.hardware_target || "SAFE"})
                 </span>
               ) : estimation?.memory?.safety_status === "TIGHT" ? (
-                <span className="px-2 py-0.5 rounded-md bg-[#F2B85B]/15 border border-[#F2B85B]/30 text-[#F2B85B] font-bold text-[10px]">
-                  TIGHT BUDGET MARGIN ({estimation?.memory?.total_training_vram_gb || 0} GB)
+                <span className="px-1.5 py-0.2 rounded bg-[rgba(250,204,21,0.08)] border border-[rgba(250,204,21,0.25)] text-[#facc15] text-[10px] font-medium">
+                  Tight Margin
                 </span>
               ) : (
-                <span className="px-2 py-0.5 rounded-md bg-[#FF657A]/15 border border-[#FF657A]/30 text-[#FF657A] font-bold text-[10px]">
-                  EXCEEDS ALLOCATION CEILING
+                <span className="px-1.5 py-0.2 rounded bg-[rgba(248,113,113,0.08)] border border-[rgba(248,113,113,0.25)] text-[#f87171] text-[10px] font-medium">
+                  Exceeds Budget
                 </span>
               )}
             </div>
-            <span className="text-[10px] text-[#91A0B4]">
-              Micro-batch 4 | Seq 256 | BF16
+            <span className="text-[10px] text-[#525252]">
+              Batch 4 | Seq 256 | BF16
             </span>
           </div>
         </div>
 
-        {/* Right: Pre-Flight Validation status */}
-        <div className="flex items-center gap-4">
+        {/* Right: Validation status & deploy */}
+        <div className="flex items-center gap-3">
           <div className="text-right">
-            <div className="flex items-center justify-end gap-1.5 font-bold">
+            <div className="flex items-center justify-end gap-1 font-medium">
               {validation.valid ? (
                 <>
-                  <CheckCircle2 className="w-4 h-4 text-[#35D49A]" />
-                  <span className="text-[#35D49A]">ARCHITECTURE VALIDATED</span>
+                  <CheckCircle2 className="w-3.5 h-3.5 text-[#4ade80]" />
+                  <span className="text-[#4ade80] text-xs">Validated</span>
                 </>
               ) : (
                 <>
-                  <AlertTriangle className="w-4 h-4 text-[#FF657A]" />
-                  <span className="text-[#FF657A]">VALIDATION ISSUES</span>
+                  <AlertTriangle className="w-3.5 h-3.5 text-[#f87171]" />
+                  <span className="text-[#f87171] text-xs">Issues Found</span>
                 </>
               )}
             </div>
-            <p className="text-[10px] text-[#91A0B4] mt-0.5">
+            <p className="text-[10px] text-[#737373] truncate max-w-xs">
               {(validation?.issues && validation.issues.length > 0)
                 ? validation.issues[0]
-                : "Ready for ModelFactory instantiation & execution pipeline."}
+                : "Ready for model instantiation."}
             </p>
           </div>
 
           <a
             href={`/training?network=${encodeURIComponent(globalConfig.id)}`}
-            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-bold transition-all shadow-sm shrink-0"
+            className="btn btn-primary btn-sm flex items-center gap-1.5 shrink-0"
           >
-            <Play className="w-3.5 h-3.5 fill-current" /> DEPLOY TO TRAINING
+            <Play className="w-3 h-3 fill-current" /> Deploy to Training
           </a>
         </div>
       </div>

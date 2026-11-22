@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { HardwareTelemetry } from "@/types/api";
 import { api } from "@/services/api";
 
@@ -9,33 +9,26 @@ export function useHardwareTelemetry(intervalMs: number = 2000) {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
+  const fetchTelem = useCallback(async () => {
+    try {
+      const data = await api.getHardwareTelemetry();
+      setTelemetry(data);
+      setError(null);
+      setIsLoading(false);
+    } catch (err: any) {
+      setError(err.message || "Failed to fetch hardware telemetry");
+      setIsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    let mounted = true;
-
-    const fetchTelem = async () => {
-      try {
-        const data = await api.getHardwareTelemetry();
-        if (mounted) {
-          setTelemetry(data);
-          setError(null);
-          setIsLoading(false);
-        }
-      } catch (err: any) {
-        if (mounted) {
-          setError(err.message || "Failed to fetch hardware telemetry");
-          setIsLoading(false);
-        }
-      }
-    };
-
     fetchTelem();
     const interval = setInterval(fetchTelem, intervalMs);
 
     return () => {
-      mounted = false;
       clearInterval(interval);
     };
-  }, [intervalMs]);
+  }, [fetchTelem, intervalMs]);
 
-  return { telemetry, error, isLoading };
+  return { telemetry, error, isLoading, refetch: fetchTelem, refresh: fetchTelem };
 }

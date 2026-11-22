@@ -58,6 +58,7 @@ class CheckpointManager:
         run_id: Optional[str] = None,
         filename_prefix: str = "checkpoint",
         is_best: bool = False,
+        workspace_id: str = "default",
     ) -> Path:
         """
         Atomically saves training state to disk.
@@ -111,6 +112,7 @@ class CheckpointManager:
             "scheduler_state_dict": scheduler_sd,
             "rng_states": safe_rng_states,
             "training_config": training_config or {},
+            "workspace_id": workspace_id,
             "timestamp": timestamp,
         }
 
@@ -147,6 +149,7 @@ class CheckpointManager:
             meta_json = {
                 "checkpoint_id": chk_id,
                 "run_id": run_id,
+                "workspace_id": workspace_id,
                 "version": "2.0",
                 "step": step,
                 "global_step": step,
@@ -182,6 +185,7 @@ class CheckpointManager:
                     file_path=str(target_path.resolve()),
                     file_size_bytes=file_size,
                     phase=phase,
+                    workspace_id=workspace_id,
                     metadata={
                         "version": "2.0",
                         "dataset_revision": dataset_rev,
@@ -427,6 +431,12 @@ class CheckpointManager:
 
         stat = path.stat()
         is_saved_model = "models" in path.parts or (path.parent.name != "checkpoints" and path.parent.name != "checkpoints_v2")
+        default_model_name = None
+        if is_saved_model:
+            if path.parent.name and path.parent.name != "models":
+                default_model_name = path.parent.name
+            else:
+                default_model_name = path.stem.replace("_full", "").replace("_stripped", "")
         res: Dict[str, Any] = {
             "filename": path.name,
             "path": str(path.resolve()),
@@ -434,7 +444,7 @@ class CheckpointManager:
             "size_mb": round(stat.st_size / (1024 * 1024), 2),
             "modified": stat.st_mtime,
             "is_saved_model": is_saved_model,
-            "model_name": path.parent.name if is_saved_model else None,
+            "model_name": default_model_name,
         }
 
         # Check for companion sidecar JSON metadata first (instant, 0% CPU memory overhead)
@@ -448,6 +458,7 @@ class CheckpointManager:
                     meta = json.load(mf)
                 res.update({
                     "run_id": meta.get("run_id"),
+                    "workspace_id": meta.get("workspace_id", "default"),
                     "version": meta.get("version", "2.0"),
                     "step": meta.get("step", meta.get("global_step", 0)),
                     "tokens_seen": meta.get("tokens_seen", 0),
@@ -456,19 +467,23 @@ class CheckpointManager:
                     "phase": meta.get("phase", "unknown"),
                     "total_params": meta.get("total_params", 0),
                     "format": "pytorch",
-                    "model_name": meta.get("name") or meta.get("custom_name") or (path.parent.name if is_saved_model else None) or meta.get("model_id"),
+                    "model_name": meta.get("custom_name") or meta.get("name") or default_model_name or meta.get("model_id"),
                 })
-                if not res.get("run_id") and self.db is not None:
+                if self.db is not None:
                     try:
                         with self.db._lock, self.db._get_connection() as conn:
                             row = conn.execute(
-                                "SELECT run_id FROM checkpoints WHERE id = ? OR file_path LIKE ? ORDER BY created_at DESC LIMIT 1",
+                                "SELECT run_id, workspace_id FROM checkpoints WHERE id = ? OR file_path LIKE ? ORDER BY created_at DESC LIMIT 1",
                                 (path.stem, f"%{path.name}%"),
                             ).fetchone()
-                            if row and row["run_id"]:
-                                res["run_id"] = row["run_id"]
+                            if row:
+                                if row["run_id"] and not res.get("run_id"):
+                                    res["run_id"] = row["run_id"]
+                                if row["workspace_id"] and not res.get("workspace_id"):
+                                    res["workspace_id"] = row["workspace_id"]
                     except Exception:
                         pass
+                res.setdefault("workspace_id", "default")
                 return res
             except Exception:
                 pass
@@ -478,11 +493,13 @@ class CheckpointManager:
                 res["format"] = "safetensors"
             else:
                 res["format"] = "pytorch"
-                # Safe load with fallback for numpy/custom RNG states
                 try:
                     chk = torch.load(path, map_location="cpu", weights_only=True)
-                except Exception:
-                    chk = torch.load(path, map_location="cpu", weights_only=False)
+                except Exception as e:
+                    # Record error safely without executing untrusted payload
+                    res["load_error"] = str(e)
+                    chk = None
+
                 if isinstance(chk, dict):
                     res["version"] = chk.get("version", "1.0")
                     res["step"] = chk.get("step", chk.get("global_step", 0))
@@ -495,21 +512,25 @@ class CheckpointManager:
                     res["total_params"] = sum(p.numel() for p in sd.values() if isinstance(p, torch.Tensor))
         except Exception as e:
             res["load_error"] = str(e)
-        if not res.get("run_id") and self.db is not None:
+        if self.db is not None:
             try:
                 with self.db._lock, self.db._get_connection() as conn:
                     row = conn.execute(
-                        "SELECT run_id FROM checkpoints WHERE id = ? OR file_path LIKE ? ORDER BY created_at DESC LIMIT 1",
+                        "SELECT run_id, workspace_id FROM checkpoints WHERE id = ? OR file_path LIKE ? ORDER BY created_at DESC LIMIT 1",
                         (path.stem, f"%{path.name}%"),
                     ).fetchone()
-                    if row and row["run_id"]:
-                        res["run_id"] = row["run_id"]
+                    if row:
+                        if row["run_id"] and not res.get("run_id"):
+                            res["run_id"] = row["run_id"]
+                        if row["workspace_id"] and not res.get("workspace_id"):
+                            res["workspace_id"] = row["workspace_id"]
             except Exception:
                 pass
+        res.setdefault("workspace_id", "default")
         return res
 
-    def list_checkpoints_on_disk(self) -> List[Dict[str, Any]]:
-        """Scans checkpoint and model directories for all .pt and .safetensors files."""
+    def list_checkpoints_on_disk(self, workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Scans checkpoint and model directories for all .pt and .safetensors files, optionally filtered by workspace."""
         files = []
         # Scan standard checkpoints directory
         for ext in ("*.pt", "*.bin", "*.safetensors"):
@@ -528,6 +549,8 @@ class CheckpointManager:
                     info = self.inspect_checkpoint(p)
                     files.append(info)
         files.sort(key=lambda x: x.get("step", 0) or 0, reverse=True)
+        if workspace_id:
+            files = [f for f in files if f.get("workspace_id", "default") == workspace_id]
         return files
 
     def save_local_model_package(
@@ -541,6 +564,7 @@ class CheckpointManager:
         training_config: Optional[Dict[str, Any]] = None,
         metrics_history: Optional[List[Dict[str, Any]]] = None,
         output_base_dir: Union[str, Path] = "models",
+        workspace_id: str = "default",
     ) -> Dict[str, Any]:
         """
         Saves model weights locally under a custom name or {model_id} name:
@@ -683,9 +707,12 @@ class CheckpointManager:
                 logger.warning("Failed to render charts for model package: %s", ce)
 
         # 5. Write metadata.json
+        resolved_id = target_name if (custom_name and custom_name.strip()) else model_id
         meta_info = {
-            "model_id": model_id,
+            "model_id": resolved_id,
+            "workspace_id": workspace_id or "default",
             "name": target_name,
+            "custom_name": custom_name.strip() if (custom_name and custom_name.strip()) else target_name,
             "saved_at": time.time(),
             "save_mode": save_mode,
             "step": step,
@@ -738,6 +765,7 @@ class CheckpointManager:
                     new_cfg = dict(base_cfg)
                     new_cfg["id"] = target_name
                     new_cfg["name"] = target_name
+                    new_cfg["workspace_id"] = workspace_id or "default"
                     new_cfg["description"] = f"Saved local model package {target_name} (Trained checkpoint step {step}, val loss {val_loss})."
                     with open(net_path, "w", encoding="utf-8") as nf:
                         json.dump(new_cfg, nf, indent=2)

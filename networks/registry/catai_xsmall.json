@@ -370,5 +370,6 @@
   },
   "total_parameters": 16891776,
   "updated_at": 1794921967.5550225,
-  "created_at": 1794921967.555024
+  "created_at": 1794921967.555024,
+  "workspace_id": "default"
 }

@@ -5,21 +5,19 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
+  FolderKanban,
+  Boxes,
   Network,
-  Play,
   Database,
+  Play,
   FlaskConical,
   History,
-  Settings,
-  ChevronLeft,
-  ChevronRight,
-  Zap,
-  Cpu,
-  Layers,
-  FolderGit2,
   Bookmark,
-  BarChart3,
-  ShieldCheck,
+  BarChart2,
+  Cpu,
+  Settings,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useHardwareTelemetry } from "@/hooks/useHardwareTelemetry";
@@ -28,8 +26,6 @@ interface NavItem {
   name: string;
   href: string;
   icon: React.ComponentType<{ className?: string }>;
-  tag?: string;
-  badge?: "cyan" | "violet" | "emerald";
 }
 
 interface NavGroup {
@@ -42,27 +38,32 @@ const NAV_GROUPS: NavGroup[] = [
     label: "Workspace",
     items: [
       { name: "Overview", href: "/", icon: LayoutDashboard },
-      { name: "Architecture Studio", href: "/studio", icon: Network, tag: "STUDIO", badge: "cyan" },
+      { name: "Projects", href: "/projects", icon: FolderKanban },
+      { name: "Models", href: "/models", icon: Boxes },
     ],
   },
   {
     label: "Development",
     items: [
-      { name: "Training Console", href: "/training", icon: Play, tag: "LIVE", badge: "emerald" },
-      { name: "Dataset Explorer", href: "/datasets", icon: Database },
-      { name: "Evaluation Lab", href: "/evaluation", icon: FlaskConical },
+      { name: "Network Studio", href: "/studio", icon: Network },
+      { name: "Datasets", href: "/datasets", icon: Database },
+      { name: "Training", href: "/training", icon: Play },
+      { name: "Evaluation", href: "/evaluation", icon: FlaskConical },
     ],
   },
   {
     label: "Management",
     items: [
-      { name: "Runs & Experiments", href: "/runs", icon: History },
+      { name: "Experiments", href: "/runs", icon: History },
+      { name: "Checkpoints", href: "/checkpoints", icon: Bookmark },
+      { name: "Analytics", href: "/analytics", icon: BarChart2 },
     ],
   },
   {
     label: "System",
     items: [
-      { name: "Hardware & Settings", href: "/settings", icon: Settings },
+      { name: "Hardware", href: "/hardware", icon: Cpu },
+      { name: "Settings", href: "/settings", icon: Settings },
     ],
   },
 ];
@@ -74,119 +75,88 @@ export const Sidebar: React.FC = () => {
 
   const deviceShort = telemetry?.device_name
     ? telemetry.device_name.replace("NVIDIA GeForce ", "").replace(" Laptop GPU", "")
-    : "Detected Device";
+    : "GPU";
 
-  const ceilingStr = telemetry?.hardware_profile?.max_memory_allocated_gb
-    ? `${telemetry.hardware_profile.max_memory_allocated_gb} GB`
-    : "Auto";
-
-  const profileMode = telemetry?.hardware_profile?.mode || "Balanced";
+  const vramUsedMb = Math.round(telemetry?.memory_used_mb ?? telemetry?.used_vram_mb ?? 0);
+  const vramTotalMb = Math.round(telemetry?.memory_total_mb ?? telemetry?.total_vram_mb ?? 6144);
 
   return (
     <aside
       className={cn(
-        "h-screen flex flex-col bg-[#0E1420] border-r border-[#273548] transition-all duration-300 z-30 select-none shadow-[4px_0_24px_rgba(0,0,0,0.3)]",
-        collapsed ? "w-16" : "w-60"
+        "h-screen flex flex-col bg-[#141414] border-r border-[#333333] transition-all duration-200 z-30 select-none",
+        collapsed ? "w-14" : "w-56"
       )}
     >
-      {/* Brand & Identity Header */}
+      {/* Brand Header */}
       <div
         className={cn(
-          "h-14 flex items-center border-b border-[#273548] bg-[#090D14]/90 relative",
-          collapsed ? "justify-center px-2" : "justify-between px-3.5"
+          "h-12 flex items-center border-b border-[#262626] px-3",
+          collapsed ? "justify-center" : "justify-between"
         )}
       >
         <Link href="/" className="flex items-center gap-2.5 overflow-hidden group">
-          <div className="w-8 h-8 rounded-lg bg-[#131C29] border border-[#45CFFF]/40 flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(69,207,255,0.2)] group-hover:border-[#45CFFF] transition-colors">
-            <Zap className="w-4 h-4 text-[#45CFFF]" />
+          <div className="w-6 h-6 rounded bg-[#262626] border border-[#333333] flex items-center justify-center shrink-0 text-[#F2F2F2] font-mono text-xs font-semibold">
+            L
           </div>
           {!collapsed && (
             <div className="flex flex-col min-w-0">
-              <span className="font-mono text-xs font-bold tracking-wider text-[#ECF3FC] flex items-center gap-1.5 truncate">
+              <span className="font-sans text-xs font-semibold text-[#F2F2F2] tracking-tight truncate">
                 LLM Maker
-                <span className="text-[10px] px-1 py-0.2 rounded bg-[#45CFFF]/10 text-[#45CFFF] font-normal border border-[#45CFFF]/30">
-                  NRI
-                </span>
-              </span>
-              <span className="text-[9px] font-mono text-[#91A0B4] tracking-wide truncate">
-                Neural Research Interface
               </span>
             </div>
           )}
         </Link>
 
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          className={cn(
-            "rounded transition-all text-[#91A0B4] hover:text-[#45CFFF]",
-            collapsed
-              ? "absolute -right-3 top-4 w-6 h-6 bg-[#131C29] border border-[#384C66] hover:border-[#45CFFF] rounded-full flex items-center justify-center shadow-lg z-40"
-              : "p-1 hover:bg-[#182333]"
-          )}
-          title={collapsed ? "Expand navigation" : "Collapse navigation"}
-        >
-          {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-4 h-4" />}
-        </button>
+        {!collapsed && (
+          <button
+            onClick={() => setCollapsed(true)}
+            className="p-1 rounded text-[#737373] hover:text-[#F2F2F2] hover:bg-[#202020] transition-colors"
+            title="Collapse sidebar"
+            aria-label="Collapse sidebar"
+          >
+            <PanelLeftClose className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
-      {/* Nav List with Sections */}
+      {/* Nav List */}
       <nav className="flex-1 py-3 px-2 space-y-4 overflow-y-auto">
         {NAV_GROUPS.map((group) => (
-          <div key={group.label} className="space-y-1">
+          <div key={group.label} className="space-y-0.5">
             {!collapsed && (
-              <div className="px-3 py-1 text-[10px] font-mono font-semibold uppercase tracking-wider text-[#5E7188]">
+              <div className="px-2.5 py-1 text-[10px] font-mono font-medium uppercase tracking-wider text-[#737373]">
                 {group.label}
               </div>
             )}
             {group.items.map((item) => {
               const Icon = item.icon;
               const isActive =
-                item.href === "/"
-                  ? pathname === "/"
-                  : pathname.startsWith(item.href);
+                item.href === "/" ? pathname === "/" : pathname === item.href;
 
               return (
                 <Link
-                  key={item.href}
+                  key={item.name}
                   href={item.href}
                   className={cn(
-                    "flex items-center gap-2.5 px-3 py-2 rounded-md text-xs font-mono transition-all duration-150 group relative",
+                    "flex items-center gap-2.5 px-2.5 py-1.5 rounded text-xs transition-colors group relative",
                     isActive
-                      ? "bg-[#131C29] text-[#ECF3FC] border border-[#384C66] shadow-[0_2px_8px_rgba(0,0,0,0.3)] font-semibold"
-                      : "text-[#91A0B4] hover:text-[#ECF3FC] hover:bg-[#131C29]/60 border border-transparent"
+                      ? "bg-[#262626] text-[#F2F2F2] font-medium"
+                      : "text-[#A3A3A3] hover:text-[#F2F2F2] hover:bg-[#202020]",
+                    collapsed && "justify-center px-0"
                   )}
                   title={collapsed ? item.name : undefined}
                 >
+                  {/* Subtle active left bar indicator */}
+                  {isActive && !collapsed && (
+                    <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-[#D4D4D4]" />
+                  )}
                   <Icon
                     className={cn(
                       "w-4 h-4 shrink-0 transition-colors",
-                      isActive
-                        ? "text-[#45CFFF]"
-                        : "text-[#91A0B4] group-hover:text-[#ECF3FC]"
+                      isActive ? "text-[#F2F2F2]" : "text-[#737373] group-hover:text-[#D4D4D4]"
                     )}
                   />
-                  {!collapsed && (
-                    <span className="truncate tracking-wide font-sans text-xs">
-                      {item.name}
-                    </span>
-                  )}
-                  {!collapsed && item.tag && (
-                    <span
-                      className={cn(
-                        "ml-auto text-[9px] px-1.5 py-0.2 rounded font-mono font-bold uppercase",
-                        item.badge === "emerald"
-                          ? "bg-[#35D49A]/10 text-[#35D49A] border border-[#35D49A]/30"
-                          : item.badge === "violet"
-                          ? "bg-[#9B8CFF]/10 text-[#9B8CFF] border border-[#9B8CFF]/30"
-                          : "bg-[#45CFFF]/10 text-[#45CFFF] border border-[#45CFFF]/30"
-                      )}
-                    >
-                      {item.tag}
-                    </span>
-                  )}
-                  {collapsed && isActive && (
-                    <div className="absolute right-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-[#45CFFF] rounded-l shadow-[0_0_8px_rgba(69,207,255,0.6)]" />
-                  )}
+                  {!collapsed && <span className="truncate">{item.name}</span>}
                 </Link>
               );
             })}
@@ -194,30 +164,35 @@ export const Sidebar: React.FC = () => {
         ))}
       </nav>
 
-      {/* Footer Hardware & Safety Widget */}
-      <div className="p-3 border-t border-[#273548] bg-[#090D14]/80">
-        {!collapsed ? (
-          <div className="bg-[#131C29] p-2.5 rounded-lg border border-[#273548] space-y-1.5 font-mono text-[10px]">
-            <div className="flex items-center justify-between text-[#91A0B4]">
-              <span className="flex items-center gap-1.5">
-                <Cpu className="w-3 h-3 text-[#45CFFF]" /> DEVICE
-              </span>
-              <span className="text-[#ECF3FC] font-semibold truncate max-w-[100px]" title={telemetry?.device_name}>
-                {deviceShort}
-              </span>
-            </div>
-            <div className="flex items-center justify-between text-[#91A0B4] pt-0.5 border-t border-[#273548]/80">
-              <span className="flex items-center gap-1.5">
-                <ShieldCheck className="w-3 h-3 text-[#35D49A]" /> CEILING
-              </span>
-              <span className="text-[#45CFFF] font-bold">
-                {ceilingStr} ({profileMode})
-              </span>
-            </div>
+      {/* Footer: Expand button (when collapsed) + Hardware summary */}
+      <div className="p-2 border-t border-[#262626] bg-[#141414]">
+        {collapsed ? (
+          <div className="flex flex-col items-center gap-2">
+            <button
+              onClick={() => setCollapsed(false)}
+              className="p-1.5 rounded text-[#737373] hover:text-[#F2F2F2] hover:bg-[#202020] transition-colors"
+              title="Expand sidebar"
+              aria-label="Expand sidebar"
+            >
+              <PanelLeftOpen className="w-4 h-4" />
+            </button>
+            <div
+              className="w-2 h-2 rounded-full bg-[#737373]"
+              title={`${deviceShort} · ${vramUsedMb}/${vramTotalMb} MB`}
+            />
           </div>
         ) : (
-          <div className="flex justify-center text-[#91A0B4]" title={`GPU: ${deviceShort}`}>
-            <span className="w-2 h-2 rounded-full bg-[#45CFFF] shadow-[0_0_6px_#45CFFF] animate-pulse" />
+          <div className="bg-[#1B1B1B] p-2 rounded border border-[#262626] font-mono text-[10px] space-y-1">
+            <div className="flex items-center justify-between text-[#737373]">
+              <span className="truncate">{deviceShort}</span>
+              <span className="text-[#A3A3A3] font-mono-num">{telemetry?.gpu_utilization_pct ?? telemetry?.gpu_util_percent ?? 0}%</span>
+            </div>
+            <div className="flex items-center justify-between text-[#737373]">
+              <span>VRAM</span>
+              <span className="text-[#A3A3A3] font-mono-num">
+                {vramUsedMb} / {vramTotalMb} MB
+              </span>
+            </div>
           </div>
         )}
       </div>

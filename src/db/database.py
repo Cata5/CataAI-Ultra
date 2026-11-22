@@ -177,6 +177,7 @@ class StudioDatabase:
         current_phase: str = "pretrain",
         dataset_source: str = "",
         config: Optional[Dict[str, Any]] = None,
+        workspace_id: str = "default",
     ) -> None:
         now = time.time()
         cfg_str = json.dumps(config or {})
@@ -184,10 +185,10 @@ class StudioDatabase:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO runs 
-                (id, name, status, current_phase, dataset_source, total_steps, total_tokens, config_json, created_at, updated_at)
-                VALUES (?, ?, 'STARTING', ?, ?, 0, 0, ?, ?, ?)
+                (id, name, status, current_phase, dataset_source, total_steps, total_tokens, config_json, workspace_id, created_at, updated_at)
+                VALUES (?, ?, 'STARTING', ?, ?, 0, 0, ?, ?, ?, ?)
                 """,
-                (run_id, name, current_phase, dataset_source, cfg_str, now, now),
+                (run_id, name, current_phase, dataset_source, cfg_str, workspace_id, now, now),
             )
 
     def update_run_status(
@@ -227,9 +228,15 @@ class StudioDatabase:
                 d["config"] = json.loads(d["config_json"])
             return d
 
-    def list_runs(self, limit: int = 50) -> List[Dict[str, Any]]:
+    def list_runs(self, limit: int = 50, workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._lock, self._get_connection() as conn:
-            cur = conn.execute("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,))
+            if workspace_id:
+                cur = conn.execute(
+                    "SELECT * FROM runs WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (workspace_id, limit),
+                )
+            else:
+                cur = conn.execute("SELECT * FROM runs ORDER BY created_at DESC LIMIT ?", (limit,))
             rows = cur.fetchall()
             result = []
             for r in rows:
@@ -364,6 +371,7 @@ class StudioDatabase:
         file_size_bytes: int,
         phase: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        workspace_id: str = "default",
     ) -> None:
         now = time.time()
         meta_str = json.dumps(metadata or {})
@@ -371,8 +379,8 @@ class StudioDatabase:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO checkpoints
-                (id, run_id, step, tokens, train_loss, val_loss, file_path, file_size_bytes, phase, metadata_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, run_id, step, tokens, train_loss, val_loss, file_path, file_size_bytes, phase, metadata_json, workspace_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     checkpoint_id,
@@ -385,16 +393,24 @@ class StudioDatabase:
                     file_size_bytes,
                     phase,
                     meta_str,
+                    workspace_id,
                     now,
                 ),
             )
 
-    def list_checkpoints(self, run_id: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    def list_checkpoints(
+        self, run_id: Optional[str] = None, limit: int = 100, workspace_id: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         with self._lock, self._get_connection() as conn:
             if run_id:
                 cur = conn.execute(
                     "SELECT * FROM checkpoints WHERE run_id = ? ORDER BY step DESC LIMIT ?",
                     (run_id, limit),
+                )
+            elif workspace_id:
+                cur = conn.execute(
+                    "SELECT * FROM checkpoints WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (workspace_id, limit),
                 )
             else:
                 cur = conn.execute(
@@ -552,6 +568,7 @@ class StudioDatabase:
         token_count: int = 0,
         sample_count: int = 0,
         stats: Optional[Dict[str, Any]] = None,
+        workspace_id: str = "default",
     ) -> None:
         now = time.time()
         stats_str = json.dumps(stats or {})
@@ -559,8 +576,8 @@ class StudioDatabase:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO datasets
-                (id, name, file_path, file_size_bytes, format, token_count, sample_count, revision, stats_json, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (id, name, file_path, file_size_bytes, format, token_count, sample_count, revision, stats_json, workspace_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     dataset_id,
@@ -572,6 +589,7 @@ class StudioDatabase:
                     sample_count,
                     revision,
                     stats_str,
+                    workspace_id,
                     now,
                 ),
             )
@@ -591,9 +609,15 @@ class StudioDatabase:
             cur = conn.execute("DELETE FROM datasets WHERE id = ?", (dataset_id,))
             return cur.rowcount > 0
 
-    def list_datasets(self) -> List[Dict[str, Any]]:
+    def list_datasets(self, workspace_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._lock, self._get_connection() as conn:
-            cur = conn.execute("SELECT * FROM datasets ORDER BY created_at DESC")
+            if workspace_id:
+                cur = conn.execute(
+                    "SELECT * FROM datasets WHERE workspace_id = ? ORDER BY created_at DESC",
+                    (workspace_id,),
+                )
+            else:
+                cur = conn.execute("SELECT * FROM datasets ORDER BY created_at DESC")
             results = []
             for r in cur.fetchall():
                 d = dict(r)
@@ -786,5 +810,8 @@ class StudioDatabase:
 
         with self._lock, self._get_connection() as conn:
             conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
+            conn.execute("DELETE FROM runs WHERE workspace_id = ?", (workspace_id,))
+            conn.execute("DELETE FROM checkpoints WHERE workspace_id = ?", (workspace_id,))
+            conn.execute("DELETE FROM datasets WHERE workspace_id = ?", (workspace_id,))
         return True
 

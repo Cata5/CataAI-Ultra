@@ -241,6 +241,7 @@ class TrainingWorkerProcess:
         self.latest_val_timestamp = None
         self.cumulative_active_time = 0.0
 
+        self.workspace_id = str(payload.get("workspace_id") or "default")
         self.state_machine.transition_to(RunState.STARTING)
         self.db.create_run(
             run_id=run_id,
@@ -248,6 +249,7 @@ class TrainingWorkerProcess:
             current_phase=phase,
             dataset_source=str(dataset_source),
             config={"arch": config_arch, "opt": config_opt, "es": config_es},
+            workspace_id=self.workspace_id,
         )
 
         device = torch.device(

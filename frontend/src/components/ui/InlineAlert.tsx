@@ -15,16 +15,12 @@ interface InlineAlertProps {
 }
 
 const TONE_ICON: Record<AlertTone, React.ReactNode> = {
-  info: <Info className="w-4 h-4 text-[#45CFFF]" />,
-  success: <CheckCircle2 className="w-4 h-4 text-[#35D49A]" />,
-  warning: <AlertTriangle className="w-4 h-4 text-[#F2B85B]" />,
-  error: <XCircle className="w-4 h-4 text-[#FF657A]" />,
+  info: <Info className="w-3.5 h-3.5 text-[#A3A3A3]" />,
+  success: <CheckCircle2 className="w-3.5 h-3.5 text-[#4ade80]" />,
+  warning: <AlertTriangle className="w-3.5 h-3.5 text-[#facc15]" />,
+  error: <XCircle className="w-3.5 h-3.5 text-[#f87171]" />,
 };
 
-/**
- * Inline feedback banner — use instead of alert(): it stays in context,
- * is dismissible, and is announced to assistive tech.
- */
 export const InlineAlert: React.FC<InlineAlertProps> = ({
   tone = "info",
   title,
@@ -44,11 +40,11 @@ export const InlineAlert: React.FC<InlineAlertProps> = ({
 
       <div className="min-w-0 flex-1 space-y-0.5">
         {title && (
-          <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#ECF3FC]">
+          <p className="font-mono text-[10px] font-medium uppercase tracking-wider text-[#F2F2F2]">
             {title}
           </p>
         )}
-        {message && <p className="text-[12px] leading-relaxed text-[#C3CEE0] break-words">{message}</p>}
+        {message && <p className="text-[11px] leading-relaxed text-[#A3A3A3] break-words">{message}</p>}
         {children}
       </div>
 
@@ -58,10 +54,10 @@ export const InlineAlert: React.FC<InlineAlertProps> = ({
         <button
           type="button"
           onClick={onDismiss}
-          className="icon-btn shrink-0 -mr-1 -my-1 h-7 w-7"
+          className="icon-btn shrink-0 -mr-1 -my-1 h-6 w-6 text-[#737373] hover:text-[#F2F2F2]"
           aria-label="Dismiss message"
         >
-          <X className="w-3.5 h-3.5" />
+          <X className="w-3 h-3" />
         </button>
       )}
     </div>

@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
-  Zap,
   Cpu,
   Layers,
   CheckCircle2,
@@ -42,14 +41,12 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
   const handleFinish = async () => {
     setLoading(true);
     try {
-      // 1. Set Hardware Profile
       await fetch("/api/hardware/profile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode: selectedProfile }),
       });
 
-      // 2. Create or activate workspace if not default
       if (workspaceName.trim() && workspaceName !== "Default Workspace") {
         await fetch("/api/workspaces", {
           method: "POST",
@@ -63,7 +60,6 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
     setLoading(false);
     onClose();
 
-    // Redirect to Network Studio (Builder page)
     if (selectedTemplate === "custom_scratch") {
       router.push("/studio?scratch=true");
     } else {
@@ -79,67 +75,64 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
   const precisions = hardware?.supported_precisions?.join(", ") || "FP32, FP16, BF16";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-      <div className="w-full max-w-2xl bg-[#0E1420] border border-[#384C66] rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="w-full max-w-xl bg-[#202020] border border-[#333333] rounded-lg shadow-xl flex flex-col overflow-hidden">
         {/* Header */}
-        <div className="px-6 py-4 border-b border-[#273548] flex items-center justify-between bg-[#090D14]/70">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#45CFFF]/10 border border-[#45CFFF]/30 flex items-center justify-center">
-              <Zap className="w-4 h-4 text-[#45CFFF]" />
+        <div className="px-5 py-3 border-b border-[#262626] flex items-center justify-between bg-[#1B1B1B]">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded bg-[#262626] border border-[#333333] flex items-center justify-center text-[#F2F2F2] text-xs font-mono font-medium">
+              W
             </div>
             <div>
-              <h2 className="text-sm font-mono font-bold text-[#ECF3FC] uppercase tracking-wider">
-                LLM Maker Onboarding Wizard
+              <h2 className="text-xs font-mono font-semibold text-[#F2F2F2] uppercase tracking-wide">
+                Onboarding Wizard
               </h2>
-              <p className="text-[11px] font-mono text-[#45CFFF]">Step {step} of 5</p>
+              <p className="text-[10px] font-mono text-[#737373]">Step {step} of 5</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded text-[#91A0B4] hover:text-[#ECF3FC] hover:bg-[#182333] transition-colors"
+            className="p-1 rounded text-[#737373] hover:text-[#F2F2F2] hover:bg-[#262626] transition-colors"
           >
-            <X className="w-4 h-4" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
 
         {/* Body Content */}
-        <div className="p-6 overflow-y-auto max-h-[65vh]">
+        <div className="p-5 overflow-y-auto max-h-[60vh]">
           {/* STEP 1: Welcome */}
           {step === 1 && (
-            <div className="space-y-4">
-              <div className="p-4 rounded-lg bg-[#45CFFF]/10 border border-[#45CFFF]/30 flex gap-3">
-                <Sparkles className="w-6 h-6 text-[#45CFFF] shrink-0 mt-0.5" />
+            <div className="space-y-3">
+              <div className="p-3 rounded bg-[#1B1B1B] border border-[#262626] flex gap-2.5">
+                <Sparkles className="w-4 h-4 text-[#A3A3A3] shrink-0 mt-0.5" />
                 <div>
-                  <h3 className="text-sm font-mono font-bold text-[#ECF3FC]">
+                  <h3 className="text-xs font-mono font-semibold text-[#F2F2F2]">
                     Welcome to LLM Maker
                   </h3>
-                  <p className="text-xs text-[#91A0B4] mt-1 leading-relaxed">
-                    LLM Maker is a general-purpose, local-first artificial intelligence and neural
-                    network experimentation platform. Train, architect, evaluate, and benchmark
-                    models on your own hardware without cloud dependencies or telemetry leaks.
+                  <p className="text-xs text-[#A3A3A3] mt-1 leading-relaxed">
+                    A local-first neural network research and training workstation. Design, train,
+                    evaluate, and benchmark models on your own hardware without cloud dependencies.
                   </p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 pt-2">
-                <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548]">
-                  <div className="flex items-center gap-2 text-[#45CFFF] font-mono text-xs font-bold mb-1">
-                    <Layers className="w-3.5 h-3.5" />
+              <div className="grid grid-cols-2 gap-2.5 pt-1">
+                <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626]">
+                  <div className="flex items-center gap-1.5 text-[#F2F2F2] font-mono text-xs font-medium mb-1">
+                    <Layers className="w-3.5 h-3.5 text-[#737373]" />
                     <span>Visual Network Studio</span>
                   </div>
-                  <p className="text-[11px] text-[#91A0B4]">
-                    Design Decoder-Only Transformers, MLPs, CNNs, and Hybrid architectures with live
-                    VRAM estimation.
+                  <p className="text-[11px] text-[#737373]">
+                    Design Decoder Transformers, MLPs, CNNs with live parameter estimation.
                   </p>
                 </div>
-                <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548]">
-                  <div className="flex items-center gap-2 text-[#35D49A] font-mono text-xs font-bold mb-1">
-                    <Cpu className="w-3.5 h-3.5" />
-                    <span>Hardware-Aware Training</span>
+                <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626]">
+                  <div className="flex items-center gap-1.5 text-[#F2F2F2] font-mono text-xs font-medium mb-1">
+                    <Cpu className="w-3.5 h-3.5 text-[#737373]" />
+                    <span>Hardware Telemetry</span>
                   </div>
-                  <p className="text-[11px] text-[#91A0B4]">
-                    Auto-configured safety thresholds, zero-OOM protection, and task-specific loss
-                    adapters.
+                  <p className="text-[11px] text-[#737373]">
+                    VRAM safety thresholds, zero-OOM protection, and task loss adapters.
                   </p>
                 </div>
               </div>
@@ -148,87 +141,83 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
 
           {/* STEP 2: Hardware Detection */}
           {step === 2 && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div>
-                <h3 className="text-sm font-mono font-bold text-[#ECF3FC]">
+                <h3 className="text-xs font-mono font-semibold text-[#F2F2F2]">
                   Detected Hardware Environment
                 </h3>
-                <p className="text-xs text-[#91A0B4] mt-0.5">
-                  Real physical device metrics queried via NVML & PyTorch runtime.
+                <p className="text-[11px] text-[#737373]">
+                  Physical device metrics queried via NVML & PyTorch runtime.
                 </p>
               </div>
 
-              <div className="p-4 rounded-lg bg-[#131C29] border border-[#273548] space-y-3 font-mono text-xs">
-                <div className="flex justify-between items-center border-b border-[#273548]/70 pb-2">
-                  <span className="text-[#91A0B4]">PRIMARY DEVICE:</span>
-                  <span className="text-[#ECF3FC] font-bold">{deviceName}</span>
+              <div className="p-3 rounded bg-[#1B1B1B] border border-[#262626] space-y-2 font-mono text-xs">
+                <div className="flex justify-between items-center border-b border-[#262626] pb-1.5">
+                  <span className="text-[#737373]">PRIMARY DEVICE:</span>
+                  <span className="text-[#F2F2F2] font-medium">{deviceName}</span>
                 </div>
-                <div className="flex justify-between items-center border-b border-[#273548]/70 pb-2">
-                  <span className="text-[#91A0B4]">EXECUTION BACKEND:</span>
-                  <span className="text-[#45CFFF] font-bold">{backend}</span>
+                <div className="flex justify-between items-center border-b border-[#262626] pb-1.5">
+                  <span className="text-[#737373]">EXECUTION BACKEND:</span>
+                  <span className="text-[#F2F2F2]">{backend}</span>
                 </div>
-                <div className="flex justify-between items-center border-b border-[#273548]/70 pb-2">
-                  <span className="text-[#91A0B4]">ACCELERATOR VRAM:</span>
-                  <span className="text-[#35D49A] font-bold">{vramGb} GB</span>
+                <div className="flex justify-between items-center border-b border-[#262626] pb-1.5">
+                  <span className="text-[#737373]">ACCELERATOR VRAM:</span>
+                  <span className="text-[#4ade80] font-medium">{vramGb} GB</span>
                 </div>
-                <div className="flex justify-between items-center border-b border-[#273548]/70 pb-2">
-                  <span className="text-[#91A0B4]">SYSTEM RAM:</span>
-                  <span className="text-[#ECF3FC]">{ramGb} GB</span>
-                </div>
-                <div className="flex justify-between items-center border-b border-[#273548]/70 pb-2">
-                  <span className="text-[#91A0B4]">COMPUTE CAPABILITY:</span>
-                  <span className="text-[#ECF3FC]">{computeCap}</span>
+                <div className="flex justify-between items-center border-b border-[#262626] pb-1.5">
+                  <span className="text-[#737373]">SYSTEM RAM:</span>
+                  <span className="text-[#A3A3A3]">{ramGb} GB</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-[#91A0B4]">PRECISION MODES:</span>
-                  <span className="text-[#9B8CFF] font-bold">{precisions}</span>
+                  <span className="text-[#737373]">COMPUTE CAPABILITY:</span>
+                  <span className="text-[#A3A3A3]">{computeCap}</span>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 p-2.5 rounded bg-[#35D49A]/10 border border-[#35D49A]/30 text-[#35D49A] text-xs font-mono">
-                <CheckCircle2 className="w-4 h-4 shrink-0" />
-                <span>Compatible hardware profile dynamically constructed.</span>
+              <div className="flex items-center gap-2 p-2 rounded bg-[rgba(74,222,128,0.06)] border border-[rgba(74,222,128,0.2)] text-[#4ade80] text-xs font-mono">
+                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                <span>Hardware profile verified and compatible.</span>
               </div>
             </div>
           )}
 
           {/* STEP 3: Resource Policy Profile */}
           {step === 3 && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div>
-                <h3 className="text-sm font-mono font-bold text-[#ECF3FC]">
+                <h3 className="text-xs font-mono font-semibold text-[#F2F2F2]">
                   Select Memory Safety Profile
                 </h3>
-                <p className="text-xs text-[#91A0B4] mt-0.5">
-                  Governs memory allocation ceilings, gradient checkpointing defaults, and batch size suggestions.
+                <p className="text-[11px] text-[#737373]">
+                  Governs memory ceilings and batch size suggestions.
                 </p>
               </div>
 
-              <div className="space-y-2.5">
+              <div className="space-y-2">
                 {[
                   {
                     id: "conservative",
                     name: "Conservative (65% Limit)",
-                    desc: "Leaves ample memory for OS, browser, and background tasks. Minimal risk of Out-Of-Memory.",
+                    desc: "Leaves ample memory for OS, browser, and background tasks. Minimal risk of OOM.",
                   },
                   {
                     id: "balanced",
                     name: "Balanced (80% Limit) - Recommended",
-                    desc: "Optimal balance of training throughput and stability. Standard safe default for local ML.",
+                    desc: "Optimal balance of training throughput and stability. Standard safe default.",
                   },
                   {
                     id: "performance",
                     name: "Performance (90% Limit)",
-                    desc: "Maximizes batch sizes and parameter allocation. Recommended when no other GPU apps are running.",
+                    desc: "Maximizes batch sizes and parameter allocation for dedicated GPU workloads.",
                   },
                 ].map((p) => (
                   <label
                     key={p.id}
                     onClick={() => setSelectedProfile(p.id)}
-                    className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                    className={`flex items-start gap-2.5 p-2.5 rounded border cursor-pointer transition-colors ${
                       selectedProfile === p.id
-                        ? "bg-[#45CFFF]/10 border-[#45CFFF] text-[#ECF3FC] shadow-[0_0_12px_rgba(69,207,255,0.2)]"
-                        : "bg-[#131C29] border-[#273548] text-[#91A0B4] hover:border-[#384C66]"
+                        ? "bg-[#262626] border-[#D4D4D4] text-[#F2F2F2]"
+                        : "bg-[#1B1B1B] border-[#262626] text-[#737373] hover:border-[#333333]"
                     }`}
                   >
                     <input
@@ -236,11 +225,11 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
                       name="profile"
                       checked={selectedProfile === p.id}
                       onChange={() => setSelectedProfile(p.id)}
-                      className="mt-1 text-[#45CFFF] focus:ring-0"
+                      className="mt-0.5 text-[#D4D4D4]"
                     />
                     <div>
-                      <div className="text-xs font-mono font-bold text-[#ECF3FC]">{p.name}</div>
-                      <div className="text-[11px] text-[#91A0B4] mt-0.5">{p.desc}</div>
+                      <div className="text-xs font-mono font-medium text-[#F2F2F2]">{p.name}</div>
+                      <div className="text-[10px] text-[#737373] mt-0.5">{p.desc}</div>
                     </div>
                   </label>
                 ))}
@@ -250,29 +239,29 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
 
           {/* STEP 4: Workspace Setup */}
           {step === 4 && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div>
-                <h3 className="text-sm font-mono font-bold text-[#ECF3FC]">
+                <h3 className="text-xs font-mono font-semibold text-[#F2F2F2]">
                   Workspace Configuration
                 </h3>
-                <p className="text-xs text-[#91A0B4] mt-0.5">
-                  Workspaces isolate checkpoints, datasets, custom models, and experiments.
+                <p className="text-[11px] text-[#737373]">
+                  Workspaces isolate checkpoints, datasets, models, and runs.
                 </p>
               </div>
 
-              <div className="p-4 rounded-lg bg-[#131C29] border border-[#273548] space-y-3 font-mono text-xs">
+              <div className="p-3 rounded bg-[#1B1B1B] border border-[#262626] space-y-2 font-mono text-xs">
                 <div>
-                  <label className="text-[#91A0B4] block mb-1">INITIAL WORKSPACE NAME</label>
+                  <label className="text-[#737373] text-[10px] block mb-1">WORKSPACE NAME</label>
                   <input
                     type="text"
                     value={workspaceName}
                     onChange={(e) => setWorkspaceName(e.target.value)}
-                    className="w-full px-3 py-2 rounded bg-[#0E1420] border border-[#273548] text-[#ECF3FC] focus:border-[#45CFFF] focus:outline-none"
+                    className="input"
                     placeholder="e.g., Default Workspace or Research Project"
                   />
                 </div>
-                <div className="text-[11px] text-[#91A0B4] flex items-center gap-1.5 pt-1">
-                  <HardDrive className="w-3.5 h-3.5 text-[#45CFFF]" />
+                <div className="text-[10px] text-[#525252] flex items-center gap-1 pt-0.5">
+                  <HardDrive className="w-3 h-3 text-[#737373]" />
                   <span>Datasets & Checkpoints will be stored in isolated directories.</span>
                 </div>
               </div>
@@ -281,69 +270,64 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
 
           {/* STEP 5: First Experiment Guided Choice */}
           {step === 5 && (
-            <div className="space-y-4">
+            <div className="space-y-3">
               <div>
-                <h3 className="text-sm font-mono font-bold text-[#ECF3FC]">
+                <h3 className="text-xs font-mono font-semibold text-[#F2F2F2]">
                   Choose Starting Architecture
                 </h3>
-                <p className="text-xs text-[#91A0B4] mt-0.5">
-                  Select one of the 3 most recognized neural network architectures, or design a custom model from scratch. You will be redirected straight to the visual builder page.
+                <p className="text-[11px] text-[#737373]">
+                  Select a template or design from scratch in Network Studio.
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-2">
                 {[
                   {
                     id: "mini_gpt_15m",
                     name: "Llama / GPT Transformer",
                     family: "Decoder-Only Causal LM",
-                    badge: "Most Popular LLM",
-                    desc: "Autoregressive generation with causal attention, RoPE, and SwiGLU / MLP blocks. The foundation of modern LLMs.",
+                    desc: "Autoregressive generation with causal attention, RoPE, and SwiGLU.",
                   },
                   {
                     id: "bert_encoder_25m",
                     name: "BERT / RoBERTa Encoder",
                     family: "Encoder-Only Transformer",
-                    badge: "Embeddings & NLU",
-                    desc: "Bidirectional self-attention network for embeddings, text classification, and masked language understanding.",
+                    desc: "Bidirectional self-attention for embeddings and text classification.",
                   },
                   {
                     id: "conv1d_network_4m",
                     name: "ResNet / 1D-2D CNN",
                     family: "Convolutional Neural Network",
-                    badge: "Classic Vision & Audio",
-                    desc: "Feature extraction via convolutional kernels and pooling for computer vision, audio, or sequence modeling.",
+                    desc: "Kernel feature extraction for computer vision, audio, or sequences.",
                   },
                   {
                     id: "custom_scratch",
-                    name: "Custom (Build From Scratch)",
-                    family: "Blank Visual Canvas",
-                    badge: "Freeform Design",
-                    desc: "Start with an empty workspace canvas in Network Studio to freely design your custom layers, shapes, and connections.",
+                    name: "Custom (Blank Canvas)",
+                    family: "Freeform Design",
+                    desc: "Empty canvas to freely configure layers, shapes, and connections.",
                   },
                 ].map((tpl) => (
                   <button
                     key={tpl.id}
                     onClick={() => setSelectedTemplate(tpl.id)}
-                    className={`p-3.5 rounded-lg border text-left transition-all font-mono relative flex flex-col justify-between ${
+                    className={`p-2.5 rounded border text-left transition-colors font-mono relative flex flex-col justify-between ${
                       selectedTemplate === tpl.id
-                        ? "bg-[#45CFFF]/10 border-[#45CFFF] shadow-[0_0_12px_rgba(69,207,255,0.2)] ring-1 ring-[#45CFFF]/50"
-                        : "bg-[#131C29] border-[#273548] hover:border-[#384C66]"
+                        ? "bg-[#262626] border-[#D4D4D4] text-[#F2F2F2]"
+                        : "bg-[#1B1B1B] border-[#262626] text-[#737373] hover:border-[#333333]"
                     }`}
                   >
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#45CFFF]/15 border border-[#45CFFF]/30 text-[#45CFFF] font-bold">
-                          {tpl.badge}
+                        <span className="text-[9px] px-1 py-0.2 rounded bg-[#202020] border border-[#333333] text-[#A3A3A3]">
+                          {tpl.family}
                         </span>
                         {selectedTemplate === tpl.id && (
-                          <CheckCircle2 className="w-3.5 h-3.5 text-[#45CFFF]" />
+                          <CheckCircle2 className="w-3 h-3 text-[#F2F2F2]" />
                         )}
                       </div>
-                      <div className="text-xs font-bold text-[#ECF3FC]">{tpl.name}</div>
-                      <div className="text-[10px] text-[#45CFFF] mt-0.5">{tpl.family}</div>
+                      <div className="text-xs font-medium text-[#F2F2F2]">{tpl.name}</div>
                     </div>
-                    <div className="text-[11px] text-[#91A0B4] mt-2 font-sans leading-relaxed">
+                    <div className="text-[10px] text-[#737373] mt-1.5 font-sans leading-relaxed">
                       {tpl.desc}
                     </div>
                   </button>
@@ -354,14 +338,14 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
         </div>
 
         {/* Footer Navigation */}
-        <div className="px-6 py-3.5 border-t border-[#273548] flex items-center justify-between bg-[#090D14]/70">
+        <div className="px-5 py-2.5 border-t border-[#262626] flex items-center justify-between bg-[#1B1B1B]">
           {step > 1 ? (
             <button
               onClick={() => setStep(step - 1)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#273548] text-[#91A0B4] hover:bg-[#182333] hover:text-[#ECF3FC] font-mono text-xs transition-colors"
+              className="flex items-center gap-1 px-2.5 py-1 rounded border border-[#333333] text-[#737373] hover:text-[#F2F2F2] hover:bg-[#262626] font-mono text-xs transition-colors"
             >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Previous</span>
+              <ArrowLeft className="w-3 h-3" />
+              <span>Back</span>
             </button>
           ) : (
             <div />
@@ -370,19 +354,19 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
           {step < 5 ? (
             <button
               onClick={() => setStep(step + 1)}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-mono text-xs font-bold transition-all shadow-[0_0_12px_rgba(69,207,255,0.3)]"
+              className="btn btn-primary btn-sm flex items-center gap-1"
             >
-              <span>Next Step</span>
-              <ArrowRight className="w-3.5 h-3.5" />
+              <span>Next</span>
+              <ArrowRight className="w-3 h-3" />
             </button>
           ) : (
             <button
               disabled={loading}
               onClick={handleFinish}
-              className="flex items-center gap-1.5 px-5 py-1.5 rounded-md bg-[#35D49A] hover:bg-[#35D49A]/90 text-[#090D14] font-mono text-xs font-bold transition-all shadow-[0_0_15px_rgba(53,212,154,0.3)] disabled:opacity-50"
+              className="btn btn-primary btn-sm flex items-center gap-1"
             >
-              <span>{loading ? "Launching..." : "Complete Setup & Launch"}</span>
-              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>{loading ? "Launching..." : "Complete Setup"}</span>
+              <CheckCircle2 className="w-3 h-3" />
             </button>
           )}
         </div>

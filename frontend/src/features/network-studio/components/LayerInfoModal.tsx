@@ -20,246 +20,176 @@ export const LAYER_DOCS: Record<string, LayerDocumentation> = {
     category: "embedding",
     math: "y = W_e[x], \\quad W_e \\in \\mathbb{R}^{V \\times d}",
     description: "Maps discrete vocabulary token IDs into a continuous d-dimensional latent representation vector space.",
-    parameterFormula: "Params = V \\times d = 12,288 \\times 512 = 6,291,456",
-    memoryAndVram: "Weights: ~12.58 MB in BF16. When tied with the LM Head, memory overhead is shared with 0 additional parameters.",
-    rocanonContext: "RoCanon-48.5M uses tied word embeddings (input embedding weight matrix is transposed and reused as output unembedding head).",
-    bestPractices: "Always scale initial embedding weights by 1/sqrt(d_model) or standard normal std=0.02. Use tied embeddings for sub-100M models to prevent parameter bloat.",
+    parameterFormula: "Params = V \\times d",
+    memoryAndVram: "Weights: ~12.58 MB in BF16. Tied embedding shares overhead with 0 additional parameters.",
+    rocanonContext: "Uses tied word embeddings where input embedding is reused as output projection head.",
+    bestPractices: "Scale initial weights by 1/sqrt(d_model). Use tied embeddings for sub-100M models.",
   },
   PositionalEncoding: {
-    title: "Positional Encoding & Rotary Embeddings (RoPE)",
+    title: "Rotary Embeddings (RoPE)",
     category: "embedding",
     math: "R_{\\Theta, m}^d = \\text{diag}(R_{\\theta_1, m}, \\dots, R_{\\theta_{d/2}, m})",
-    description: "Encodes spatial token sequence order. Modern architectures favor Rotary Position Embeddings (RoPE) applied directly to Query and Key tensors.",
-    parameterFormula: "0 learnable parameters (RoPE uses fixed frequency buffers).",
-    memoryAndVram: "Precomputed cos/sin cache tensors occupy negligible VRAM (< 1 MB).",
-    rocanonContext: "RoCanon implements RoPE with base frequency 10,000 for relative distance invariance and sequence length extrapolation up to 2048 tokens.",
-    bestPractices: "Apply RoPE only to Query and Key projections before attention dot products. Never apply to Value tensors.",
+    description: "Encodes spatial token sequence order applied directly to Query and Key tensors.",
+    parameterFormula: "0 learnable parameters (uses fixed frequency buffers).",
+    memoryAndVram: "Precomputed cos/sin cache occupies negligible VRAM (< 1 MB).",
+    rocanonContext: "Implements RoPE with base frequency 10,000 for sequence extrapolation.",
+    bestPractices: "Apply RoPE only to Query and Key projections before attention dot products.",
   },
   GQAAttention: {
     title: "Grouped Query Attention (GQA)",
     category: "attention",
     math: "\\text{Attention}(Q, K, V) = \\text{softmax}\\left(\\frac{Q K^T}{\\sqrt{d_k}} + M\\right) V",
-    description: "Groups multiple query attention heads to share a smaller number of Key/Value heads (e.g. 8 Q-heads sharing 2 KV-heads, 4:1 ratio). Reduces KV-cache memory during autoregressive inference while preserving representational capacity.",
+    description: "Groups multiple query attention heads to share a smaller number of Key/Value heads.",
     parameterFormula: "W_q (d \\times d) + W_k (d \\times (n_{kv} \\cdot d_h)) + W_v (d \\times (n_{kv} \\cdot d_h)) + W_o (d \\times d)",
-    memoryAndVram: "In RoCanon: W_q (512x512) + W_k (512x128) + W_v (512x128) + W_o (512x512) = 655,360 params/layer. Total across 16 layers = 10.48M params.",
-    rocanonContext: "RoCanon uses 8 Q-heads and 2 KV-heads with head dimension d_h=64. This enables 4x faster KV-cache generation during interactive Romanian text generation.",
-    bestPractices: "For consumer accelerators (6GB to 16GB), GQA 8:2 or 8:4 provides optimal throughput-to-VRAM balance. Use QK-Norm to eliminate loss spikes.",
+    memoryAndVram: "Significantly reduces KV cache memory footprint compared to full multi-head attention.",
+    rocanonContext: "Uses 8 Q-heads and 2 KV-heads for rapid generation throughput.",
+    bestPractices: "For consumer accelerators, GQA 8:2 or 8:4 provides optimal throughput-to-VRAM balance.",
   },
   MultiheadAttention: {
     title: "Standard Multi-Head Attention (MHA)",
     category: "attention",
     math: "\\text{MHA}(Q, K, V) = \\text{Concat}(\\text{head}_1, \\dots, \\text{head}_h) W^O",
     description: "Full multi-head scaled dot product where every attention head maintains an independent Key and Value projection.",
-    parameterFormula: "4 \\times d^2 = 4 \\times 512^2 = 1,048,576 \\text{ params/layer}",
-    memoryAndVram: "Higher KV-cache consumption than GQA during generation. 16 layers require ~16.7M parameters.",
-    rocanonContext: "Used in Mini-GPT 15M template. Replaced by GQA in RoCanon-48.5M for inference efficiency.",
+    parameterFormula: "4 \\times d^2 \\text{ params/layer}",
+    memoryAndVram: "Higher KV-cache consumption during generation.",
+    rocanonContext: "Standard reference baseline attention mechanism.",
     bestPractices: "Ensure d_model is evenly divisible by n_heads. Apply casual masking for autoregressive models.",
   },
   MQAAttention: {
     title: "Multi-Query Attention (MQA)",
     category: "attention",
     math: "K, V \\in \\mathbb{R}^{B \\times S \\times 1 \\times d_h}, \\quad Q \\in \\mathbb{R}^{B \\times S \\times H \\times d_h}",
-    description: "Extreme variant of GQA where all query heads share a single Key and Value head (n_kv = 1). Minimizes KV memory to the absolute minimum.",
+    description: "Extreme variant of GQA where all query heads share a single Key and Value head.",
     parameterFormula: "W_q (d \\times d) + W_k (d \\times d_h) + W_v (d \\times d_h) + W_o (d \\times d)",
     memoryAndVram: "Extremely lightweight KV cache, optimal for mobile or edge deployment.",
-    rocanonContext: "Available in Network Studio for ultra-compact or edge-device custom models.",
+    rocanonContext: "Available in Network Studio for ultra-compact models.",
     bestPractices: "May cause minor degradation in complex syntax reasoning compared to GQA 8:2.",
   },
   SwiGLU: {
     title: "SwiGLU Feed-Forward Network",
     category: "feedforward",
-    math: "\\text{SwiGLU}(x) = \\left(\\text{swish}(x W_{\\text{gate}}) \\otimes (x W_{\\text{up}})\\right) W_{\\text{down}}",
-    description: "Swish-Gated Linear Unit feedforward layer. Replaces traditional two-matrix ReLU/GELU MLP with three weight matrices: gate, up-projection, and down-projection. Significantly outperforms standard MLPs at the same parameter budget.",
-    parameterFormula: "3 \\times (d_{\\text{model}} \\times d_{ff}) = 3 \\times (512 \\times 1280) = 1,966,080 \\text{ params/layer}",
-    memoryAndVram: "16 layers = 31.45M parameters (~65% of RoCanon's total weight budget). Consumes ~62.9 MB in BF16.",
-    rocanonContext: "RoCanon uses d_ff = 1280 (approx. 2.5x d_model) to maintain high representational capacity while staying within consumer VRAM budgets.",
-    bestPractices: "Maintain d_ff as a multiple of 64 or 128 for tensor core alignment. Do not include bias terms in linear projections.",
-  },
-  MLP: {
-    title: "Dense Multi-Layer Perceptron (Standard MLP)",
-    category: "feedforward",
-    math: "\\text{MLP}(x) = \\text{Act}(x W_1 + b_1) W_2 + b_2",
-    description: "Traditional two-matrix feedforward network with GELU or ReLU non-linearity.",
-    parameterFormula: "2 \\times (d_{\\text{model}} \\times d_{ff}) = 2 \\times (512 \\times 2048) = 2,097,152 \\text{ params/layer}",
-    memoryAndVram: "Standard memory profile. Requires 2 matrices instead of SwiGLU's 3, but requires larger d_ff (usually 4x d_model) for comparable loss.",
-    rocanonContext: "Available for BERT and MLP templates.",
-    bestPractices: "Prefer SwiGLU for modern LLM architectures.",
+    math: "\\text{SwiGLU}(x) = (x W_{gate} \\cdot \\text{silu}(x W_{gate})) W_{down}",
+    description: "Gated linear unit with Swish/SiLU activation offering superior gradient flow.",
+    parameterFormula: "3 \\times d \\times d_{ff} \\text{ params/layer}",
+    memoryAndVram: "Allocates 8/3 d_model hidden dimension for optimal FLOPS-to-parameter ratio.",
+    rocanonContext: "Core MLP component for expressive feature representation.",
+    bestPractices: "Set d_ff to multiple of 64 or 256 for tensor core alignment.",
   },
   RMSNorm: {
-    title: "Root Mean Square Layer Normalization (RMSNorm)",
-    category: "norm",
-    math: "\\text{RMSNorm}(x) = \\frac{x}{\\sqrt{\\frac{1}{d}\\sum_{i=1}^d x_i^2 + \\epsilon}} \\odot \\gamma",
-    description: "Faster and more numerically stable alternative to LayerNorm. Enforces scale invariance without subtracting the activation mean, reducing computation time by 10-20% per layer.",
-    parameterFormula: "d_{\\text{model}} \\text{ learnable scale parameters } \\gamma = 512 \\text{ params/layer} (0 \\text{ bias})",
-    memoryAndVram: "Negligible memory (< 1 KB per layer). Very high compute efficiency on modern CUDA and Tensor cores.",
-    rocanonContext: "RoCanon applies Pre-RMSNorm before attention and SwiGLU blocks, plus a final RMSNorm before the LM Head.",
-    bestPractices: "Set eps=1e-6 for BF16 precision. Avoid adding bias parameters.",
-  },
-  LayerNorm: {
-    title: "Layer Normalization (LayerNorm)",
-    category: "norm",
-    math: "\\text{LN}(x) = \\frac{x - \\mu}{\\sqrt{\\sigma^2 + \\epsilon}} \\odot \\gamma + \\beta",
-    description: "Standard normalization normalizing mean and variance across the hidden feature dimension.",
-    parameterFormula: "2 \\times d_{\\text{model}} = 1,024 \\text{ params/layer (gain + bias)}",
-    memoryAndVram: "Requires mean subtraction and variance calculation.",
-    rocanonContext: "Available in BERT Encoder and legacy templates.",
-    bestPractices: "Use RMSNorm instead for modern autoregressive transformers.",
-  },
-  Residual: {
-    title: "Residual Skip Connection (x + f(x))",
-    category: "structural",
-    math: "y = x + f(\\text{Norm}(x))",
-    description: "Identity skip-connection that provides an uninterrupted gradient highway back to early layers, preventing vanishing/exploding gradients in deep networks.",
-    parameterFormula: "0 learnable parameters.",
-    memoryAndVram: "Requires caching input tensor in memory for the addition step.",
-    rocanonContext: "Pre-norm residual connections wrap each GQA attention block and SwiGLU FFN block in all 16 layers.",
-    bestPractices: "Always use Pre-LN / Pre-RMSNorm structure (normalizing before the sub-layer) rather than Post-LN for stable training without warm-up instability.",
-  },
-  Conv1d: {
-    title: "Causal Depthwise 1D Convolution",
-    category: "structural",
-    math: "y_t = \\sum_{k=0}^{K-1} W_k \\odot x_{t-k}",
-    description: "Temporal depthwise 1D convolution with causal left-padding. Injects inductive local spatial bias into the transformer without increasing quadratic attention complexity.",
-    parameterFormula: "d_{\\text{model}} \\times K = 512 \\times 4 = 2,048 \\text{ params per conv block}",
-    memoryAndVram: "Extremely low memory footprint. Adds less than 0.1M parameters total across the model.",
-    rocanonContext: "RoCanon interleaves 4 causal depthwise Conv1D blocks (kernel_size=4) at layers 0, 4, 8, and 12, creating the hybrid CNN-Transformer architecture.",
-    bestPractices: "Must strictly use causal padding (pad left with K-1 zeros) to prevent future token information leakage.",
-  },
-  Linear: {
-    title: "Linear Affine Projection",
-    category: "embedding",
-    math: "y = x W^T + b",
-    description: "Standard matrix multiplication projecting from in_features to out_features.",
-    parameterFormula: "\\text{in\\_features} \\times \\text{out\\_features} (+ \\text{out\\_features if bias})",
-    memoryAndVram: "Depends on input/output dimensions.",
-    rocanonContext: "Used for input projections and the LM Head.",
-    bestPractices: "Disable bias when followed immediately by RMSNorm or when using Muon optimizer.",
+    title: "Root Mean Square Normalization (RMSNorm)",
+    category: "normalization",
+    math: "\\bar{a}_i = \\frac{a_i}{\\text{RMS}(a)} g_i, \\quad \\text{RMS}(a) = \\sqrt{\\frac{1}{d} \\sum_{i=1}^d a_i^2 + \\epsilon}",
+    description: "Computationally efficient alternative to LayerNorm that scales input without calculating mean offset.",
+    parameterFormula: "d \\text{ learnable gain parameters per layer}",
+    memoryAndVram: "Minimal VRAM footprint, eliminates one reduction pass compared to LayerNorm.",
+    rocanonContext: "Used for pre-attention and pre-FFN normalization layers.",
+    bestPractices: "Use epsilon = 1e-5 or 1e-6 to maintain numerical stability in BF16.",
   },
 };
 
-interface LayerInfoModalProps {
-  isOpen: boolean;
+export interface LayerInfoModalProps {
+  isOpen?: boolean;
   layerType: string | null;
   onClose: () => void;
 }
 
 export const LayerInfoModal: React.FC<LayerInfoModalProps> = ({
-  isOpen,
+  isOpen = true,
   layerType,
   onClose,
 }) => {
   if (!isOpen || !layerType) return null;
 
   const doc = LAYER_DOCS[layerType] || {
-    title: `${layerType} Layer`,
-    category: "generic",
-    math: "y = f(x; \\theta)",
-    description: `Configurable neural network layer of type ${layerType}.`,
-    parameterFormula: "Configured by layer dimensions and kernel sizes.",
-    memoryAndVram: "VRAM footprint scales with batch size, sequence length, and hidden dimension.",
-    rocanonContext: "Integrated into the modular RoCanon computation graph.",
-    bestPractices: "Validate input/output tensor shapes and numerical precision.",
+    title: `${layerType} Documentation`,
+    category: "general",
+    math: "f(x) = y",
+    description: "Standard architectural component for deep neural network topologies.",
+    parameterFormula: "Configured dynamically based on input and output tensor shapes.",
+    memoryAndVram: "VRAM footprint depends on active precision and batch sequence dimension.",
+    rocanonContext: "Supported in custom model architectures.",
+    bestPractices: "Maintain consistent hidden dimension throughout residual blocks.",
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in select-none font-mono text-xs">
-      <div className="w-full max-w-2xl bg-[#0E1420] rounded-xl border border-[#384C66] shadow-2xl overflow-hidden flex flex-col max-h-[85vh] relative">
-        <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/30 to-transparent pointer-events-none" />
-
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm font-mono text-xs">
+      <div className="bg-[#202020] border border-[#333333] rounded-lg w-full max-w-xl p-4 shadow-xl relative max-h-[85vh] overflow-y-auto">
         {/* Header */}
-        <div className="p-4 border-b border-[#273548] flex items-center justify-between bg-[#090D14]/80">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-md bg-[#131C29] border border-[#45CFFF]/40 flex items-center justify-center">
-              <BookOpen className="w-4 h-4 text-[#45CFFF]" />
-            </div>
+        <div className="flex items-center justify-between pb-3 border-b border-[#262626]">
+          <div className="flex items-center gap-2">
+            <BookOpen className="w-4 h-4 text-[#A3A3A3]" />
             <div>
-              <h2 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wide">
-                {doc.title}
-              </h2>
-              <span className="text-[10px] text-[#45CFFF] uppercase font-semibold">
-                Category: {doc.category} | Layer Identifier: {layerType}
+              <h2 className="text-sm font-semibold text-[#F2F2F2]">{doc.title}</h2>
+              <span className="text-[10px] text-[#737373] uppercase">
+                {doc.category} · {layerType}
               </span>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-md text-[#91A0B4] hover:text-[#ECF3FC] hover:bg-[#182333] transition-colors"
+            className="p-1 rounded text-[#737373] hover:text-[#F2F2F2] transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content Body */}
-        <div className="p-5 space-y-4 overflow-y-auto text-[#91A0B4]">
-          {/* Mathematical Formulation */}
-          <div className="p-3 rounded-lg bg-[#090D14] border border-[#273548]">
-            <div className="text-[10px] uppercase font-bold text-[#45CFFF] mb-1 flex items-center gap-1.5">
-              <Zap className="w-3.5 h-3.5" /> Mathematical Formulation
-            </div>
-            <code className="text-xs text-[#45CFFF] font-mono block bg-black/40 p-2 rounded border border-[#273548]/80 font-bold">
-              {doc.math}
-            </code>
+        <div className="py-3 space-y-3">
+          {/* Math Block */}
+          <div className="p-2.5 rounded bg-[#171717] border border-[#262626]">
+            <span className="text-[10px] text-[#737373] uppercase block mb-1 flex items-center gap-1">
+              <Zap className="w-3 h-3 text-[#A3A3A3]" /> Mathematical Formulation
+            </span>
+            <code className="text-xs text-[#D4D4D4] font-mono block">{doc.math}</code>
           </div>
 
           {/* Description */}
           <div>
-            <div className="text-[10px] uppercase font-bold text-[#5E7188] mb-1">
-              Description & Operational Dynamics
-            </div>
-            <p className="text-xs leading-relaxed text-[#ECF3FC]">
-              {doc.description}
-            </p>
+            <span className="text-[10px] text-[#737373] uppercase block mb-1">
+              Operational Dynamics
+            </span>
+            <p className="text-[#A3A3A3] text-xs leading-relaxed">{doc.description}</p>
           </div>
 
-          {/* Parameter Complexity & Memory */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548]">
-              <div className="text-[10px] uppercase font-bold text-[#35D49A] mb-1 flex items-center gap-1.5">
-                <ShieldCheck className="w-3.5 h-3.5" /> Parameter Complexity
-              </div>
-              <p className="text-[11px] text-[#ECF3FC] font-mono">
-                {doc.parameterFormula}
-              </p>
+          {/* Complexity & VRAM */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="p-2 rounded bg-[#1B1B1B] border border-[#262626]">
+              <span className="text-[10px] text-[#737373] uppercase block mb-0.5 flex items-center gap-1">
+                <ShieldCheck className="w-3 h-3 text-[#A3A3A3]" /> Parameter Complexity
+              </span>
+              <p className="text-[11px] text-[#D4D4D4] font-mono">{doc.parameterFormula}</p>
             </div>
-
-            <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548]">
-              <div className="text-[10px] uppercase font-bold text-[#9B8CFF] mb-1 flex items-center gap-1.5">
-                <Cpu className="w-3.5 h-3.5" /> Memory & VRAM Dynamics
-              </div>
-              <p className="text-[11px] text-[#91A0B4]">
-                {doc.memoryAndVram}
-              </p>
+            <div className="p-2 rounded bg-[#1B1B1B] border border-[#262626]">
+              <span className="text-[10px] text-[#737373] uppercase block mb-0.5 flex items-center gap-1">
+                <Cpu className="w-3 h-3 text-[#A3A3A3]" /> Memory Footprint
+              </span>
+              <p className="text-[11px] text-[#A3A3A3]">{doc.memoryAndVram}</p>
             </div>
           </div>
 
-          {/* Context */}
-          <div className="p-3 rounded-lg bg-[#131C29] border border-[#45CFFF]/30">
-            <div className="text-[10px] uppercase font-bold text-[#45CFFF] mb-1">
-              Architectural Integration Context
-            </div>
-            <p className="text-xs text-[#ECF3FC] leading-relaxed">
-              {doc.rocanonContext}
-            </p>
+          {/* Architecture Context */}
+          <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626]">
+            <span className="text-[10px] text-[#737373] uppercase block mb-1">
+              Architecture Context
+            </span>
+            <p className="text-[#A3A3A3] text-xs leading-relaxed">{doc.rocanonContext}</p>
           </div>
 
-          {/* Engineering Best Practices */}
-          <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548]">
-            <div className="text-[10px] uppercase font-bold text-[#F2B85B] mb-1">
-              Engineering Best Practices & Convergence Tips
-            </div>
-            <p className="text-xs text-[#91A0B4] leading-relaxed">
-              {doc.bestPractices}
-            </p>
+          {/* Best Practices */}
+          <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626]">
+            <span className="text-[10px] text-[#737373] uppercase block mb-1">
+              Best Practices
+            </span>
+            <p className="text-[#A3A3A3] text-xs leading-relaxed">{doc.bestPractices}</p>
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="p-3 border-t border-[#273548] bg-[#090D14]/80 flex justify-end">
+        <div className="flex justify-end pt-2 border-t border-[#262626]">
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] text-[#090D14] font-bold font-mono text-xs transition-all shadow-sm"
+            className="btn btn-secondary btn-sm"
           >
-            DISMISS
+            Close
           </button>
         </div>
       </div>

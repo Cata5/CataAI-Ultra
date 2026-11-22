@@ -42,7 +42,7 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     category: "embedding",
     layerType: "Linear",
     defaultConfig: { in_features: 512, out_features: 12288, bias: false },
-    description: "Linear projection head mapping d_model to vocabulary logits for next-token generation",
+    description: "Linear projection head mapping d_model to vocabulary logits",
   },
   {
     id: "linear_proj",
@@ -58,7 +58,7 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     category: "embedding",
     layerType: "Linear",
     defaultConfig: { in_features: 512, out_features: 2, bias: true },
-    description: "Linear classification head projecting hidden states to target class logits",
+    description: "Linear classification head projecting hidden states to class logits",
   },
 
   // Attention
@@ -76,7 +76,7 @@ export const PALETTE_ITEMS: PaletteItem[] = [
     category: "attention",
     layerType: "GQAAttention",
     defaultConfig: { d_model: 512, n_q: 8, n_kv: 2 },
-    description: "RoCanon baseline grouped KV heads (4:1 ratio)",
+    description: "Grouped KV heads (4:1 ratio)",
   },
   {
     id: "mqa",
@@ -198,110 +198,102 @@ export const ComponentPalette: React.FC<ComponentPaletteProps> = ({ onAddNode, o
     { id: "all", name: "All" },
     { id: "embedding", name: "Embed / Head" },
     { id: "attention", name: "Attention" },
-    { id: "feedforward", name: "FFN" },
-    { id: "norm", name: "Norm" },
-    { id: "structural", name: "Structure" },
+    { id: "feedforward", name: "Feed-Forward" },
+    { id: "norm", name: "Normalization" },
+    { id: "structural", name: "Structural" },
   ];
 
-  const filtered = PALETTE_ITEMS.filter((item) => {
-    const matchesCat = selectedCat === "all" || item.category === selectedCat;
+  const filteredItems = PALETTE_ITEMS.filter((item) => {
     const matchesSearch =
       item.name.toLowerCase().includes(search.toLowerCase()) ||
-      item.layerType.toLowerCase().includes(search.toLowerCase()) ||
       item.description.toLowerCase().includes(search.toLowerCase());
-    return matchesCat && matchesSearch;
+    const matchesCat = selectedCat === "all" || item.category === selectedCat;
+    return matchesSearch && matchesCat;
   });
 
-  const onDragStart = (event: React.DragEvent, item: PaletteItem) => {
-    event.dataTransfer.setData("application/reactflow-item", JSON.stringify(item));
-    event.dataTransfer.effectAllowed = "move";
-  };
-
   return (
-    <div className="w-64 glass-panel rounded-lg p-3 flex flex-col h-full overflow-hidden select-none relative">
-      <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/15 to-transparent pointer-events-none" />
-
-      <div className="pb-2 mb-2 border-b border-[#273548]">
-        <h3 className="font-mono text-xs font-semibold text-[#ECF3FC] tracking-wider uppercase flex items-center gap-1.5">
-          <Layers className="w-3.5 h-3.5 text-[#45CFFF]" /> COMPONENT PALETTE
-        </h3>
-        <p className="text-[10px] font-mono text-[#91A0B4] mt-0.5">
-          Click or drag layers onto the architecture canvas
-        </p>
+    <div className="w-64 panel bg-[#202020] border-[#333333] rounded-lg p-3 flex flex-col h-full overflow-hidden select-none font-mono text-xs">
+      <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-[#262626]">
+        <div className="flex items-center gap-1.5">
+          <Layers className="w-3.5 h-3.5 text-[#737373]" />
+          <span className="font-semibold text-[#F2F2F2] uppercase tracking-wide text-xs">
+            Layer Palette
+          </span>
+        </div>
+        <span className="text-[10px] text-[#525252]">{filteredItems.length} items</span>
       </div>
 
       {/* Search Input */}
-      <div className="relative mb-2">
-        <Search className="w-3.5 h-3.5 text-[#5E7188] absolute left-2.5 top-1/2 -translate-y-1/2" />
+      <div className="relative mb-2.5">
+        <Search className="w-3.5 h-3.5 text-[#737373] absolute left-2.5 top-1/2 -translate-y-1/2" />
         <input
           type="text"
+          placeholder="Filter layers..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Filter modules..."
-          className="w-full bg-[#0E1420] border border-[#273548] rounded-md pl-8 pr-2.5 py-1 text-xs font-mono text-[#ECF3FC] placeholder-[#5E7188] focus:outline-none focus:border-[#45CFFF]/50"
+          className="input pl-8 text-xs"
         />
       </div>
 
       {/* Category Pills */}
-      <div className="flex flex-wrap gap-1 mb-2.5">
-        {categories.map((cat) => (
+      <div className="flex gap-1 overflow-x-auto pb-1.5 mb-2 border-b border-[#262626]">
+        {categories.map((c) => (
           <button
-            key={cat.id}
-            onClick={() => setSelectedCat(cat.id)}
+            key={c.id}
+            onClick={() => setSelectedCat(c.id)}
             className={cn(
-              "px-2 py-0.5 rounded text-[10px] font-mono transition-colors",
-              selectedCat === cat.id
-                ? "bg-[#45CFFF]/15 text-[#45CFFF] border border-[#45CFFF]/40 font-bold"
-                : "bg-[#0E1420] text-[#91A0B4] border border-[#273548] hover:text-[#ECF3FC] hover:border-[#384C66]"
+              "px-2 py-0.5 rounded text-[10px] whitespace-nowrap transition-colors",
+              selectedCat === c.id
+                ? "bg-[#D4D4D4] text-[#171717] font-semibold"
+                : "bg-[#1B1B1B] text-[#737373] hover:text-[#F2F2F2]"
             )}
           >
-            {cat.name}
+            {c.name}
           </button>
         ))}
       </div>
 
-      {/* Module List */}
-      <div className="flex-1 overflow-y-auto space-y-1.5 pr-1">
-        {filtered.map((item) => (
+      {/* Item List */}
+      <div className="flex-1 overflow-y-auto space-y-1.5 pr-0.5">
+        {filteredItems.map((item) => (
           <div
             key={item.id}
-            draggable
-            onDragStart={(e) => onDragStart(e, item)}
-            onClick={() => onAddNode(item)}
-            className="p-2 rounded-md bg-[#0E1420] border border-[#273548] hover:border-[#45CFFF]/40 hover:bg-[#182333] cursor-grab active:cursor-grabbing transition-all group relative text-xs font-mono"
+            className="p-2 rounded bg-[#1B1B1B] border border-[#262626] hover:border-[#404040] hover:bg-[#262626] transition-colors flex flex-col gap-1 group"
           >
             <div className="flex items-center justify-between">
-              <span className="font-semibold text-[#ECF3FC] group-hover:text-[#45CFFF] transition-colors">
-                {item.name}
-              </span>
+              <span className="font-medium text-[#F2F2F2] truncate">{item.name}</span>
               <div className="flex items-center gap-1">
                 {onShowInfo && (
                   <button
-                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       onShowInfo(item.layerType);
                     }}
-                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-[#91A0B4] hover:text-[#45CFFF] hover:bg-[#131C29] transition-all"
-                    title="Educational Info & Docs"
+                    className="p-0.5 rounded text-[#737373] hover:text-[#F2F2F2] transition-colors"
+                    title="Documentation"
                   >
                     <Info className="w-3 h-3" />
                   </button>
                 )}
                 <button
-                  type="button"
-                  className="opacity-0 group-hover:opacity-100 p-0.5 rounded bg-[#131C29] text-[#45CFFF] border border-[#45CFFF]/30"
-                  title="Add to Canvas"
+                  onClick={() => onAddNode(item)}
+                  className="p-1 rounded bg-[#202020] border border-[#333333] hover:bg-[#D4D4D4] hover:text-[#171717] text-[#A3A3A3] transition-colors"
+                  title="Add to canvas"
                 >
                   <Plus className="w-3 h-3" />
                 </button>
               </div>
             </div>
-            <p className="text-[10px] text-[#91A0B4] line-clamp-1 mt-0.5">
+            <p className="text-[10px] text-[#737373] line-clamp-2 leading-relaxed">
               {item.description}
             </p>
           </div>
         ))}
+        {filteredItems.length === 0 && (
+          <div className="text-center py-6 text-[11px] text-[#525252]">
+            No layers found matching query.
+          </div>
+        )}
       </div>
     </div>
   );

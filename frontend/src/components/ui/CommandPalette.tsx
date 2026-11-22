@@ -5,11 +5,16 @@ import { useRouter } from "next/navigation";
 import {
   Search,
   LayoutDashboard,
+  FolderKanban,
+  Boxes,
   Network,
   Play,
   Database,
   FlaskConical,
   History,
+  Bookmark,
+  BarChart2,
+  Cpu,
   Settings,
   CornerDownLeft,
 } from "lucide-react";
@@ -27,13 +32,18 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
 
   const commands = useMemo(
     () => [
-      { label: "Overview / Command Center", path: "/", icon: <LayoutDashboard className="w-4 h-4 text-[#45CFFF]" /> },
-      { label: "Network Studio (Architecture Designer)", path: "/studio", icon: <Network className="w-4 h-4 text-[#9B8CFF]" /> },
-      { label: "Training & Experiment Control", path: "/training", icon: <Play className="w-4 h-4 text-[#35D49A]" /> },
-      { label: "Datasets & Data Explorer", path: "/datasets", icon: <Database className="w-4 h-4 text-[#F2B85B]" /> },
-      { label: "Evaluation Lab & Inference", path: "/evaluation", icon: <FlaskConical className="w-4 h-4 text-[#80DEFF]" /> },
-      { label: "Runs, Checkpoints & Analytics", path: "/runs", icon: <History className="w-4 h-4 text-[#9B8CFF]" /> },
-      { label: "Settings & GPU Monitoring", path: "/settings", icon: <Settings className="w-4 h-4 text-[#91A0B4]" /> },
+      { label: "Overview", path: "/", icon: <LayoutDashboard className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Projects", path: "/projects", icon: <FolderKanban className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Models", path: "/models", icon: <Boxes className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Network Studio", path: "/studio", icon: <Network className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Datasets", path: "/datasets", icon: <Database className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Training Console", path: "/training", icon: <Play className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Evaluation Lab", path: "/evaluation", icon: <FlaskConical className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Experiments & Runs", path: "/runs", icon: <History className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Checkpoints", path: "/checkpoints", icon: <Bookmark className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Analytics", path: "/analytics", icon: <BarChart2 className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Hardware Telemetry", path: "/settings?tab=hardware", icon: <Cpu className="w-4 h-4 text-[#A3A3A3]" /> },
+      { label: "Settings", path: "/settings", icon: <Settings className="w-4 h-4 text-[#A3A3A3]" /> },
     ],
     []
   );
@@ -82,7 +92,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-24 p-4 bg-[rgba(5,8,13,0.8)] backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center pt-20 p-4 bg-black/60 backdrop-blur-sm"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -91,81 +101,56 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="w-full max-w-lg overflow-hidden rounded-[12px] border border-[var(--border-strong)] bg-[var(--bg-surface)] shadow-[0_24px_80px_-20px_rgba(0,0,0,0.95)] animate-in fade-in zoom-in-95 duration-150"
+        className="w-full max-w-md overflow-hidden rounded-lg border border-[#333333] bg-[#202020] shadow-xl"
       >
-        <div className="flex items-center gap-2.5 p-3.5 border-b border-[var(--border-subtle)]">
-          <Search className="w-4 h-4 text-[#45CFFF]" aria-hidden="true" />
+        <div className="flex items-center gap-2 p-3 border-b border-[#262626] bg-[#1B1B1B]">
+          <Search className="w-3.5 h-3.5 text-[#737373]" aria-hidden="true" />
           <label htmlFor="command-search" className="sr-only">
             Search commands
           </label>
           <input
             id="command-search"
-            autoFocus
             type="text"
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
               setActiveIndex(0);
             }}
-            placeholder="Type a command or jump to workspace…"
-            className="w-full bg-transparent text-[13px] font-mono text-[#ECF3FC] placeholder-[#5E7188] outline-none"
-            role="combobox"
-            aria-expanded="true"
-            aria-autocomplete="list"
-            aria-controls="command-list"
-            aria-activedescendant={filtered[active] ? `command-${active}` : undefined}
+            placeholder="Type a command or jump to page…"
+            autoFocus
+            className="w-full bg-transparent text-xs text-[#F2F2F2] placeholder-[#737373] outline-none font-mono"
           />
-          <kbd className="kbd">Esc</kbd>
+          <kbd className="kbd text-[10px]">ESC</kbd>
         </div>
 
-        <div
-          id="command-list"
-          ref={listRef}
-          role="listbox"
-          aria-label="Commands"
-          className="max-h-72 overflow-y-auto p-2 space-y-0.5"
-        >
+        <div ref={listRef} className="max-h-64 overflow-y-auto p-1.5 space-y-0.5">
           {filtered.length === 0 ? (
-            <div className="p-6 text-center space-y-1">
-              <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#91A0B4]">
-                No matching commands
-              </p>
-              <p className="text-[11px] text-[#5E7188]">Try “training”, “datasets” or “settings”.</p>
+            <div className="p-4 text-center text-xs text-[#737373] font-mono">
+              No matching commands.
             </div>
           ) : (
             filtered.map((item, idx) => (
               <button
-                key={item.path}
-                id={`command-${idx}`}
+                key={item.path + item.label}
                 data-index={idx}
-                role="option"
-                aria-selected={idx === active}
-                onMouseEnter={() => setActiveIndex(idx)}
+                type="button"
                 onClick={() => run(item.path)}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-md text-left text-[12px] font-mono transition-colors ${
+                className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded text-xs transition-colors font-mono ${
                   idx === active
-                    ? "bg-[var(--bg-elevated)] text-[#ECF3FC]"
-                    : "text-[#91A0B4] hover:bg-[var(--bg-elevated)]/60 hover:text-[#ECF3FC]"
+                    ? "bg-[#262626] text-[#F2F2F2]"
+                    : "text-[#A3A3A3] hover:bg-[#262626] hover:text-[#F2F2F2]"
                 }`}
               >
-                <span aria-hidden="true">{item.icon}</span>
-                <span className="flex-1 truncate">{item.label}</span>
+                <span className="flex items-center gap-2 truncate">
+                  {item.icon}
+                  <span className="truncate">{item.label}</span>
+                </span>
                 {idx === active && (
-                  <CornerDownLeft className="w-3.5 h-3.5 text-[#5E7188]" aria-hidden="true" />
+                  <CornerDownLeft className="w-3 h-3 text-[#737373]" aria-hidden="true" />
                 )}
               </button>
             ))
           )}
-        </div>
-
-        <div className="flex items-center gap-3 px-3.5 py-2 border-t border-[var(--border-subtle)] text-[10px] font-mono text-[#5E7188]">
-          <span className="flex items-center gap-1">
-            <kbd className="kbd">↑</kbd>
-            <kbd className="kbd">↓</kbd> navigate
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="kbd">↵</kbd> open
-          </span>
         </div>
       </div>
     </div>

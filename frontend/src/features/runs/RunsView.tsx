@@ -7,6 +7,7 @@ import { DataTable, Column } from "@/components/ui/DataTable";
 import { ChartPanel } from "@/components/ui/ChartPanel";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Button } from "@/components/ui/Button";
 import { formatCompactNumber, formatNumber } from "@/lib/utils";
 import {
   History,
@@ -19,16 +20,22 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export const RunsView: React.FC = () => {
+export interface RunsViewProps {
+  initialTab?: string;
+}
+
+export const RunsView: React.FC<RunsViewProps> = ({ initialTab }) => {
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [checkpoints, setCheckpoints] = useState<CheckpointItem[]>([]);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [runMetrics, setRunMetrics] = useState<MetricPoint[]>([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Delete checkpoint state
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   const fetchHistory = async () => {
+    setIsRefreshing(true);
     try {
       const [r, c] = await Promise.all([api.listRuns(50), api.listCheckpoints()]);
       setRuns(r);
@@ -38,6 +45,8 @@ export const RunsView: React.FC = () => {
       }
     } catch (e: any) {
       console.error(e);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -76,12 +85,12 @@ export const RunsView: React.FC = () => {
         <button
           onClick={() => setSelectedRunId(item.id)}
           className={cn(
-            "text-left font-bold transition-colors flex items-center gap-1.5",
-            selectedRunId === item.id ? "text-[#45CFFF]" : "text-[#ECF3FC] hover:text-[#80DEFF]"
+            "text-left font-medium transition-colors flex items-center gap-1.5",
+            selectedRunId === item.id ? "text-[#F2F2F2] font-semibold" : "text-[#A3A3A3] hover:text-[#F2F2F2]"
           )}
         >
-          <History className="w-3.5 h-3.5" />
-          <span className="truncate max-w-[140px]">{item.id}</span>
+          <History className="w-3.5 h-3.5 text-[#737373]" />
+          <span className="truncate max-w-[160px] font-mono">{item.id}</span>
         </button>
       ),
     },
@@ -95,7 +104,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "total_steps",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num font-bold text-[#ECF3FC]">
+        <span className="font-mono-num font-medium text-[#F2F2F2]">
           {item.total_steps?.toLocaleString() || 0}
         </span>
       ),
@@ -105,7 +114,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "total_tokens",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num text-[#91A0B4]">
+        <span className="font-mono-num text-[#A3A3A3]">
           {formatCompactNumber(item.total_tokens || 0)}
         </span>
       ),
@@ -115,7 +124,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "best_val_loss",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num font-bold text-[#35D49A]">
+        <span className="font-mono-num font-medium text-[#4ade80]">
           {item.best_val_loss ? formatNumber(item.best_val_loss, 4) : "—"}
         </span>
       ),
@@ -124,7 +133,7 @@ export const RunsView: React.FC = () => {
       header: "STARTED AT",
       accessorKey: "started_at",
       cell: (item) => (
-        <span className="text-[10px] text-[#5E7188]">
+        <span className="text-[10px] text-[#737373]">
           {item.started_at ? new Date(item.started_at).toLocaleString() : "—"}
         </span>
       ),
@@ -138,17 +147,20 @@ export const RunsView: React.FC = () => {
       sortable: true,
       cell: (item) => (
         <div className="flex items-center gap-2">
-          <Bookmark className="w-3.5 h-3.5 text-[#45CFFF] shrink-0" />
+          <Bookmark className="w-3.5 h-3.5 text-[#A3A3A3] shrink-0" />
           <div className="flex flex-col">
             <div className="flex items-center gap-1.5">
-              <span className="font-bold text-[#ECF3FC]">{item.filename}</span>
+              <span className="font-medium text-[#F2F2F2]">{item.model_name || item.filename}</span>
+              {item.filename !== item.model_name && (
+                <span className="text-[10px] text-[#737373] font-mono">({item.filename})</span>
+              )}
               {item.run_id && (
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#45CFFF]/10 text-[#45CFFF] border border-[#45CFFF]/30 font-mono">
+                <span className="text-[9px] px-1.5 py-0.2 rounded bg-[#262626] text-[#A3A3A3] border border-[#333333] font-mono">
                   {item.run_id}
                 </span>
               )}
             </div>
-            <span className="text-[10px] text-[#5E7188] truncate max-w-xs">{item.path}</span>
+            <span className="text-[10px] text-[#737373] truncate max-w-xs">{item.path}</span>
           </div>
         </div>
       ),
@@ -158,7 +170,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "step",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num font-bold text-[#80DEFF]">
+        <span className="font-mono-num font-medium text-[#F2F2F2]">
           Step {item.step?.toLocaleString() || 0}
         </span>
       ),
@@ -168,7 +180,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "val_loss",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num text-[#35D49A] font-bold">
+        <span className="font-mono-num text-[#4ade80] font-medium">
           {item.val_loss ? formatNumber(item.val_loss, 4) : "—"}
         </span>
       ),
@@ -178,7 +190,7 @@ export const RunsView: React.FC = () => {
       accessorKey: "size_mb",
       sortable: true,
       cell: (item) => (
-        <span className="font-mono-num text-[#91A0B4]">
+        <span className="font-mono-num text-[#A3A3A3]">
           {item.size_mb ? `${item.size_mb.toFixed(1)} MB` : "—"}
         </span>
       ),
@@ -186,17 +198,17 @@ export const RunsView: React.FC = () => {
     {
       header: "ACTIONS",
       cell: (item) => (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <a
             href="/evaluation"
-            className="p-1 rounded bg-[#182333] border border-[#273548] hover:border-[#45CFFF] text-[#91A0B4] hover:text-[#45CFFF] transition-colors"
+            className="p-1 rounded bg-[#262626] border border-[#333333] hover:border-[#525252] text-[#A3A3A3] hover:text-[#F2F2F2] transition-colors"
             title="Load in Evaluation Lab"
           >
             <ExternalLink className="w-3 h-3" />
           </a>
           <button
             onClick={() => setDeleteTargetId(item.id || item.filename)}
-            className="p-1 rounded bg-[#182333] border border-[#273548] hover:border-[#FF657A] hover:text-[#FF657A] text-[#91A0B4] transition-colors"
+            className="p-1 rounded bg-[#262626] border border-[#333333] hover:border-[#f87171]/50 hover:text-[#f87171] text-[#737373] transition-colors"
             title="Delete Checkpoint"
           >
             <Trash2 className="w-3 h-3" />
@@ -217,35 +229,38 @@ export const RunsView: React.FC = () => {
   return (
     <div className="space-y-4 font-mono text-xs">
       {/* Top Banner */}
-      <div className="glass-panel p-3.5 rounded-lg flex items-center justify-between border-l-2 border-l-[#45CFFF]">
+      <div className="panel p-3.5 bg-[#202020] border-[#333333] flex items-center justify-between">
         <div className="flex items-center gap-2.5">
-          <History className="w-5 h-5 text-[#45CFFF]" />
+          <History className="w-4 h-4 text-[#A3A3A3]" />
           <div>
-            <h3 className="font-bold text-[#ECF3FC] uppercase tracking-wider text-xs">
+            <h3 className="font-semibold text-[#F2F2F2] uppercase tracking-wider text-xs">
               RUNS & CHECKPOINT REPOSITORY
             </h3>
-            <p className="text-[10px] text-[#91A0B4]">
+            <p className="text-[11px] text-[#737373]">
               Safe deserialization architecture (weights_only=True) with atomic metadata verification
             </p>
           </div>
         </div>
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={fetchHistory}
-          className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-[#182333] border border-[#273548] hover:border-[#45CFFF]/50 text-[#ECF3FC] transition-colors"
+          loading={isRefreshing}
+          icon={<RefreshCw className="w-3 h-3" />}
         >
-          <RefreshCw className="w-3.5 h-3.5 text-[#45CFFF]" /> REFRESH
-        </button>
+          Refresh
+        </Button>
       </div>
 
       {/* Selected Run Metrics Visualization */}
       {selectedRunId && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="font-bold text-[#ECF3FC] uppercase tracking-wider text-xs flex items-center gap-1.5">
-              <LineChart className="w-3.5 h-3.5 text-[#45CFFF]" /> METRIC DYNAMICS FOR RUN:{" "}
-              <span className="text-[#45CFFF]">{selectedRunId}</span>
+            <span className="font-semibold text-[#F2F2F2] uppercase tracking-wider text-xs flex items-center gap-1.5">
+              <LineChart className="w-3.5 h-3.5 text-[#A3A3A3]" /> METRIC DYNAMICS FOR RUN:{" "}
+              <span className="text-[#F2F2F2]">{selectedRunId}</span>
             </span>
-            <span className="text-[10px] text-[#91A0B4]">
+            <span className="text-[10px] text-[#737373]">
               {runMetrics.length} data points recorded
             </span>
           </div>
@@ -258,8 +273,8 @@ export const RunsView: React.FC = () => {
                 {
                   label: "Train Loss",
                   data: lossSeries,
-                  borderColor: "#45CFFF",
-                  backgroundColor: "rgba(69, 207, 255, 0.08)",
+                  borderColor: "#F2F2F2",
+                  backgroundColor: "rgba(242, 242, 242, 0.05)",
                   fill: true,
                 },
                 ...(hasValLoss
@@ -267,7 +282,7 @@ export const RunsView: React.FC = () => {
                       {
                         label: "Validation Loss",
                         data: valLossSeries,
-                        borderColor: "#35D49A",
+                        borderColor: "#A3A3A3",
                         borderDash: [4, 4],
                         pointRadius: 4,
                         spanGaps: true,
@@ -286,8 +301,8 @@ export const RunsView: React.FC = () => {
                 {
                   label: "LR",
                   data: lrSeries,
-                  borderColor: "#9B8CFF",
-                  backgroundColor: "rgba(155, 140, 255, 0.08)",
+                  borderColor: "#D4D4D4",
+                  backgroundColor: "rgba(212, 212, 212, 0.05)",
                   fill: true,
                 },
               ]}
@@ -300,8 +315,8 @@ export const RunsView: React.FC = () => {
 
       {/* Runs History Table */}
       <div className="space-y-2">
-        <h3 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider flex items-center gap-1.5">
-          <Layers className="w-3.5 h-3.5 text-[#45CFFF]" /> TRAINING EXPERIMENTS HISTORY ({runs.length})
+        <h3 className="text-xs font-semibold text-[#F2F2F2] uppercase tracking-wider flex items-center gap-1.5">
+          <Layers className="w-3.5 h-3.5 text-[#A3A3A3]" /> TRAINING EXPERIMENTS HISTORY ({runs.length})
         </h3>
         <DataTable
           data={runs}
@@ -313,8 +328,8 @@ export const RunsView: React.FC = () => {
 
       {/* Checkpoints Manager Table */}
       <div className="space-y-2 pt-2">
-        <h3 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider flex items-center gap-1.5">
-          <Bookmark className="w-3.5 h-3.5 text-[#45CFFF]" /> SAVED CHECKPOINTS ON DISK ({checkpoints.length})
+        <h3 className="text-xs font-semibold text-[#F2F2F2] uppercase tracking-wider flex items-center gap-1.5">
+          <Bookmark className="w-3.5 h-3.5 text-[#A3A3A3]" /> SAVED CHECKPOINTS ON DISK ({checkpoints.length})
         </h3>
         <DataTable
           data={checkpoints}
@@ -327,10 +342,10 @@ export const RunsView: React.FC = () => {
       {/* Confirm Delete Dialog */}
       <ConfirmDialog
         isOpen={!!deleteTargetId}
-        title="DELETE CHECKPOINT"
+        title="Delete Checkpoint"
         message={`Are you sure you want to permanently delete checkpoint '${deleteTargetId}'? This action cannot be undone.`}
-        confirmLabel="DELETE CHECKPOINT"
-        cancelLabel="CANCEL"
+        confirmLabel="Delete Checkpoint"
+        cancelLabel="Cancel"
         variant="danger"
         onConfirm={handleDeleteCheckpoint}
         onCancel={() => setDeleteTargetId(null)}

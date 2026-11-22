@@ -133,11 +133,29 @@ class WorkspaceManager:
     def delete_workspace(self, workspace_id: str, delete_files: bool = False) -> bool:
         if workspace_id == "default":
             return False
+        # If deleting the active workspace, switch to default first
+        active = self.get_active_workspace()
+        if active and active.get("id") == workspace_id:
+            self.set_active_workspace("default")
+
         success = self.db.delete_workspace(workspace_id)
         if success and delete_files:
             ws_root = self.base_dir / workspace_id
             if ws_root.exists() and ws_root.is_dir():
                 shutil.rmtree(ws_root, ignore_errors=True)
+            # Remove custom network configs associated with this workspace
+            try:
+                reg_dir = Path("networks/registry")
+                if reg_dir.exists():
+                    for p in reg_dir.glob("*.json"):
+                        try:
+                            cfg = json.loads(p.read_text(encoding="utf-8"))
+                            if cfg.get("workspace_id") == workspace_id:
+                                p.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+            except Exception as e:
+                logger.warning("Could not clean up network files for workspace %s: %s", workspace_id, e)
         return success
 
     def export_workspace(self, workspace_id: str) -> Dict[str, Any]:

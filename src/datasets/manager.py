@@ -40,6 +40,7 @@ class DatasetManager:
         self.tokenizer = tokenizer or RoCanonTokenizer()
         self.validator = DatasetValidator()
         self.analyzer = DatasetAnalyzer(tokenizer=self.tokenizer)
+        self.deleted_dataset_ids: set[str] = set()
 
     def compute_file_hash(self, file_path: Path) -> str:
         """Computes SHA-256 revision hash of dataset content."""
@@ -56,6 +57,7 @@ class DatasetManager:
         instruction_field: str = "instruction",
         input_field: str = "input",
         output_field: str = "output",
+        workspace_id: str = "default",
     ) -> Dict[str, Any]:
         """Validates and analyzes an uploaded dataset, saving it with an immutable revision."""
         path = Path(file_path)
@@ -115,6 +117,7 @@ class DatasetManager:
                 "analysis": stats,
                 "preview": val_res.get("samples_preview", [])[:5],
             },
+            workspace_id=workspace_id,
         )
 
         return {
@@ -163,39 +166,57 @@ class DatasetManager:
                 }
         return None
 
-    def list_all_datasets(self) -> List[Dict[str, Any]]:
-        presets = [
-            {
-                "id": "tech_wiki_ro",
-                "name": "RoCanon Pretrain Corpus (tech_wiki_ro)",
-                "source": "preset",
-                "status": "ready",
-                "size_mb": 115.4,
-                "total_tokens": 48419639,
-                "train_tokens": 48419639,
-                "val_tokens": 2548402,
-                "is_uploaded": False,
-            },
-            {
-                "id": "synthetic",
-                "name": "Fast Synthetic Benchmark (synthetic)",
-                "source": "synthetic",
-                "status": "ready",
-                "size_mb": 1.0,
-                "total_tokens": 100000,
-                "train_tokens": 80000,
-                "val_tokens": 20000,
-                "is_uploaded": False,
-            },
-        ]
-        uploaded = self.db.list_datasets()
+    def list_all_datasets(self, workspace_id: str = "default") -> List[Dict[str, Any]]:
+        presets = []
+        if workspace_id == "default":
+            presets = [
+                {
+                    "id": "tech_wiki_ro",
+                    "name": "RoCanon Pretrain Corpus (tech_wiki_ro)",
+                    "source": "preset",
+                    "status": "ready",
+                    "size_mb": 115.4,
+                    "total_tokens": 48419639,
+                    "train_tokens": 48419639,
+                    "val_tokens": 2548402,
+                    "is_uploaded": False,
+                },
+                {
+                    "id": "synthetic",
+                    "name": "Fast Synthetic Benchmark (synthetic)",
+                    "source": "synthetic",
+                    "status": "ready",
+                    "size_mb": 1.0,
+                    "total_tokens": 100000,
+                    "train_tokens": 80000,
+                    "val_tokens": 20000,
+                    "is_uploaded": False,
+                },
+            ]
+        uploaded = self.db.list_datasets(workspace_id=workspace_id)
         for u in uploaded:
             u["is_uploaded"] = True
             if "size_mb" not in u and "file_size_bytes" in u:
                 u["size_mb"] = round(u["file_size_bytes"] / (1024 * 1024), 2)
             if "total_tokens" not in u and "token_count" in u:
                 u["total_tokens"] = u["token_count"]
-        return presets + uploaded
+        combined = presets + uploaded
+        return [d for d in combined if d["id"] not in self.deleted_dataset_ids]
+
+    def delete_dataset(self, dataset_id: str) -> bool:
+        """Deletes dataset from memory filter, DB, and unlinks physical storage."""
+        self.deleted_dataset_ids.add(dataset_id)
+        self.db.delete_dataset(dataset_id)
+        # Safely remove files
+        for search_dir in (self.upload_dir, Path("data/cache"), Path("data")):
+            if search_dir.exists():
+                for p in search_dir.glob(f"*{dataset_id}*"):
+                    try:
+                        if p.is_file():
+                            p.unlink(missing_ok=True)
+                    except Exception as e:
+                        logger.warning("Could not unlink dataset file %s: %s", p, e)
+        return True
 
     def curate_dataset(
         self,

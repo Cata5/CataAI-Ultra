@@ -51,10 +51,28 @@ interface ChartPanelProps {
   allowLogScale?: boolean;
   className?: string;
   height?: number;
-  /** Renders a skeleton plot while the first payload is in flight. */
   loading?: boolean;
   emptyTitle?: string;
   emptyHint?: string;
+}
+
+// Convert neon / bright colors to restrained grayscale series
+function sanitizeGrayscaleColor(color: string, index: number): string {
+  if (color.includes("45CFFF") || color.includes("cyan")) {
+    return "#F2F2F2"; // Primary data: clean crisp white/light gray
+  }
+  if (color.includes("9B8CFF") || color.includes("violet")) {
+    return "#A3A3A3"; // Secondary data: neutral mid gray
+  }
+  if (color.includes("35D49A") || color.includes("emerald") || color.includes("green")) {
+    return "#D4D4D4"; // Validation / success: soft light gray
+  }
+  if (color.includes("F2B85B") || color.includes("amber")) {
+    return "#8C8C8C"; // Auxiliary
+  }
+  // Fallbacks by index
+  const palette = ["#F2F2F2", "#A3A3A3", "#737373", "#D4D4D4"];
+  return color.startsWith("#") ? color : palette[index % palette.length];
 }
 
 export const ChartPanel: React.FC<ChartPanelProps> = ({
@@ -65,7 +83,7 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
   xAxisLabel = "Step",
   allowLogScale = true,
   className,
-  height = 240,
+  height = 220,
   loading = false,
   emptyTitle = "No telemetry yet",
   emptyHint = "Data points appear here once the run emits metrics.",
@@ -86,16 +104,16 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
 
   const chartData = {
     labels: labels.map(String),
-    datasets: datasets.map((ds) => ({
+    datasets: datasets.map((ds, idx) => ({
       label: ds.label,
       data: ds.data,
-      borderColor: ds.borderColor,
-      backgroundColor: ds.backgroundColor || "transparent",
-      fill: ds.fill ?? false,
-      borderDash: ds.borderDash || [],
-      borderWidth: ds.borderWidth ?? 1.8,
+      borderColor: sanitizeGrayscaleColor(ds.borderColor, idx),
+      backgroundColor: "transparent",
+      fill: false,
+      borderDash: ds.borderDash || (idx === 1 ? [4, 4] : idx === 2 ? [2, 2] : []),
+      borderWidth: ds.borderWidth ?? (idx === 0 ? 1.6 : 1.2),
       pointRadius: ds.pointRadius ?? 0,
-      tension: 0.15,
+      tension: 0.1,
       spanGaps: ds.spanGaps ?? true,
     })),
   };
@@ -113,35 +131,35 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
     scales: {
       x: {
         grid: {
-          color: "rgba(39, 53, 72, 0.35)",
+          color: "rgba(255, 255, 255, 0.04)",
           lineWidth: 1,
         },
         ticks: {
-          color: "#91A0B4",
+          color: "#737373",
           font: { family: "monospace", size: 10 },
-          maxTicksLimit: 10,
+          maxTicksLimit: 8,
         },
         title: {
           display: !!xAxisLabel,
           text: xAxisLabel,
-          color: "#5E7188",
+          color: "#525252",
           font: { size: 10, family: "monospace" },
         },
       },
       y: {
         type: isLogScale ? "logarithmic" : "linear",
         grid: {
-          color: "rgba(39, 53, 72, 0.35)",
+          color: "rgba(255, 255, 255, 0.04)",
           lineWidth: 1,
         },
         ticks: {
-          color: "#91A0B4",
+          color: "#737373",
           font: { family: "monospace", size: 10 },
         },
         title: {
           display: !!yAxisLabel,
           text: yAxisLabel,
-          color: "#5E7188",
+          color: "#525252",
           font: { size: 10, family: "monospace" },
         },
       },
@@ -152,23 +170,23 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
         position: "top" as const,
         align: "end" as const,
         labels: {
-          color: "#91A0B4",
-          font: { family: "monospace", size: 11 },
-          boxWidth: 10,
+          color: "#A3A3A3",
+          font: { family: "monospace", size: 10 },
+          boxWidth: 8,
           boxHeight: 2,
         },
       },
       tooltip: {
-        backgroundColor: "#182333",
-        titleColor: "#45CFFF",
-        bodyColor: "#ECF3FC",
-        borderColor: "#384C66",
+        backgroundColor: "#202020",
+        titleColor: "#F2F2F2",
+        bodyColor: "#A3A3A3",
+        borderColor: "#333333",
         borderWidth: 1,
         bodyFont: { family: "monospace", size: 11 },
         titleFont: { family: "monospace", size: 11 },
-        padding: 8,
+        padding: 6,
         displayColors: true,
-        cornerRadius: 6,
+        cornerRadius: 4,
       },
     },
   };
@@ -176,9 +194,9 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
   return (
     <section
       className={cn(
-        "panel flex flex-col p-3.5",
+        "panel flex flex-col p-3 bg-[#202020] border-[#333333]",
         isFullscreen
-          ? "fixed inset-3 z-50 p-5 bg-[var(--bg-base)] md:inset-6"
+          ? "fixed inset-3 z-50 p-4 bg-[#171717] md:inset-6"
           : "",
         className
       )}
@@ -195,7 +213,7 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
               type="button"
               onClick={() => setIsLogScale(!isLogScale)}
               aria-pressed={isLogScale}
-              className="btn btn-ghost btn-sm px-2"
+              className="btn btn-ghost btn-sm px-1.5 text-[10px]"
               title="Toggle logarithmic scale"
             >
               LOG
@@ -205,34 +223,34 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
           <button
             type="button"
             onClick={() => setIsFullscreen(!isFullscreen)}
-            className="icon-btn"
+            className="icon-btn w-6 h-6"
             aria-label={isFullscreen ? "Exit fullscreen" : "Expand chart fullscreen"}
             title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
           >
             {isFullscreen ? (
-              <Minimize2 className="w-3.5 h-3.5" />
+              <Minimize2 className="w-3 h-3" />
             ) : (
-              <Maximize2 className="w-3.5 h-3.5" />
+              <Maximize2 className="w-3 h-3" />
             )}
           </button>
         </div>
       </div>
 
       <div
-        style={{ height: isFullscreen ? "calc(100% - 44px)" : `${height}px` }}
+        style={{ height: isFullscreen ? "calc(100% - 40px)" : `${height}px` }}
         className="w-full min-h-0"
       >
         {loading ? (
           <div className="h-full flex flex-col justify-end gap-2 pb-2" aria-label="Loading chart">
-            <span className="skeleton block h-full w-full opacity-60" />
+            <span className="skeleton block h-full w-full opacity-40" />
           </div>
         ) : isEmpty ? (
-          <div className="h-full flex flex-col items-center justify-center text-center gap-2 px-4">
-            <ChartIcon className="w-5 h-5 text-[#384C66]" aria-hidden="true" />
-            <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#91A0B4]">
+          <div className="h-full flex flex-col items-center justify-center text-center gap-1.5 px-4">
+            <ChartIcon className="w-4 h-4 text-[#404040]" aria-hidden="true" />
+            <p className="font-mono text-[10px] font-medium uppercase tracking-wider text-[#737373]">
               {emptyTitle}
             </p>
-            <p className="max-w-[260px] text-[11px] leading-relaxed text-[#5E7188]">{emptyHint}</p>
+            <p className="max-w-[220px] text-[10px] text-[#525252]">{emptyHint}</p>
           </div>
         ) : (
           <Line data={chartData} options={chartOptions} aria-label={`${title} chart`} role="img" />

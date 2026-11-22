@@ -15,12 +15,26 @@ class ParameterCalculator:
 
     @staticmethod
     def calculate(config: Dict[str, Any]) -> Dict[str, Any]:
-        family = config.get("architecture_family", "decoder_only").lower()
-        vocab_size = int(config.get("vocab_size", 12288))
-        d_model = int(config.get("d_model", 512))
-        n_layers = int(config.get("n_layers", 8))
-        tie_embeddings = bool(config.get("tie_word_embeddings", True))
-        layers_cfg = config.get("layers_config", [])
+        try:
+            family = str(config.get("architecture_family", "decoder_only") or "decoder_only").lower()
+            vocab_size = max(128, min(int(config.get("vocab_size", 12288) or 12288), 300000))
+            d_model = max(16, min(int(config.get("d_model", 512) or 512), 16384))
+            n_layers = max(1, min(int(config.get("n_layers", 8) or 8), 128))
+            d_ff = max(16, min(int(config.get("d_ff", 1280) or 1280), 65536))
+            n_q = max(1, min(int(config.get("n_q", 8) or 8), 128))
+            n_kv = max(1, min(int(config.get("n_kv", 2) or 2), n_q))
+            tie_embeddings = bool(config.get("tie_word_embeddings", True))
+            layers_cfg = config.get("layers_config", []) or []
+        except Exception:
+            vocab_size = 12288
+            d_model = 512
+            n_layers = 8
+            d_ff = 1280
+            n_q = 8
+            n_kv = 2
+            tie_embeddings = True
+            layers_cfg = []
+            family = "decoder_only"
 
         # Check if RoCanon-48.5M baseline template
         if config.get("id") == "rocanon_48m" or (
@@ -225,10 +239,20 @@ class MemoryEstimator:
         hardware_target: Optional[str] = None,
         hardware_total_vram_gb: Optional[float] = None,
     ) -> Dict[str, Any]:
-        param_stats = ParameterCalculator.calculate(config)
-        total_p = param_stats["total_parameters"]
-        d_model = int(config.get("d_model", 512))
-        n_layers = int(config.get("n_layers", 8))
+        try:
+            param_stats = ParameterCalculator.calculate(config)
+            total_p = param_stats["total_parameters"]
+            d_model = max(16, min(int(config.get("d_model", 512) or 512), 16384))
+            n_layers = max(1, min(int(config.get("n_layers", 8) or 8), 128))
+            micro_batch_size = max(1, min(int(micro_batch_size or 4), 512))
+            seq_len = max(16, min(int(seq_len or 256), 32768))
+        except Exception:
+            param_stats = {"total_parameters": 48_000_000, "attention_parameters": 10_000_000, "ffn_parameters": 30_000_000}
+            total_p = 48_000_000
+            d_model = 512
+            n_layers = 8
+            micro_batch_size = 4
+            seq_len = 256
 
         # Precision bytes
         dt = dtype.lower()

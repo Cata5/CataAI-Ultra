@@ -110,6 +110,10 @@ export interface HardwareTelemetry {
   core_clock_mhz?: number;
   sm_clock_mhz?: number;
   memory_clock_mhz?: number;
+  mem_clock_mhz?: number;
+  system_ram_used_mb?: number;
+  system_ram_used_gb?: number;
+  system_ram_total_gb?: number;
   pytorch_allocated_mb?: number;
   pytorch_reserved_mb?: number;
   throttle_reasons?: string[];

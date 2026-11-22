@@ -23,7 +23,6 @@ interface DataTableProps<T> {
   className?: string;
   emptyText?: string;
   pageSize?: number;
-  /** Shown under the empty title, e.g. how to add the first record. */
   emptyHint?: string;
 }
 
@@ -94,12 +93,12 @@ export function DataTable<T>({
   const empty = description(search);
 
   return (
-    <div className={cn("panel overflow-hidden flex flex-col", className)}>
+    <div className={cn("panel overflow-hidden flex flex-col bg-[#202020] border-[#333333]", className)}>
       {showSearch && (
-        <div className="p-3 border-b border-[var(--border-subtle)] bg-[var(--bg-subtle)]/60">
+        <div className="p-2.5 border-b border-[#262626] bg-[#1B1B1B]">
           <div className="relative">
             <Search
-              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#5E7188]"
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[#737373]"
               aria-hidden="true"
             />
             <label htmlFor="data-table-search" className="sr-only">
@@ -123,10 +122,10 @@ export function DataTable<T>({
                   setSearch("");
                   setCurrentPage(1);
                 }}
-                className="icon-btn absolute right-0.5 top-1/2 -translate-y-1/2 h-7 w-7"
+                className="icon-btn absolute right-0.5 top-1/2 -translate-y-1/2 h-6 w-6"
                 aria-label="Clear search"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-3 h-3" />
               </button>
             )}
           </div>
@@ -134,8 +133,8 @@ export function DataTable<T>({
       )}
 
       <div className="overflow-x-auto w-full">
-        <table className="w-full text-left text-[12px] font-mono">
-          <thead className="bg-[var(--bg-subtle)] text-[#91A0B4] border-b border-[var(--border-subtle)] uppercase tracking-wider text-[10px]">
+        <table className="w-full text-left text-xs font-mono">
+          <thead className="bg-[#1B1B1B] text-[#737373] border-b border-[#262626] uppercase tracking-wider text-[10px]">
             <tr>
               {columns.map((col, idx) => {
                 const isSorted = col.sortable && sortKey === col.accessorKey;
@@ -144,15 +143,15 @@ export function DataTable<T>({
                     key={idx}
                     scope="col"
                     aria-sort={isSorted ? (sortAsc ? "ascending" : "descending") : undefined}
-                    className={cn("px-3.5 py-2.5 font-bold whitespace-nowrap", col.className)}
+                    className={cn("px-3 py-2 font-medium whitespace-nowrap", col.className)}
                   >
                     {col.sortable ? (
                       <button
                         type="button"
                         onClick={() => handleSort(col)}
                         className={cn(
-                          "inline-flex items-center gap-1 uppercase tracking-wider transition-colors hover:text-[#ECF3FC]",
-                          isSorted && "text-[#45CFFF]"
+                          "inline-flex items-center gap-1 uppercase tracking-wider transition-colors hover:text-[#F2F2F2]",
+                          isSorted && "text-[#F2F2F2]"
                         )}
                       >
                         <span>{col.header}</span>
@@ -163,7 +162,7 @@ export function DataTable<T>({
                             <ChevronDown className="w-3 h-3" aria-hidden="true" />
                           )
                         ) : (
-                          <ChevronsUpDown className="w-3 h-3 opacity-40" aria-hidden="true" />
+                          <ChevronsUpDown className="w-3 h-3 opacity-30" aria-hidden="true" />
                         )}
                       </button>
                     ) : (
@@ -174,28 +173,28 @@ export function DataTable<T>({
               })}
             </tr>
           </thead>
-          <tbody className="divide-y divide-[var(--border-subtle)] text-[#ECF3FC]">
+          <tbody className="divide-y divide-[#262626] text-[#F2F2F2]">
             {paginated.length === 0 ? (
               <tr>
-                <td colSpan={columns.length} className="px-4 py-12">
-                  <div className="flex flex-col items-center justify-center gap-2 text-center">
+                <td colSpan={columns.length} className="px-4 py-8">
+                  <div className="flex flex-col items-center justify-center gap-1.5 text-center">
                     {data.length === 0 ? (
-                      <Inbox className="w-5 h-5 text-[#384C66]" aria-hidden="true" />
+                      <Inbox className="w-4 h-4 text-[#525252]" aria-hidden="true" />
                     ) : (
-                      <Search className="w-5 h-5 text-[#384C66]" aria-hidden="true" />
+                      <Search className="w-4 h-4 text-[#525252]" aria-hidden="true" />
                     )}
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-[#91A0B4]">
+                    <p className="text-[10px] font-medium uppercase tracking-wider text-[#737373]">
                       {empty.title}
                     </p>
-                    <p className="max-w-sm text-[11px] text-[#5E7188]">{empty.hint}</p>
+                    <p className="max-w-sm text-[10px] text-[#525252]">{empty.hint}</p>
                   </div>
                 </td>
               </tr>
             ) : (
               paginated.map((item) => (
-                <tr key={keyExtractor(item)} className="hover:bg-[var(--bg-elevated)]/60 transition-colors">
+                <tr key={keyExtractor(item)} className="hover:bg-[#262626] transition-colors">
                   {columns.map((col, idx) => (
-                    <td key={idx} className={cn("px-3.5 py-2.5 align-middle", col.className)}>
+                    <td key={idx} className={cn("px-3 py-2 align-middle", col.className)}>
                       {col.cell
                         ? col.cell(item)
                         : col.accessorKey
@@ -211,12 +210,11 @@ export function DataTable<T>({
       </div>
 
       {totalPages > 1 && (
-        <div className="p-2.5 border-t border-[var(--border-subtle)] bg-[var(--bg-subtle)]/40 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-[#91A0B4]">
+        <div className="p-2 border-t border-[#262626] bg-[#1B1B1B] flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono text-[#737373]">
           <span>
-            Showing {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, sorted.length)} of{" "}
-            {sorted.length}
+            {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, sorted.length)} of {sorted.length}
           </span>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1">
             <Button
               variant="secondary"
               size="sm"
@@ -225,7 +223,7 @@ export function DataTable<T>({
             >
               Prev
             </Button>
-            <span className="px-2 text-[#ECF3FC] tabular-nums" aria-current="page">
+            <span className="px-2 text-[#A3A3A3] tabular-nums" aria-current="page">
               {page} / {totalPages}
             </span>
             <Button

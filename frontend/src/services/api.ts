@@ -191,6 +191,8 @@ export const api = {
       checkpoint_loaded?: string | null;
       checkpoint_step?: number;
       checkpoint_val_loss?: number;
+      success?: boolean;
+      error?: string;
     }>("/api/evaluation/generate", {
       method: "POST",
       body: JSON.stringify(params),
@@ -287,5 +289,23 @@ export const api = {
     request<{ status: string; settings: any }>("/api/settings", {
       method: "POST",
       body: JSON.stringify(settings),
+    }),
+
+  // Workspaces
+  listWorkspaces: () => request<any[]>("/api/workspaces"),
+  getActiveWorkspace: () => request<any>("/api/workspaces/current"),
+  setActiveWorkspace: (workspaceId: string) =>
+    request<{ status: string; workspace: any }>("/api/workspaces/current", {
+      method: "POST",
+      body: JSON.stringify({ workspace_id: workspaceId }),
+    }),
+  createWorkspace: (name: string, description?: string) =>
+    request<any>("/api/workspaces", {
+      method: "POST",
+      body: JSON.stringify({ name, description }),
+    }),
+  deleteWorkspace: (id: string) =>
+    request<{ success: boolean }>(`/api/workspaces/${encodeURIComponent(id)}`, {
+      method: "DELETE",
     }),
 };

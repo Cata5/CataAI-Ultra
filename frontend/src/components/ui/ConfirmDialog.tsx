@@ -12,7 +12,6 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: "danger" | "warning" | "info";
-  /** Disables both actions and shows a spinner on the confirm button. */
   loading?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
@@ -20,21 +19,21 @@ interface ConfirmDialogProps {
 
 const VARIANT_META = {
   danger: {
-    icon: <AlertCircle className="w-5 h-5" />,
-    tone: "text-[#FF657A]",
-    ring: "border-[rgba(255,101,122,0.3)] bg-[rgba(255,101,122,0.08)]",
+    icon: <AlertCircle className="w-4 h-4 text-[#f87171]" />,
+    tone: "text-[#f87171]",
+    ring: "border-[rgba(248,113,113,0.25)] bg-[rgba(248,113,113,0.06)]",
     button: "danger" as const,
   },
   warning: {
-    icon: <AlertTriangle className="w-5 h-5" />,
-    tone: "text-[#F2B85B]",
-    ring: "border-[rgba(242,184,91,0.3)] bg-[rgba(242,184,91,0.08)]",
+    icon: <AlertTriangle className="w-4 h-4 text-[#facc15]" />,
+    tone: "text-[#facc15]",
+    ring: "border-[rgba(250,204,21,0.25)] bg-[rgba(250,204,21,0.06)]",
     button: "warning" as const,
   },
   info: {
-    icon: <Info className="w-5 h-5" />,
-    tone: "text-[#45CFFF]",
-    ring: "border-[rgba(69,207,255,0.3)] bg-[rgba(69,207,255,0.08)]",
+    icon: <Info className="w-4 h-4 text-[#D4D4D4]" />,
+    tone: "text-[#D4D4D4]",
+    ring: "border-[#333333] bg-[#262626]",
     button: "primary" as const,
   },
 };
@@ -76,7 +75,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[rgba(5,8,13,0.8)] backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !loading) onCancel();
       }}
@@ -86,12 +85,12 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         aria-modal="true"
         aria-labelledby="confirm-dialog-title"
         aria-describedby="confirm-dialog-message"
-        className="w-full max-w-md space-y-4 rounded-[12px] border border-[var(--border-strong)] bg-[var(--bg-surface)] p-5 shadow-[0_24px_80px_-20px_rgba(0,0,0,0.95)] animate-in fade-in zoom-in-95 duration-150"
+        className="w-full max-w-md space-y-3 rounded-lg border border-[#333333] bg-[#202020] p-4 shadow-xl"
       >
         <div className="flex items-start gap-3">
           <div
             className={cn(
-              "flex items-center justify-center w-9 h-9 rounded-lg border shrink-0",
+              "flex items-center justify-center w-8 h-8 rounded border shrink-0",
               meta.ring,
               meta.tone
             )}
@@ -102,24 +101,24 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           <div className="min-w-0 space-y-1">
             <h3
               id="confirm-dialog-title"
-              className="font-mono text-[12px] font-bold text-[#ECF3FC] uppercase tracking-wide"
+              className="font-mono text-xs font-semibold text-[#F2F2F2] uppercase tracking-wide"
             >
               {title}
             </h3>
             <p
               id="confirm-dialog-message"
-              className="text-[12px] leading-relaxed text-[#91A0B4]"
+              className="text-xs leading-relaxed text-[#A3A3A3]"
             >
               {message}
             </p>
           </div>
         </div>
 
-        <div className="flex items-center justify-end gap-2 pt-3 border-t border-[var(--border-subtle)]">
-          <button ref={cancelRef} type="button" className="btn btn-ghost" onClick={onCancel} disabled={loading}>
+        <div className="flex items-center justify-end gap-2 pt-2.5 border-t border-[#262626]">
+          <button ref={cancelRef} type="button" className="btn btn-ghost btn-sm" onClick={onCancel} disabled={loading}>
             {cancelLabel}
           </button>
-          <Button variant={meta.button} onClick={onConfirm} loading={loading}>
+          <Button variant={meta.button} size="sm" onClick={onConfirm} loading={loading}>
             {confirmLabel}
           </Button>
         </div>

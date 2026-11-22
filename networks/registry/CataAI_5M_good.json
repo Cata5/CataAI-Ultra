@@ -362,5 +362,6 @@
   "total_parameters": 4872420,
   "updated_at": 1795297720.9790823,
   "created_at": 1795297720.9790835,
-  "description": "Saved local model package CataAI_5M_good (Trained checkpoint step 3105, val loss 2.6770833333333335)."
+  "description": "Saved local model package CataAI_5M_good (Trained checkpoint step 3105, val loss 2.6770833333333335).",
+  "workspace_id": "default"
 }

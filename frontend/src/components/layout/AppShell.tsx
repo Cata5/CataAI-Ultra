@@ -13,11 +13,11 @@ interface AppShellProps {
 export const AppShell: React.FC<AppShellProps> = ({ children }) => {
   return (
     <I18nProvider>
-      <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)] sci-fi-grid">
+      <div className="flex h-screen w-screen overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)]">
         <Sidebar />
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           <Topbar />
-          <main className="flex-1 overflow-y-auto p-4 md:p-5 relative">
+          <main className="flex-1 overflow-y-auto p-4 md:p-5 relative bg-[var(--bg-base)]">
             {children}
           </main>
           <StatusBar />

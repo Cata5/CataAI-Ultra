@@ -12,22 +12,22 @@ from typing import Any, Dict, List, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
-# Cyber / Neural Workstation Dark Theme Palette
+# Minimalist Grayscale Workstation Theme Palette
 STYLE_CONFIG = {
-    "bg_color": "#090D14",
-    "card_bg": "#0E1420",
-    "plot_bg": "#131C29",
-    "border_color": "#273548",
-    "grid_color": "#1C2738",
-    "text_primary": "#ECF3FC",
-    "text_secondary": "#91A0B4",
-    "text_muted": "#5E7188",
-    "color_train_loss": "#45CFFF",    # Cyan
-    "color_val_loss": "#35D49A",      # Emerald
-    "color_muon_lr": "#9B8CFF",       # Violet
-    "color_adamw_lr": "#F2B85B",      # Amber
-    "color_tok_s": "#80DEFF",         # Light Blue
-    "color_best_marker": "#35D49A",   # Bright Emerald
+    "bg_color": "#171717",
+    "card_bg": "#202020",
+    "plot_bg": "#1B1B1B",
+    "border_color": "#333333",
+    "grid_color": "#262626",
+    "text_primary": "#F2F2F2",
+    "text_secondary": "#A3A3A3",
+    "text_muted": "#737373",
+    "color_train_loss": "#F2F2F2",    # Clean Light Gray
+    "color_val_loss": "#A3A3A3",      # Muted Mid Gray
+    "color_muon_lr": "#D4D4D4",       # Neutral Light Gray
+    "color_adamw_lr": "#737373",      # Muted Gray
+    "color_tok_s": "#A3A3A3",         # Secondary Gray
+    "color_best_marker": "#F2F2F2",   # Highlight White/Light
 }
 
 
@@ -221,7 +221,7 @@ def generate_training_charts(
         if val_steps and val_losses:
             ax_loss.plot(val_steps, val_losses, color=STYLE_CONFIG["color_val_loss"], linestyle="--", marker="o", label="Val Loss", lw=2.0)
             if best_step is not None and best_val_loss is not None:
-                ax_loss.scatter([best_step], [best_val_loss], color="#35D49A", s=100, zorder=5, edgecolors="#FFF")
+                ax_loss.scatter([best_step], [best_val_loss], color=STYLE_CONFIG["color_best_marker"], s=100, zorder=5, edgecolors="#171717")
         ax_loss.set_title(f"{model_id} — Training & Validation Dynamics", fontsize=12, fontweight="bold")
         ax_loss.set_ylabel("Loss", fontsize=10)
         ax_loss.legend(loc="upper right", facecolor=STYLE_CONFIG["card_bg"], edgecolor=STYLE_CONFIG["border_color"])
@@ -245,9 +245,9 @@ def generate_training_charts(
 
             if step_times:
                 ax_lat = ax_perf.twinx()
-                ax_lat.plot(throughput_steps, step_times, color="#F2B85B", linestyle=":", label="Step Latency (ms)", lw=1.4)
-                ax_lat.set_ylabel("Step Latency (ms)", color="#F2B85B", fontsize=10)
-                ax_lat.tick_params(axis="y", labelcolor="#F2B85B")
+                ax_lat.plot(throughput_steps, step_times, color="#737373", linestyle=":", label="Step Latency (ms)", lw=1.4)
+                ax_lat.set_ylabel("Step Latency (ms)", color="#737373", fontsize=10)
+                ax_lat.tick_params(axis="y", labelcolor="#737373")
                 ax_lat.grid(False)
 
         ax_perf.set_xlabel("Optimization Step", fontsize=10)

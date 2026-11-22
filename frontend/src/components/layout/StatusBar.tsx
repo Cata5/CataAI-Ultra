@@ -20,32 +20,32 @@ export const StatusBar: React.FC = () => {
   const phase = latestMetric?.phase ?? status?.latest_metrics?.phase ?? "IDLE";
 
   return (
-    <footer className="h-7 border-t border-[#273548] bg-[#090D14] px-4 flex items-center justify-between text-[11px] font-mono text-[#91A0B4] select-none shrink-0 z-20">
+    <footer className="h-6 border-t border-[#333333] bg-[#141414] px-3 flex items-center justify-between text-[11px] font-mono text-[#737373] select-none shrink-0 z-20">
       {/* Left: Run Identity & Phase */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5">
-          <span className="text-[#5E7188]">RUN:</span>
-          <span className="text-[#ECF3FC] font-bold max-w-[140px] truncate" title={runId}>
+          <span>RUN:</span>
+          <span className="text-[#A3A3A3] font-medium max-w-[120px] truncate" title={runId}>
             {runId}
           </span>
         </div>
 
         <div className="flex items-center gap-1.5">
-          <span className="text-[#5E7188]">PHASE:</span>
-          <span className="text-[#45CFFF] font-bold uppercase">{phase}</span>
+          <span>PHASE:</span>
+          <span className="text-[#A3A3A3] uppercase">{phase}</span>
         </div>
 
         <div className="flex items-center gap-1.5">
-          <span className="text-[#5E7188]">STEP:</span>
-          <span className="text-[#ECF3FC] font-mono-num font-bold">
+          <span>STEP:</span>
+          <span className="text-[#F2F2F2] font-mono-num font-medium">
             {step.toLocaleString()}
           </span>
         </div>
 
         {loss !== null && (
           <div className="hidden sm:flex items-center gap-1.5">
-            <span className="text-[#5E7188]">LOSS:</span>
-            <span className="text-[#35D49A] font-mono-num font-bold">
+            <span>LOSS:</span>
+            <span className="text-[#F2F2F2] font-mono-num font-medium">
               {Number(loss).toFixed(4)}
             </span>
           </div>
@@ -53,31 +53,31 @@ export const StatusBar: React.FC = () => {
       </div>
 
       {/* Right: Tokens, GPU, Telemetry */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         <div className="hidden md:flex items-center gap-1.5">
-          <Activity className="w-3 h-3 text-[#45CFFF]" />
+          <Activity className="w-3 h-3 text-[#737373]" />
           <span>TOKENS:</span>
-          <span className="text-[#ECF3FC] font-bold font-mono-num">
+          <span className="text-[#A3A3A3] font-mono-num">
             {formatCompactNumber(tokens)}
           </span>
           {tokPerSec > 0 && (
-            <span className="text-[#5E7188]">({Math.round(tokPerSec)} tok/s)</span>
+            <span className="text-[#525252]">({Math.round(tokPerSec)} tok/s)</span>
           )}
         </div>
 
         {telemetry && (
           <>
             <div className="flex items-center gap-1.5">
-              <HardDrive className="w-3 h-3 text-[#45CFFF]" />
+              <HardDrive className="w-3 h-3 text-[#737373]" />
               <span>VRAM:</span>
-              <span className="text-[#ECF3FC] font-bold font-mono-num">
+              <span className="text-[#A3A3A3] font-mono-num">
                 {Math.round(telemetry.memory_used_mb ?? telemetry.used_vram_mb ?? 0)} / {Math.round(telemetry.memory_total_mb ?? telemetry.total_vram_mb ?? 6144)} MB
               </span>
             </div>
 
             <div className="hidden sm:flex items-center gap-1.5">
-              <Flame className="w-3 h-3 text-[#F2B85B]" />
-              <span className="text-[#ECF3FC] font-bold font-mono-num">
+              <Flame className="w-3 h-3 text-[#737373]" />
+              <span className="text-[#A3A3A3] font-mono-num">
                 {Math.round(telemetry.temperature_c ?? 0)}°C
               </span>
             </div>
@@ -86,10 +86,10 @@ export const StatusBar: React.FC = () => {
 
         <div className="flex items-center gap-1.5">
           <Radio
-            className={`w-3 h-3 ${isConnected ? "text-[#35D49A] animate-pulse" : "text-[#FF657A]"}`}
+            className={`w-3 h-3 ${isConnected ? "text-[#4ade80]" : "text-[#f87171]"}`}
           />
-          <span className={isConnected ? "text-[#35D49A]" : "text-[#FF657A]"}>
-            {isConnected ? "WS 8081" : "DISCONNECTED"}
+          <span className={isConnected ? "text-[#4ade80]" : "text-[#f87171]"}>
+            {isConnected ? "CONNECTED" : "OFFLINE"}
           </span>
         </div>
       </div>

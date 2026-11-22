@@ -5,12 +5,11 @@ import {
   Bookmark,
   CheckCircle2,
   FileCheck,
-  BarChart3,
-  Layers,
-  Sparkles,
   X,
   AlertCircle,
   HardDrive,
+  Sparkles,
+  Layers,
 } from "lucide-react";
 import { Button } from "./Button";
 import { api } from "@/services/api";
@@ -25,7 +24,7 @@ interface SaveModelModalProps {
 export const SaveModelModal: React.FC<SaveModelModalProps> = ({
   isOpen,
   onClose,
-  defaultModelId = "rocanon_48_5m",
+  defaultModelId = "rocanon_48m",
   onSaved,
 }) => {
   const [modelName, setModelName] = useState(defaultModelId);
@@ -67,129 +66,129 @@ export const SaveModelModal: React.FC<SaveModelModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-150 font-mono">
-      <div className="glass-panel-elevated border border-[#384C66] rounded-xl w-full max-w-lg p-5 shadow-2xl relative">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm font-mono">
+      <div className="bg-[#202020] border border-[#333333] rounded-lg w-full max-w-md p-4 shadow-xl relative">
         {/* Close Button */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 p-1 rounded-md text-[#91A0B4] hover:text-[#ECF3FC] hover:bg-[#182333] transition-colors"
+          className="absolute top-3 right-3 p-1 rounded text-[#737373] hover:text-[#F2F2F2] hover:bg-[#262626] transition-colors"
         >
-          <X className="w-4 h-4" />
+          <X className="w-3.5 h-3.5" />
         </button>
 
         {/* Modal Header */}
-        <div className="flex items-center gap-2.5 pb-3 border-b border-[#273548]">
-          <div className="w-8 h-8 rounded-lg bg-[#131C29] border border-[#45CFFF]/40 flex items-center justify-center text-[#45CFFF]">
-            <HardDrive className="w-4 h-4" />
+        <div className="flex items-center gap-2 pb-2.5 border-b border-[#262626]">
+          <div className="w-7 h-7 rounded bg-[#262626] border border-[#333333] flex items-center justify-center text-[#D4D4D4]">
+            <HardDrive className="w-3.5 h-3.5" />
           </div>
           <div>
-            <h2 className="text-sm font-bold text-[#ECF3FC]">Save Model Locally</h2>
-            <p className="text-[11px] text-[#91A0B4]">
-              Persists keep-training .pt, stripped inference weights & dynamics charts
+            <h2 className="text-xs font-semibold text-[#F2F2F2]">Save Model Locally</h2>
+            <p className="text-[10px] text-[#737373]">
+              Persists keep-training .pt, stripped weights & charts
             </p>
           </div>
         </div>
 
         {/* Content */}
         {!savedResult ? (
-          <div className="py-4 space-y-4 text-xs">
+          <div className="py-3 space-y-3 text-xs">
             {error && (
-              <div className="p-2.5 rounded-lg bg-[#FF657A]/10 border border-[#FF657A]/30 text-[#FF657A] flex items-center gap-2">
-                <AlertCircle className="w-4 h-4 shrink-0" />
+              <div className="p-2 rounded bg-[rgba(248,113,113,0.08)] border border-[rgba(248,113,113,0.25)] text-[#f87171] flex items-center gap-1.5 text-[11px]">
+                <AlertCircle className="w-3.5 h-3.5 shrink-0" />
                 <span>{error}</span>
               </div>
             )}
 
             {/* Model Name Input */}
             <div>
-              <label className="block text-[11px] uppercase font-semibold text-[#91A0B4] mb-1.5">
+              <label className="block text-[10px] uppercase font-medium text-[#737373] mb-1">
                 Model Name / Alias
               </label>
               <input
                 type="text"
                 value={modelName}
                 onChange={(e) => setModelName(e.target.value)}
-                placeholder="e.g. rocanon_48_5m_best"
-                className="w-full px-3 py-2 rounded-md bg-[#131C29] border border-[#273548] text-[#ECF3FC] focus:border-[#45CFFF] focus:outline-none transition-colors"
+                placeholder="e.g. rocanon_48m_best"
+                className="input"
               />
-              <span className="text-[10px] text-[#5E7188] mt-1 block">
-                Output will be saved in: <code className="text-[#80DEFF]">models/{modelName.trim() || defaultModelId}/</code>
+              <span className="text-[10px] text-[#525252] mt-0.5 block">
+                Saved in: <code className="text-[#A3A3A3]">models/{modelName.trim() || defaultModelId}/</code>
               </span>
             </div>
 
             {/* Checkpoint Source Selection */}
             <div>
-              <label className="block text-[11px] uppercase font-semibold text-[#91A0B4] mb-1.5">
+              <label className="block text-[10px] uppercase font-medium text-[#737373] mb-1">
                 Target Checkpoint
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
                   onClick={() => setSaveMode("best")}
-                  className={`p-2.5 rounded-lg border text-left transition-all ${
+                  className={`p-2 rounded border text-left transition-colors ${
                     saveMode === "best"
-                      ? "bg-[#182333] border-[#35D49A] text-[#ECF3FC] shadow-[0_0_10px_rgba(53,212,154,0.15)]"
-                      : "bg-[#131C29] border-[#273548] text-[#91A0B4] hover:border-[#384C66]"
+                      ? "bg-[#262626] border-[#D4D4D4] text-[#F2F2F2]"
+                      : "bg-[#1B1B1B] border-[#262626] text-[#737373] hover:border-[#333333]"
                   }`}
                 >
-                  <div className="flex items-center gap-1.5 font-bold text-xs">
-                    <Sparkles className="w-3.5 h-3.5 text-[#35D49A]" />
+                  <div className="flex items-center gap-1.5 font-medium text-xs">
+                    <Sparkles className="w-3 h-3 text-[#A3A3A3]" />
                     <span>Best Checkpoint</span>
                   </div>
-                  <span className="text-[10px] text-[#5E7188] block mt-1">
-                    Lowest validation loss weights
+                  <span className="text-[10px] text-[#525252] block mt-0.5">
+                    Lowest val loss
                   </span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setSaveMode("current")}
-                  className={`p-2.5 rounded-lg border text-left transition-all ${
+                  className={`p-2 rounded border text-left transition-colors ${
                     saveMode === "current"
-                      ? "bg-[#182333] border-[#45CFFF] text-[#ECF3FC] shadow-[0_0_10px_rgba(69,207,255,0.15)]"
-                      : "bg-[#131C29] border-[#273548] text-[#91A0B4] hover:border-[#384C66]"
+                      ? "bg-[#262626] border-[#D4D4D4] text-[#F2F2F2]"
+                      : "bg-[#1B1B1B] border-[#262626] text-[#737373] hover:border-[#333333]"
                   }`}
                 >
-                  <div className="flex items-center gap-1.5 font-bold text-xs">
-                    <Layers className="w-3.5 h-3.5 text-[#45CFFF]" />
-                    <span>Current Step State</span>
+                  <div className="flex items-center gap-1.5 font-medium text-xs">
+                    <Layers className="w-3 h-3 text-[#A3A3A3]" />
+                    <span>Current Step</span>
                   </div>
-                  <span className="text-[10px] text-[#5E7188] block mt-1">
-                    Most recent in-memory weights
+                  <span className="text-[10px] text-[#525252] block mt-0.5">
+                    Active state
                   </span>
                 </button>
               </div>
             </div>
 
             {/* Package Contents Explanation */}
-            <div className="p-3 rounded-lg bg-[#090D14]/80 border border-[#273548] space-y-2 text-[11px]">
-              <div className="font-semibold text-[#ECF3FC] flex items-center gap-1.5">
-                <FileCheck className="w-3.5 h-3.5 text-[#45CFFF]" /> What will be saved:
+            <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626] space-y-1.5 text-[11px]">
+              <div className="font-medium text-[#A3A3A3] flex items-center gap-1.5">
+                <FileCheck className="w-3.5 h-3.5 text-[#737373]" /> Package contents:
               </div>
-              <ul className="space-y-1 text-[#91A0B4]">
+              <ul className="space-y-1 text-[#737373] text-[10px]">
                 <li className="flex items-start gap-1.5">
-                  <span className="text-[#45CFFF] font-bold">•</span>
+                  <span className="text-[#A3A3A3]">•</span>
                   <span>
-                    <strong className="text-[#ECF3FC]">{modelName}_full.pt:</strong> Complete weights with Muon & AdamW optimizer moments to continue training anytime.
+                    <strong className="text-[#F2F2F2]">{modelName}_full.pt:</strong> Complete weights with optimizer moments.
                   </span>
                 </li>
                 <li className="flex items-start gap-1.5">
-                  <span className="text-[#35D49A] font-bold">•</span>
+                  <span className="text-[#A3A3A3]">•</span>
                   <span>
-                    <strong className="text-[#ECF3FC]">{modelName}_stripped.pt:</strong> Lightweight inference weights with zero optimizer states (~50% smaller).
+                    <strong className="text-[#F2F2F2]">{modelName}_stripped.pt:</strong> Lightweight inference weights.
                   </span>
                 </li>
                 <li className="flex items-start gap-1.5">
-                  <span className="text-[#F2B85B] font-bold">•</span>
+                  <span className="text-[#A3A3A3]">•</span>
                   <span>
-                    <strong className="text-[#ECF3FC]">val_loss_curve.png & training_dynamics.png:</strong> Publication-grade convergence and performance charts.
+                    <strong className="text-[#F2F2F2]">training_dynamics.png:</strong> Loss & learning rate curves.
                   </span>
                 </li>
               </ul>
             </div>
 
             {/* Footer Buttons */}
-            <div className="flex justify-end gap-2 pt-2 border-t border-[#273548]">
+            <div className="flex justify-end gap-2 pt-2 border-t border-[#262626]">
               <Button variant="ghost" size="sm" onClick={onClose} disabled={isSaving}>
                 Cancel
               </Button>
@@ -198,55 +197,49 @@ export const SaveModelModal: React.FC<SaveModelModalProps> = ({
                 size="sm"
                 onClick={handleSave}
                 loading={isSaving}
-                icon={<Bookmark className="w-3.5 h-3.5 fill-current" />}
+                icon={<Bookmark className="w-3 h-3 fill-current" />}
               >
-                Save Model Locally
+                Save Model
               </Button>
             </div>
           </div>
         ) : (
           /* Success Result View */
-          <div className="py-4 space-y-3 text-xs">
-            <div className="p-3 rounded-lg bg-[#35D49A]/10 border border-[#35D49A]/30 text-[#35D49A] flex items-center gap-2">
-              <CheckCircle2 className="w-5 h-5 shrink-0" />
+          <div className="py-3 space-y-2.5 text-xs">
+            <div className="p-2.5 rounded bg-[rgba(74,222,128,0.08)] border border-[rgba(74,222,128,0.25)] text-[#4ade80] flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
               <div>
-                <span className="font-bold block">Model Package Successfully Saved!</span>
-                <span className="text-[10px] text-[#ECF3FC]">
-                  Saved in <code className="text-[#80DEFF]">models/{savedResult.name}/</code>
+                <span className="font-semibold block">Model Package Saved!</span>
+                <span className="text-[10px] text-[#A3A3A3]">
+                  Location: <code className="text-[#F2F2F2]">models/{savedResult.name}/</code>
                 </span>
               </div>
             </div>
 
-            <div className="p-3 rounded-lg bg-[#131C29] border border-[#273548] space-y-2 font-mono text-[11px]">
-              <div className="flex justify-between items-center text-[#91A0B4]">
-                <span>Full Keep-Training Weights:</span>
-                <span className="text-[#ECF3FC] font-bold">
+            <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626] space-y-1 font-mono text-[10px]">
+              <div className="flex justify-between items-center text-[#737373]">
+                <span>Full Weights:</span>
+                <span className="text-[#F2F2F2]">
                   {savedResult.files?.full_weights?.file_name} ({savedResult.files?.full_weights?.size_mb} MB)
                 </span>
               </div>
-              <div className="flex justify-between items-center text-[#91A0B4]">
-                <span>Stripped Inference Weights:</span>
-                <span className="text-[#35D49A] font-bold">
-                  {savedResult.files?.stripped_weights?.file_name} ({savedResult.files?.stripped_weights?.size_mb} MB, -{savedResult.files?.stripped_weights?.reduction_pct}%)
-                </span>
-              </div>
-              <div className="flex justify-between items-center text-[#91A0B4]">
-                <span>Convergence Charts:</span>
-                <span className="text-[#80DEFF]">
-                  {Object.keys(savedResult.files?.charts || {}).length} figures generated
+              <div className="flex justify-between items-center text-[#737373]">
+                <span>Stripped Weights:</span>
+                <span className="text-[#4ade80]">
+                  {savedResult.files?.stripped_weights?.file_name} ({savedResult.files?.stripped_weights?.size_mb} MB)
                 </span>
               </div>
               {savedResult.val_loss !== null && (
-                <div className="flex justify-between items-center text-[#91A0B4] pt-1 border-t border-[#273548]">
-                  <span>Validation Loss at Best Step {savedResult.step}:</span>
-                  <span className="text-[#35D49A] font-bold font-mono-num">
+                <div className="flex justify-between items-center text-[#737373] pt-1 border-t border-[#262626]">
+                  <span>Val Loss at Step {savedResult.step}:</span>
+                  <span className="text-[#4ade80] font-mono-num font-medium">
                     {savedResult.val_loss?.toFixed(4)}
                   </span>
                 </div>
               )}
             </div>
 
-            <div className="flex justify-end pt-2">
+            <div className="flex justify-end pt-1">
               <Button variant="primary" size="sm" onClick={onClose}>
                 Done
               </Button>

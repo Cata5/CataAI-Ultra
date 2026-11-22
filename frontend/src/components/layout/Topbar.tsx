@@ -8,11 +8,15 @@ import {
   Cpu,
   Wifi,
   WifiOff,
-  Terminal,
-  Sparkles,
   Briefcase,
   ChevronDown,
+  Sun,
+  Moon,
+  Plus,
+  X,
+  Trash2,
 } from "lucide-react";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
 import { CommandPalette } from "@/components/ui/CommandPalette";
 import { SetupWizardModal } from "@/components/onboarding/SetupWizardModal";
@@ -22,12 +26,17 @@ import { useSystemStatus } from "@/hooks/useSystemStatus";
 
 const TITLES: Record<string, { section: string; title: string }> = {
   "/": { section: "Workspace", title: "Overview" },
-  "/studio": { section: "Development", title: "Architecture Studio" },
-  "/training": { section: "Development", title: "Training Console" },
-  "/datasets": { section: "Development", title: "Dataset Explorer" },
-  "/evaluation": { section: "Development", title: "Evaluation Lab" },
-  "/runs": { section: "Management", title: "Runs & Experiments" },
-  "/settings": { section: "System", title: "Hardware & Settings" },
+  "/projects": { section: "Workspace", title: "Projects" },
+  "/models": { section: "Workspace", title: "Models" },
+  "/studio": { section: "Development", title: "Network Studio" },
+  "/datasets": { section: "Development", title: "Datasets" },
+  "/training": { section: "Development", title: "Training" },
+  "/evaluation": { section: "Development", title: "Evaluation" },
+  "/runs": { section: "Management", title: "Experiments" },
+  "/checkpoints": { section: "Management", title: "Checkpoints" },
+  "/analytics": { section: "Management", title: "Analytics" },
+  "/hardware": { section: "System", title: "Hardware Telemetry" },
+  "/settings": { section: "System", title: "Settings" },
 };
 
 export const Topbar: React.FC = () => {
@@ -38,20 +47,31 @@ export const Topbar: React.FC = () => {
   const [showWorkspaceDropdown, setShowWorkspaceDropdown] = useState(false);
   const [workspaces, setWorkspaces] = useState<any[]>([]);
   const [activeWorkspace, setActiveWorkspace] = useState<any>(null);
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [showCreateWsModal, setShowCreateWsModal] = useState(false);
+  const [newWsName, setNewWsName] = useState("");
+  const [isCreatingWs, setIsCreatingWs] = useState(false);
+  const [workspaceToDelete, setWorkspaceToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [isDeletingWs, setIsDeletingWs] = useState(false);
 
   const { isConnected, currentState, recentAlerts } = useWebSocket();
   const { status } = useSystemStatus(4000);
   const { telemetry } = useHardwareTelemetry(3000);
 
-  // First-run onboarding check
   useEffect(() => {
-    try {
-      const completed = localStorage.getItem("llm_maker_onboarding_completed");
-      if (!completed) {
-        setIsWizardOpen(true);
-      }
-    } catch {}
+    const saved = localStorage.getItem("llm_maker_theme") as "dark" | "light" | null;
+    if (saved) {
+      setTheme(saved);
+      document.documentElement.setAttribute("data-theme", saved);
+    }
   }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    localStorage.setItem("llm_maker_theme", next);
+    document.documentElement.setAttribute("data-theme", next);
+  };
 
   // Fetch workspaces
   const fetchWorkspaces = () => {
@@ -82,77 +102,125 @@ export const Topbar: React.FC = () => {
       });
       fetchWorkspaces();
       setShowWorkspaceDropdown(false);
+      window.location.reload();
     } catch {}
   };
 
-  const navMeta = TITLES[pathname] || { section: "Console", title: "Neural Workstation" };
+  const handleCreateWorkspace = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newWsName.trim() || isCreatingWs) return;
+    setIsCreatingWs(true);
+    try {
+      const res = await fetch("/api/workspaces", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newWsName.trim() }),
+      });
+      const data = await res.json();
+      if (data && data.id) {
+        await handleSwitchWorkspace(data.id);
+        setShowCreateWsModal(false);
+        setNewWsName("");
+      }
+    } catch (err: any) {
+      alert(`Workspace creation failed: ${err.message}`);
+    } finally {
+      setIsCreatingWs(false);
+    }
+  };
+
+  const handleDeleteWorkspace = async () => {
+    if (!workspaceToDelete || isDeletingWs) return;
+    setIsDeletingWs(true);
+    try {
+      const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceToDelete.id)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to delete workspace");
+      }
+      const wasActive = activeWorkspace?.id === workspaceToDelete.id;
+      setWorkspaceToDelete(null);
+      await fetchWorkspaces();
+      if (wasActive) {
+        window.location.reload();
+      }
+    } catch (err: any) {
+      alert(`Workspace deletion failed: ${err.message}`);
+    } finally {
+      setIsDeletingWs(false);
+    }
+  };
+
+  const navMeta = TITLES[pathname] || { section: "Workspace", title: "Overview" };
   const effectiveState = currentState !== "IDLE" ? currentState : status?.state || "IDLE";
 
   return (
     <>
-      <header className="h-13 min-h-[52px] border-b border-[#273548] bg-[#0E1420]/95 backdrop-blur-md px-4 flex items-center justify-between select-none z-20">
-        {/* Left: Refined Breadcrumbs & Page Identity */}
-        <div className="flex items-center gap-2 text-xs font-mono">
-          <span className="text-[#5E7188] hover:text-[#91A0B4] transition-colors">
+      <header className="h-11 min-h-[44px] border-b border-[#333333] bg-[#171717] px-3.5 flex items-center justify-between select-none z-20">
+        {/* Left: Breadcrumbs */}
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-[#737373]">
             {navMeta.section}
           </span>
-          <span className="text-[#384C66]">/</span>
-          <h1 className="font-semibold text-[#ECF3FC] tracking-wide flex items-center gap-2">
+          <span className="text-[#404040]">/</span>
+          <h1 className="font-medium text-[#F2F2F2] tracking-tight">
             {navMeta.title}
           </h1>
         </div>
 
-        {/* Center: Linear/Raycast-grade Command Palette Trigger */}
+        {/* Center: Command Palette Trigger */}
         <button
           onClick={() => setIsCommandOpen(true)}
-          className="hidden md:flex items-center gap-2.5 px-3 py-1.5 rounded-md bg-[#131C29] border border-[#273548] text-[#91A0B4] hover:border-[#384C66] hover:text-[#ECF3FC] transition-all font-mono text-xs w-72 justify-between shadow-inner"
+          className="hidden md:flex items-center gap-2 px-2.5 py-1 rounded bg-[#1B1B1B] border border-[#333333] text-[#737373] hover:border-[#404040] hover:text-[#A3A3A3] transition-colors text-xs w-64 justify-between"
         >
-          <span className="flex items-center gap-2 truncate">
-            <Search className="w-3.5 h-3.5 text-[#45CFFF]" />
-            <span className="truncate">Search commands, models, datasets...</span>
+          <span className="flex items-center gap-1.5 truncate">
+            <Search className="w-3.5 h-3.5" />
+            <span className="truncate">Search commands, models...</span>
           </span>
-          <kbd className="px-1.5 py-0.5 rounded bg-[#182333] text-[10px] text-[#91A0B4] border border-[#273548]">
+          <kbd className="px-1 py-0.2 rounded bg-[#262626] text-[10px] text-[#A3A3A3] border border-[#333333]">
             Ctrl+K
           </kbd>
         </button>
 
-        {/* Right: Telemetry, State & Connection Indicators */}
-        <div className="flex items-center gap-2.5">
+        {/* Right: State, Telemetry & Actions */}
+        <div className="flex items-center gap-2">
           {/* Worker Run State Pill */}
-          <div className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-[#131C29] border border-[#273548] text-xs font-mono">
-            <span className="text-[10px] text-[#5E7188] uppercase font-semibold">WORKER</span>
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#1B1B1B] border border-[#333333] text-xs font-mono">
+            <span className="text-[10px] text-[#737373] uppercase">STATE</span>
             <StatusIndicator state={effectiveState} size="sm" />
           </div>
 
           {/* Quick GPU Telemetry Pill */}
           {telemetry && (
-            <div className="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-md bg-[#131C29] border border-[#273548] text-xs font-mono">
-              <Cpu className="w-3.5 h-3.5 text-[#45CFFF]" />
-              <span className="text-[#ECF3FC] font-bold font-mono-num">
+            <div className="hidden sm:flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#1B1B1B] border border-[#333333] text-xs font-mono">
+              <Cpu className="w-3.5 h-3.5 text-[#A3A3A3]" />
+              <span className="text-[#F2F2F2] font-mono-num font-medium">
                 {telemetry.gpu_utilization_pct ?? telemetry.gpu_util_percent ?? 0}%
               </span>
-              <span className="text-[#5E7188]">|</span>
-              <span className="text-[#91A0B4] font-mono-num">
+              <span className="text-[#404040]">|</span>
+              <span className="text-[#A3A3A3] font-mono-num">
                 {Math.round(telemetry.memory_used_mb ?? telemetry.used_vram_mb ?? 0)} MB
               </span>
             </div>
           )}
 
-          {/* WebSocket Real-Time Link Status */}
+          {/* WebSocket Link Status */}
           <div
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs font-mono border transition-colors"
+            className="flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-mono border"
             style={{
-              borderColor: isConnected ? "rgba(53, 212, 154, 0.3)" : "rgba(255, 101, 122, 0.3)",
-              backgroundColor: isConnected ? "rgba(53, 212, 154, 0.08)" : "rgba(255, 101, 122, 0.08)",
+              borderColor: isConnected ? "rgba(74, 222, 128, 0.25)" : "rgba(248, 113, 113, 0.25)",
+              backgroundColor: isConnected ? "rgba(74, 222, 128, 0.06)" : "rgba(248, 113, 113, 0.06)",
             }}
-            title={isConnected ? "WebSocket Real-Time Link Active (8081)" : "WebSocket Link Disconnected"}
+            title={isConnected ? "WebSocket Connected" : "WebSocket Disconnected"}
           >
             {isConnected ? (
-              <Wifi className="w-3.5 h-3.5 text-[#35D49A]" />
+              <Wifi className="w-3 h-3 text-[#4ade80]" />
             ) : (
-              <WifiOff className="w-3.5 h-3.5 text-[#FF657A]" />
+              <WifiOff className="w-3 h-3 text-[#f87171]" />
             )}
-            <span className="text-[10px] uppercase font-bold text-[#ECF3FC]">
+            <span className="text-[10px] font-medium text-[#F2F2F2]">
               {isConnected ? "LIVE" : "OFFLINE"}
             </span>
           </div>
@@ -161,51 +229,51 @@ export const Topbar: React.FC = () => {
           <div className="relative">
             <button
               onClick={() => setShowAlertsDropdown(!showAlertsDropdown)}
-              className="p-1.5 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#384C66] text-[#91A0B4] hover:text-[#ECF3FC] transition-colors relative"
+              className="p-1 rounded bg-[#1B1B1B] border border-[#333333] hover:border-[#404040] text-[#A3A3A3] hover:text-[#F2F2F2] transition-colors relative"
               title="Recent Alerts"
             >
-              <Bell className="w-4 h-4" />
+              <Bell className="w-3.5 h-3.5" />
               {recentAlerts.length > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#45CFFF] ring-2 ring-[#0E1420] animate-pulse" />
+                <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-[#facc15]" />
               )}
             </button>
 
             {showAlertsDropdown && (
-              <div className="absolute right-0 mt-2 w-80 glass-panel-elevated border border-[#384C66] rounded-lg shadow-2xl p-3 z-50 animate-in fade-in duration-150">
-                <div className="flex justify-between items-center pb-2 border-b border-[#273548] text-xs font-mono">
-                  <span className="font-bold text-[#ECF3FC]">SYSTEM ALERTS</span>
-                  <span className="text-[#91A0B4]">{recentAlerts.length} events</span>
+              <div className="absolute right-0 mt-1.5 w-72 bg-[#202020] border border-[#333333] rounded shadow-lg p-2.5 z-50">
+                <div className="flex justify-between items-center pb-1.5 border-b border-[#262626] text-xs font-mono">
+                  <span className="font-medium text-[#F2F2F2]">ALERTS</span>
+                  <span className="text-[#737373] text-[10px]">{recentAlerts.length} events</span>
                 </div>
-                <div className="max-h-60 overflow-y-auto space-y-1.5 mt-2">
+                <div className="max-h-56 overflow-y-auto space-y-1 mt-1.5">
                   {recentAlerts.length === 0 ? (
-                    <div className="p-3 text-center text-xs font-mono text-[#5E7188]">
-                      No system alerts recorded.
+                    <div className="p-2 text-center text-xs text-[#737373]">
+                      No system alerts.
                     </div>
                   ) : (
-                    recentAlerts.slice(0, 10).map((alert, idx) => (
+                    recentAlerts.slice(0, 8).map((alert, idx) => (
                       <div
                         key={idx}
-                        className="p-2 rounded bg-[#131C29] border border-[#273548] text-[11px] font-mono flex flex-col gap-0.5"
+                        className="p-1.5 rounded bg-[#1B1B1B] border border-[#262626] text-[11px] font-mono flex flex-col gap-0.5"
                       >
                         <div className="flex justify-between items-center">
                           <span
                             className={
                               alert.level === "CRITICAL" || alert.level === "ERROR"
-                                ? "text-[#FF657A] font-bold"
+                                ? "text-[#f87171] font-semibold"
                                 : alert.level === "WARNING"
-                                ? "text-[#F2B85B] font-bold"
-                                : "text-[#45CFFF] font-bold"
+                                ? "text-[#facc15] font-semibold"
+                                : "text-[#A3A3A3] font-semibold"
                             }
                           >
                             [{alert.level}] {alert.category}
                           </span>
                           {alert.step !== undefined && (
-                            <span className="text-[#5E7188] text-[10px]">
+                            <span className="text-[#737373] text-[10px]">
                               Step {alert.step}
                             </span>
                           )}
                         </div>
-                        <span className="text-[#91A0B4]">{alert.message}</span>
+                        <span className="text-[#A3A3A3]">{alert.message}</span>
                       </div>
                     ))
                   )}
@@ -218,54 +286,163 @@ export const Topbar: React.FC = () => {
           <div className="relative hidden md:block">
             <button
               onClick={() => setShowWorkspaceDropdown(!showWorkspaceDropdown)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#384C66] text-[#91A0B4] font-mono text-xs transition-colors"
+              className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-[#1B1B1B] border border-[#333333] hover:border-[#404040] text-[#A3A3A3] text-xs transition-colors"
               title="Active Workspace"
             >
-              <Briefcase className="w-3.5 h-3.5 text-[#45CFFF]" />
-              <span className="max-w-[100px] truncate font-semibold text-[#ECF3FC]">
-                {activeWorkspace?.name || "DEFAULT"}
+              <Briefcase className="w-3 h-3 text-[#737373]" />
+              <span className="max-w-[80px] truncate text-[#F2F2F2] font-medium">
+                {activeWorkspace?.name || "Default"}
               </span>
-              <ChevronDown className="w-3 h-3 text-[#5E7188]" />
+              <ChevronDown className="w-3 h-3 text-[#737373]" />
             </button>
 
             {showWorkspaceDropdown && (
-              <div className="absolute right-0 mt-2 w-56 glass-panel-elevated border border-[#384C66] rounded-lg shadow-2xl p-2 z-50 animate-in fade-in duration-150">
-                <div className="px-2 py-1 text-[10px] font-mono font-bold text-[#5E7188] border-b border-[#273548]">
+              <div className="absolute right-0 mt-1.5 w-48 bg-[#202020] border border-[#333333] rounded shadow-lg p-1.5 z-50">
+                <div className="px-2 py-1 text-[10px] font-mono text-[#737373] border-b border-[#262626]">
                   WORKSPACES
                 </div>
-                <div className="max-h-48 overflow-y-auto space-y-1 mt-1 font-mono text-xs">
+                <div className="max-h-48 overflow-y-auto space-y-0.5 mt-1 text-xs">
                   {workspaces.map((ws) => (
-                    <button
+                    <div
                       key={ws.id}
-                      onClick={() => handleSwitchWorkspace(ws.id)}
-                      className={`w-full text-left px-2 py-1.5 rounded flex items-center justify-between transition-colors ${
+                      className={`group w-full px-2 py-1 rounded flex items-center justify-between transition-colors ${
                         activeWorkspace?.id === ws.id
-                          ? "bg-[#182333] text-[#45CFFF] border border-[#45CFFF]/30"
-                          : "text-[#91A0B4] hover:bg-[#182333] hover:text-[#ECF3FC]"
+                          ? "bg-[#262626] text-[#F2F2F2] font-medium"
+                          : "text-[#A3A3A3] hover:bg-[#262626] hover:text-[#F2F2F2]"
                       }`}
                     >
-                      <span className="truncate">{ws.name}</span>
-                      {activeWorkspace?.id === ws.id && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#45CFFF]" />
+                      <button
+                        type="button"
+                        onClick={() => handleSwitchWorkspace(ws.id)}
+                        className="truncate flex-1 text-left flex items-center gap-1.5"
+                      >
+                        <span className="truncate">{ws.name}</span>
+                        {activeWorkspace?.id === ws.id && (
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#D4D4D4] shrink-0" />
+                        )}
+                      </button>
+                      {ws.id !== "default" && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setShowWorkspaceDropdown(false);
+                            setWorkspaceToDelete({ id: ws.id, name: ws.name });
+                          }}
+                          className="opacity-0 group-hover:opacity-100 p-0.5 text-[#737373] hover:text-[#f87171] transition-all ml-1.5 shrink-0"
+                          title={`Delete workspace ${ws.name}`}
+                          aria-label={`Delete workspace ${ws.name}`}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
                       )}
-                    </button>
+                    </div>
                   ))}
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowWorkspaceDropdown(false);
+                    setShowCreateWsModal(true);
+                  }}
+                  className="w-full mt-1.5 pt-1.5 border-t border-[#262626] text-left px-2 py-1 rounded flex items-center gap-1.5 text-xs text-[#A3A3A3] hover:bg-[#262626] hover:text-[#F2F2F2] transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5 text-[#D4D4D4]" />
+                  <span>New Workspace...</span>
+                </button>
               </div>
             )}
           </div>
 
-          {/* Setup Wizard Button */}
+          {/* White / Dark Theme Switch */}
           <button
-            onClick={() => setIsWizardOpen(true)}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#45CFFF]/50 text-[#45CFFF] font-mono text-xs transition-all shadow-[0_0_8px_rgba(69,207,255,0.1)]"
-            title="Open Setup Wizard"
+            type="button"
+            onClick={toggleTheme}
+            className="p-1.5 rounded text-[#737373] hover:text-[#F2F2F2] hover:bg-[#202020] transition-colors"
+            title={theme === "dark" ? "Switch to White Theme" : "Switch to Dark Theme"}
+            aria-label="Toggle theme"
           >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline font-semibold">Wizard</span>
+            {theme === "dark" ? (
+              <Sun className="w-3.5 h-3.5 text-[#A3A3A3]" />
+            ) : (
+              <Moon className="w-3.5 h-3.5 text-[#111827]" />
+            )}
           </button>
         </div>
       </header>
+
+      {/* Create Workspace Modal */}
+      {showCreateWsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm font-mono text-xs">
+          <div className="bg-[#202020] border border-[#333333] rounded-lg w-full max-w-sm p-4 shadow-xl">
+            <div className="flex items-center justify-between pb-2 mb-3 border-b border-[#262626]">
+              <div className="flex items-center gap-1.5 font-semibold text-[#F2F2F2] uppercase">
+                <Briefcase className="w-4 h-4 text-[#A3A3A3]" />
+                <span>Create Isolated Workspace</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateWsModal(false)}
+                className="text-[#737373] hover:text-[#F2F2F2]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateWorkspace} className="space-y-3">
+              <div>
+                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                  Workspace Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  placeholder="e.g. Experiment_A, Romanian_SFT"
+                  value={newWsName}
+                  onChange={(e) => setNewWsName(e.target.value)}
+                  className="input w-full"
+                />
+                <span className="text-[10px] text-[#737373] mt-1 block">
+                  Isolated environment with zero shared datasets or custom models.
+                </span>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-[#262626]">
+                <button
+                  type="button"
+                  onClick={() => setShowCreateWsModal(false)}
+                  className="btn btn-secondary btn-sm"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={!newWsName.trim() || isCreatingWs}
+                  className="btn btn-primary btn-sm flex items-center gap-1"
+                >
+                  <Plus className="w-3 h-3" />
+                  <span>{isCreatingWs ? "Creating..." : "Create & Switch"}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm Delete Workspace Dialog */}
+      <ConfirmDialog
+        isOpen={workspaceToDelete !== null}
+        title={`Delete workspace "${workspaceToDelete?.name}"?`}
+        message={`This will permanently remove workspace "${workspaceToDelete?.name}" along with all of its isolated runs, datasets, models, and checkpoints. This action cannot be undone.`}
+        confirmLabel="Delete workspace"
+        cancelLabel="Cancel"
+        variant="danger"
+        loading={isDeletingWs}
+        onConfirm={handleDeleteWorkspace}
+        onCancel={() => setWorkspaceToDelete(null)}
+      />
 
       <CommandPalette isOpen={isCommandOpen} onClose={() => setIsCommandOpen(false)} />
       <SetupWizardModal isOpen={isWizardOpen} onClose={() => setIsWizardOpen(false)} />

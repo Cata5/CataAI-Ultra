@@ -47,13 +47,24 @@ class NetworkRegistry:
                 except Exception as e:
                     logger.warning("Could not seed template %s: %s", tmpl['id'], e)
 
-    def list_networks(self) -> List[Dict[str, Any]]:
-        """Lists all registered networks on disk with calculated parameter counts."""
+    def list_networks(self, workspace_id: str = "default") -> List[Dict[str, Any]]:
+        """Lists all registered networks on disk with calculated parameter counts, filtered by workspace."""
         results: List[Dict[str, Any]] = []
+        template_ids = {t["id"] for t in ALL_TEMPLATES}
+
         for p in self.registry_dir.glob("*.json"):
             try:
                 with open(p, "r", encoding="utf-8") as f:
                     data = json.load(f)
+
+                net_id = data.get("id", p.stem)
+                net_ws = data.get("workspace_id", "default")
+
+                # Workspace Isolation:
+                # Built-in templates are base references.
+                # Custom models from other workspaces are strictly hidden.
+                if net_id not in template_ids and net_ws != workspace_id:
+                    continue
                 stat = p.stat()
                 params = data.get("total_parameters")
                 if params is None:
@@ -135,6 +146,7 @@ class NetworkRegistry:
         # Calculate exact parameter counts
         stats = ParameterCalculator.calculate(config)
         config["id"] = target_path.stem
+        config["workspace_id"] = config.get("workspace_id", "default")
         config["total_parameters"] = stats["total_parameters"]
         config["updated_at"] = time.time()
         if "created_at" not in config:
@@ -147,8 +159,8 @@ class NetworkRegistry:
         logger.info("Saved network %s to registry (%d parameters)", config["id"], stats["total_parameters"])
         return config
 
-    def clone_network(self, network_id: str, new_id: str, new_name: str) -> Optional[Dict[str, Any]]:
-        """Clones an existing network under a new ID and name with path traversal validation."""
+    def clone_network(self, network_id: str, new_id: str, new_name: str, workspace_id: str = "default") -> Optional[Dict[str, Any]]:
+        """Clones an existing network under a new ID and name with path traversal validation and workspace isolation."""
         self._validate_and_resolve_path(new_id)
         orig = self.get_network(network_id)
         if not orig:
@@ -157,6 +169,7 @@ class NetworkRegistry:
         cloned = orig.copy()
         cloned["id"] = new_id
         cloned["name"] = new_name
+        cloned["workspace_id"] = workspace_id
         cloned["description"] = f"Cloned from {orig.get('name', network_id)}"
         cloned["version"] = "1.0"
         cloned["created_at"] = time.time()

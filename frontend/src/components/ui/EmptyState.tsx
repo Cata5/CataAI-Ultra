@@ -13,7 +13,7 @@ interface EmptyStateProps {
 }
 
 export const EmptyState: React.FC<EmptyStateProps> = ({
-  icon = <Inbox className="w-6 h-6 text-[#5E7188]" />,
+  icon = <Inbox className="w-5 h-5 text-[#737373]" />,
   title,
   description,
   action,
@@ -23,23 +23,23 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
   return (
     <div
       className={cn(
-        "panel flex flex-col items-center justify-center text-center",
+        "panel bg-[#202020] border-[#333333] flex flex-col items-center justify-center text-center",
         compact ? "p-6 gap-2" : "p-10 gap-3",
         className
       )}
     >
       <div
-        className="flex items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--bg-subtle)] text-[#91A0B4]"
-        style={{ width: compact ? 40 : 48, height: compact ? 40 : 48 }}
+        className="flex items-center justify-center rounded-full border border-[#333333] bg-[#1B1B1B] text-[#A3A3A3]"
+        style={{ width: compact ? 36 : 44, height: compact ? 36 : 44 }}
         aria-hidden="true"
       >
         {icon}
       </div>
-      <h4 className="font-mono text-[12px] font-semibold text-[#ECF3FC] uppercase tracking-wider">
+      <h4 className="font-mono text-[12px] font-semibold text-[#F2F2F2] uppercase tracking-wider">
         {title}
       </h4>
       {description && (
-        <p className="max-w-sm text-[12px] leading-relaxed text-[#91A0B4]">{description}</p>
+        <p className="max-w-sm text-[12px] leading-relaxed text-[#A3A3A3]">{description}</p>
       )}
       {action && <div className="pt-1.5">{action}</div>}
     </div>
