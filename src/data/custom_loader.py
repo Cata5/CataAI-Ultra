@@ -222,9 +222,34 @@ class CustomDatasetEngine:
         if progress_callback:
             progress_callback(f"Tokenizing {total_chars:,} characters of text...", 10.0)
 
-        # Break into paragraphs for batch tokenization (supports raw text and JSONL with 'text' field)
+        # Break into paragraphs for batch tokenization (supports raw text, JSONL, Parquet, and Arrow)
         paragraphs = []
-        if file_path.suffix.lower() == ".jsonl":
+        suffix = file_path.suffix.lower()
+
+        if suffix == ".parquet":
+            try:
+                import pyarrow.parquet as pq
+                table = pq.read_table(str(file_path))
+                df = table.to_pydict()
+                col = "text" if "text" in df else list(df.keys())[0]
+                paragraphs = [str(x).strip() for x in df[col] if x and str(x).strip()]
+            except Exception as pe:
+                logger.warning("Error reading Parquet: %s", pe)
+        elif suffix == ".arrow":
+            try:
+                import pyarrow as pa
+                with pa.memory_map(str(file_path), "r") as source:
+                    try:
+                        reader = pa.ipc.open_stream(source)
+                    except Exception:
+                        reader = pa.ipc.open_file(source)
+                    table = reader.read_all()
+                    df = table.to_pydict()
+                    col = "text" if "text" in df else list(df.keys())[0]
+                    paragraphs = [str(x).strip() for x in df[col] if x and str(x).strip()]
+            except Exception as ae:
+                logger.warning("Error reading Arrow: %s", ae)
+        elif suffix == ".jsonl":
             for line in text.splitlines():
                 line = line.strip()
                 if not line:
@@ -330,6 +355,29 @@ class CustomDatasetEngine:
         for m in pattern.finditer(content):
             dialog_pairs.append((m.group(1).strip(), m.group(2).strip()))
 
+        # Check Parquet / Arrow for chat or preference pairs
+        if not dialog_pairs and file_path.suffix.lower() in (".parquet", ".arrow"):
+            try:
+                if file_path.suffix.lower() == ".parquet":
+                    import pyarrow.parquet as pq
+                    df = pq.read_table(str(file_path)).to_pydict()
+                else:
+                    import pyarrow as pa
+                    with pa.memory_map(str(file_path), "r") as source:
+                        try:
+                            reader = pa.ipc.open_stream(source)
+                        except Exception:
+                            reader = pa.ipc.open_file(source)
+                        df = reader.read_all().to_pydict()
+                if "prompt" in df and "chosen" in df:
+                    for p, c in zip(df["prompt"], df["chosen"]):
+                        if p and c: dialog_pairs.append((str(p).strip(), str(c).strip()))
+                elif "instruction" in df and "output" in df:
+                    for p, c in zip(df["instruction"], df["output"]):
+                        if p and c: dialog_pairs.append((str(p).strip(), str(c).strip()))
+            except Exception as e:
+                logger.warning("Error reading parquet/arrow chat: %s", e)
+
         # If no regex tags found, parse JSONL lines for chat messages or instruction/output
         if not dialog_pairs and (file_path.suffix.lower() == ".jsonl" or "{" in content[:300]):
             for line in content.splitlines():
@@ -350,6 +398,11 @@ class CustomDatasetEngine:
                                 a_parts.append(c)
                         if u_parts and a_parts:
                             dialog_pairs.append(("\n".join(u_parts), "\n".join(a_parts)))
+                    elif "prompt" in obj and "chosen" in obj:
+                        p = str(obj["prompt"]).strip()
+                        c = str(obj["chosen"]).strip()
+                        if p and c:
+                            dialog_pairs.append((p, c))
                     elif "instruction" in obj or "output" in obj:
                         prompt = str(obj.get("instruction", "")).strip()
                         if obj.get("input"):

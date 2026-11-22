@@ -546,6 +546,10 @@ export const NetworkStudioView: React.FC = () => {
   const [infoModalLayer, setInfoModalLayer] = useState<string | null>(null);
   const [confirmDeleteNet, setConfirmDeleteNet] = useState<boolean>(false);
   const [showBlueprintGuide, setShowBlueprintGuide] = useState<boolean>(true);
+  const [showFoundationModal, setShowFoundationModal] = useState<boolean>(false);
+  const [foundationPresets, setFoundationPresets] = useState<any[]>([]);
+  const [customHfRepo, setCustomHfRepo] = useState<string>("");
+  const [isImporting, setIsImporting] = useState<boolean>(false);
 
   // Computes which layers exist in the current canvas graph to provide shadow guidance
   const blueprintStatus = useMemo(() => {
@@ -596,7 +600,27 @@ export const NetworkStudioView: React.FC = () => {
 
   useEffect(() => {
     fetchAllNetworks();
+    api.getFoundationPresets().then(setFoundationPresets).catch(console.error);
   }, [fetchAllNetworks]);
+
+  const handleImportFoundationModel = async (repoId: string, modelName?: string, task?: string) => {
+    setIsImporting(true);
+    try {
+      const res = await api.importFoundationModel(repoId, modelName, task);
+      setStatusMessage(`Imported ${res.model?.name || repoId}!`);
+      await fetchAllNetworks();
+      if (res.model?.id) {
+        await handleLoadNetwork(res.model.id);
+      }
+      setShowFoundationModal(false);
+      setCustomHfRepo("");
+      setTimeout(() => setStatusMessage(null), 3500);
+    } catch (e: any) {
+      alert(`Import failed: ${e.message}`);
+    } finally {
+      setIsImporting(false);
+    }
+  };
 
   // Recalculate metrics whenever globalConfig changes
   useEffect(() => {
@@ -1517,6 +1541,16 @@ export const NetworkStudioView: React.FC = () => {
 
               <button
                 type="button"
+                onClick={() => setShowFoundationModal(true)}
+                className="btn btn-secondary btn-sm flex items-center gap-1"
+                title="Explore and 1-Click Import Open-Weights Foundation Models"
+              >
+                <Sparkles className="w-3 h-3 text-[#D4D4D4]" />
+                <span className="hidden sm:inline">Foundation Models</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setShowBlueprintGuide((prev) => !prev)}
                 className={cn(
                   "btn btn-sm",
@@ -1851,6 +1885,95 @@ export const NetworkStudioView: React.FC = () => {
         onConfirm={handleDeleteNetwork}
         onCancel={() => setConfirmDeleteNet(false)}
       />
+
+      {/* Open-Weights Foundation Models Modal */}
+      {showFoundationModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-[#1B1B1B] border border-[#333333] rounded-lg max-w-3xl w-full p-5 space-y-4 shadow-xl">
+            <div className="flex items-center justify-between border-b border-[#262626] pb-3">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-[#D4D4D4]" />
+                <h2 className="text-sm font-semibold uppercase tracking-wider text-[#F2F2F2]">
+                  Foundation Models Ecosystem
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowFoundationModal(false)}
+                className="text-[#737373] hover:text-[#F2F2F2] p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <p className="text-xs text-[#A3A3A3]">
+              1-Click import modern open-weights foundation models from Hugging Face into your local Studio Registry. Configs are inspected remotely with zero download overhead until training begins.
+            </p>
+
+            {/* Presets Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 max-h-[360px] overflow-y-auto pr-1">
+              {foundationPresets.map((preset) => (
+                <div
+                  key={preset.id}
+                  className="p-3 rounded bg-[#202020] border border-[#262626] hover:border-[#333333] transition-colors flex flex-col justify-between space-y-2"
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-[#F2F2F2]">{preset.name}</span>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#262626] text-[#A3A3A3] font-mono">
+                        {preset.params_str}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-[#737373] font-mono truncate">{preset.hf_repo_id}</p>
+                    <div className="flex items-center gap-2 text-[10px] text-[#525252]">
+                      <span>Family: {preset.family}</span>
+                      <span>•</span>
+                      <span>VRAM: ~{preset.recommended_vram_gb} GB</span>
+                      <span>•</span>
+                      <span>Task: {preset.default_task}</span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isImporting}
+                    onClick={() => handleImportFoundationModel(preset.hf_repo_id, preset.name, preset.default_task)}
+                    className="btn btn-secondary btn-sm w-full flex items-center justify-center gap-1.5 text-xs"
+                  >
+                    <Sparkles className="w-3 h-3 text-[#D4D4D4]" />
+                    <span>{isImporting ? "Importing Config..." : "Import into Studio"}</span>
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* Custom HF Repo Input */}
+            <div className="pt-2 border-t border-[#262626] space-y-2">
+              <label className="text-[10px] uppercase text-[#737373] font-mono">
+                Import Any Hugging Face Hub Model
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  placeholder="e.g. mistralai/Mistral-7B-v0.1 or Qwen/Qwen2.5-3B"
+                  value={customHfRepo}
+                  onChange={(e) => setCustomHfRepo(e.target.value)}
+                  disabled={isImporting}
+                  className="input flex-1 text-xs font-mono"
+                />
+                <button
+                  type="button"
+                  disabled={!customHfRepo.trim() || isImporting}
+                  onClick={() => handleImportFoundationModel(customHfRepo.trim())}
+                  className="btn btn-primary btn-sm shrink-0"
+                >
+                  {isImporting ? "Inspecting..." : "Import Repo"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -63,6 +63,11 @@ export interface TrainingFormConfig {
   earlyStoppingEnabled: boolean;
   patience: number;
   minSteps: number;
+  useLora: boolean;
+  loraR: number;
+  loraAlpha: number;
+  useMultiGpu: boolean;
+  selectedGpuIds: number[];
 }
 
 const STORAGE_KEY = "llm_maker_training_config_v2";
@@ -92,6 +97,11 @@ const DEFAULT_TRAINING_CONFIG: TrainingFormConfig = {
   earlyStoppingEnabled: false,
   patience: 20,
   minSteps: 500,
+  useLora: false,
+  loraR: 16,
+  loraAlpha: 32,
+  useMultiGpu: false,
+  selectedGpuIds: [0],
 };
 
 const getSavedConfig = (): TrainingFormConfig => {
@@ -125,6 +135,7 @@ export const TrainingView: React.FC = () => {
   const [networks, setNetworks] = useState<NetworkConfig[]>([]);
   const [datasets, setDatasets] = useState<DatasetItem[]>([]);
   const [checkpoints, setCheckpoints] = useState<CheckpointItem[]>([]);
+  const [computeTopology, setComputeTopology] = useState<any>(null);
   const [schedulerCurve, setSchedulerCurve] = useState<{ steps: number[]; lrs: number[] }>({
     steps: [],
     lrs: [],
@@ -194,6 +205,7 @@ export const TrainingView: React.FC = () => {
     api.listNetworks().then(setNetworks).catch(console.error);
     api.listDatasets().then(setDatasets).catch(console.error);
     api.listCheckpoints().then(setCheckpoints).catch(console.error);
+    api.getComputeTopology().then(setComputeTopology).catch(console.error);
   }, []);
 
   // Sync historical telemetry across tabs if buffer was empty
@@ -283,6 +295,17 @@ export const TrainingView: React.FC = () => {
 
       if (form.resumeCheckpoint) {
         payload.resume_checkpoint = form.resumeCheckpoint;
+      }
+
+      if (form.useLora) {
+        payload.use_lora = true;
+        payload.lora_r = form.loraR;
+        payload.lora_alpha = form.loraAlpha;
+      }
+
+      if (form.useMultiGpu) {
+        payload.use_multi_gpu = true;
+        payload.device_ids = form.selectedGpuIds;
       }
 
       await api.startRun(payload);
@@ -698,11 +721,21 @@ export const TrainingView: React.FC = () => {
                   disabled={isRunning || isPaused}
                   className="input"
                 >
-                  <option value="causal_lm">Causal LM (Autoregressive)</option>
-                  <option value="instruction_sft">Instruction Fine-Tuning (SFT)</option>
-                  <option value="masked_lm">Masked LM (Bidirectional)</option>
-                  <option value="classification">Classification</option>
-                  <option value="regression">Regression</option>
+                  <optgroup label="Language Modeling">
+                    <option value="causal_lm">Causal LM (Autoregressive)</option>
+                    <option value="instruction_sft">Instruction Fine-Tuning (SFT)</option>
+                    <option value="masked_lm">Masked LM (Bidirectional)</option>
+                  </optgroup>
+                  <optgroup label="Post-Training Alignment & Reasoning">
+                    <option value="simpo">SimPO (Simple Preference Optimization - Ref Free)</option>
+                    <option value="orpo">ORPO (Odds Ratio Preference Optimization)</option>
+                    <option value="grpo">GRPO (DeepSeek-R1 Style Reasoning RL)</option>
+                    <option value="dpo">DPO (Direct Preference Optimization)</option>
+                  </optgroup>
+                  <optgroup label="Supervised Heads">
+                    <option value="classification">Classification</option>
+                    <option value="regression">Regression</option>
+                  </optgroup>
                 </select>
               </div>
             </div>
@@ -981,7 +1014,7 @@ export const TrainingView: React.FC = () => {
             </div>
           </div>
 
-          {/* Section 3: Batch Geometry & Parameters */}
+          {/* Section 3: Batch Geometry & Hardware */}
           <div className="panel p-3.5 bg-[#202020] border-[#333333] space-y-2.5">
             <div className="flex justify-between items-center pb-1.5 border-b border-[#262626]">
               <h3 className="panel-title">
@@ -990,6 +1023,124 @@ export const TrainingView: React.FC = () => {
               <span className="text-[10px] text-[#A3A3A3]">
                 Effective: {effectiveBatchSize} seqs ({tokensPerStep.toLocaleString()} tok/step)
               </span>
+            </div>
+
+            {/* PEFT / LoRA & Multi-GPU Topology Controls */}
+            <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626] space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="text-xs text-[#F2F2F2] font-medium uppercase">
+                    Compute & PEFT Adaptation
+                  </span>
+                  <span className="text-[10px] text-[#737373] block mt-0.5">
+                    LoRA low-rank adapter injection (&gt;80% VRAM saving) &amp; multi-GPU distribution.
+                  </span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={form.useLora}
+                      onChange={(e) => updateForm("useLora", e.target.checked)}
+                      disabled={isRunning || isPaused}
+                      className="rounded border-[#333333] bg-[#202020] text-[#D4D4D4] focus:ring-0 w-3.5 h-3.5"
+                    />
+                    <span className="text-xs text-[#F2F2F2] font-mono">LoRA Adapter</span>
+                  </label>
+
+                  {computeTopology?.gpu_count > 1 && (
+                    <label className="flex items-center gap-1.5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={form.useMultiGpu}
+                        onChange={(e) => updateForm("useMultiGpu", e.target.checked)}
+                        disabled={isRunning || isPaused}
+                        className="rounded border-[#333333] bg-[#202020] text-[#D4D4D4] focus:ring-0 w-3.5 h-3.5"
+                      />
+                      <span className="text-xs text-[#F2F2F2] font-mono">Multi-GPU ({computeTopology.gpu_count}x)</span>
+                    </label>
+                  )}
+                </div>
+              </div>
+
+              {form.useLora && (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-2 rounded bg-[#202020] border border-[#262626]">
+                  <div>
+                    <label className="text-[10px] text-[#A3A3A3] uppercase block mb-1">
+                      LoRA Rank (r)
+                    </label>
+                    <select
+                      value={form.loraR}
+                      onChange={(e) => updateForm("loraR", parseInt(e.target.value) || 16)}
+                      disabled={isRunning || isPaused}
+                      className="input text-xs"
+                    >
+                      <option value="8">r = 8 (Minimal VRAM)</option>
+                      <option value="16">r = 16 (Standard)</option>
+                      <option value="32">r = 32 (High Capacity)</option>
+                      <option value="64">r = 64 (Dense Adapter)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] text-[#A3A3A3] uppercase block mb-1">
+                      LoRA Alpha (α)
+                    </label>
+                    <select
+                      value={form.loraAlpha}
+                      onChange={(e) => updateForm("loraAlpha", parseInt(e.target.value) || 32)}
+                      disabled={isRunning || isPaused}
+                      className="input text-xs"
+                    >
+                      <option value="16">α = 16</option>
+                      <option value="32">α = 32 (Standard 2x)</option>
+                      <option value="64">α = 64</option>
+                      <option value="128">α = 128</option>
+                    </select>
+                  </div>
+
+                  <div className="col-span-2 sm:col-span-1 flex flex-col justify-center text-[10px] text-[#737373]">
+                    <span>Scaling factor: <strong className="text-[#F2F2F2]">{(form.loraAlpha / (form.loraR || 1)).toFixed(2)}x</strong></span>
+                    <span className="text-[9px] text-[#4ade80]">Freezes base model &gt;80% VRAM saving</span>
+                  </div>
+                </div>
+              )}
+
+              {form.useMultiGpu && computeTopology?.devices?.length > 1 && (
+                <div className="p-2 rounded bg-[#202020] border border-[#262626] space-y-1.5">
+                  <span className="text-[10px] text-[#A3A3A3] uppercase block">
+                    Active CUDA Devices
+                  </span>
+                  <div className="flex flex-wrap gap-2">
+                    {computeTopology.devices.map((dev: any) => {
+                      const isSelected = form.selectedGpuIds.includes(dev.index);
+                      return (
+                        <button
+                          key={dev.index}
+                          type="button"
+                          disabled={isRunning || isPaused}
+                          onClick={() => {
+                            const current = form.selectedGpuIds;
+                            const next = isSelected
+                              ? current.filter((id) => id !== dev.index)
+                              : [...current, dev.index];
+                            updateForm("selectedGpuIds", next.length > 0 ? next : [0]);
+                          }}
+                          className={cn(
+                            "px-2 py-1 rounded text-xs border font-mono flex items-center gap-1.5 transition-colors",
+                            isSelected
+                              ? "bg-[#262626] text-[#F2F2F2] border-[#D4D4D4]"
+                              : "bg-[#1B1B1B] text-[#737373] border-[#262626]"
+                          )}
+                        >
+                          <HardDrive className="w-3 h-3" />
+                          <span>GPU {dev.index}: {dev.name} ({Math.round(dev.total_vram_mb / 1024)}GB)</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">

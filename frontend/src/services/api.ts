@@ -152,6 +152,11 @@ export const api = {
     }>(`/api/datasets/${encodeURIComponent(id)}/tokenize`, {
       method: "POST",
     }),
+  curateDataset: (id: string, options?: { jaccard_threshold?: number; lid_threshold?: number; max_samples?: number }) =>
+    request<any>(`/api/datasets/${encodeURIComponent(id)}/curate`, {
+      method: "POST",
+      body: JSON.stringify(options || {}),
+    }),
   deleteDataset: (id: string) =>
     request<{ success: boolean; id: string; deleted_files?: string[] }>(
       `/api/datasets/${encodeURIComponent(id)}`,
@@ -289,6 +294,24 @@ export const api = {
     request<{ status: string; settings: any }>("/api/settings", {
       method: "POST",
       body: JSON.stringify(settings),
+    }),
+
+  // Foundation Models & Compute Topology
+  getFoundationPresets: () => request<any[]>("/api/models/foundation_presets"),
+  importFoundationModel: (hfRepoId: string, modelName?: string, defaultTask?: string) =>
+    request<any>("/api/models/import_hf", {
+      method: "POST",
+      body: JSON.stringify({
+        hf_repo_id: hfRepoId,
+        model_name: modelName,
+        default_task: defaultTask,
+      }),
+    }),
+  getComputeTopology: () => request<any>("/api/compute/topology"),
+  exportOllama: (modelId: string, options?: any) =>
+    request<any>(`/api/models/${encodeURIComponent(modelId)}/export_ollama`, {
+      method: "POST",
+      body: JSON.stringify(options || {}),
     }),
 
   // Workspaces

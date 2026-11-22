@@ -15,6 +15,7 @@ import {
   Eye,
   RefreshCw,
   Trash2,
+  Filter,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -22,6 +23,7 @@ export const DatasetsView: React.FC = () => {
   const [datasets, setDatasets] = useState<DatasetItem[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [tokenizingDatasetId, setTokenizingDatasetId] = useState<string | null>(null);
+  const [curatingDatasetId, setCuratingDatasetId] = useState<string | null>(null);
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
   const [selectedDataset, setSelectedDataset] = useState<any | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<DatasetItem | null>(null);
@@ -193,6 +195,33 @@ export const DatasetsView: React.FC = () => {
           </button>
           <button
             onClick={async () => {
+              setCuratingDatasetId(item.id);
+              try {
+                const res = await api.curateDataset(item.id, { jaccard_threshold: 0.80, max_samples: 5000 });
+                setUploadFeedback(
+                  `MinHash LSH Dedup: ${res.duplicates_purged ?? 0} duplicates removed (${res.accepted_samples_count ?? res.accepted_count ?? "all"} unique kept).`
+                );
+                await fetchDatasets();
+                setTimeout(() => setUploadFeedback(null), 6000);
+              } catch (e: any) {
+                alert(`MinHash Deduplication failed: ${e.message}`);
+              } finally {
+                setCuratingDatasetId(null);
+              }
+            }}
+            disabled={curatingDatasetId === item.id}
+            className="btn btn-secondary btn-sm px-2 text-[10px]"
+            title="Run MinHash LSH deduplication (0.80 Jaccard threshold)"
+          >
+            {curatingDatasetId === item.id ? (
+              <RefreshCw className="w-3 h-3 animate-spin" />
+            ) : (
+              <Filter className="w-3 h-3 text-[#737373]" />
+            )}
+            MinHash
+          </button>
+          <button
+            onClick={async () => {
               try {
                 const stats = await api.getDatasetStats(item.id);
                 setSelectedDataset(stats);
@@ -233,7 +262,7 @@ export const DatasetsView: React.FC = () => {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".txt,.json,.jsonl,.csv"
+          accept=".txt,.json,.jsonl,.csv,.parquet,.arrow"
           className="hidden"
           onChange={(e) => {
             if (e.target.files && e.target.files.length > 0) {
@@ -247,11 +276,11 @@ export const DatasetsView: React.FC = () => {
         <h4 className="text-xs font-semibold text-[#F2F2F2] uppercase tracking-wide mb-0.5">
           Upload Training Dataset
         </h4>
-        <p className="text-[11px] text-[#737373] max-w-sm mb-1.5 leading-relaxed">
-          Supports .txt, .jsonl, .csv files up to 500MB with automatic validation and tokenization caching.
+        <p className="text-[11px] text-[#737373] max-w-md mb-1.5 leading-relaxed">
+          Supports .parquet, .arrow, .jsonl, .txt, .csv with zero-copy memory mapping, MinHash deduplication, and Jinja2 chat templates.
         </p>
         <span className="px-2 py-0.5 rounded bg-[#1B1B1B] border border-[#262626] text-[10px] text-[#525252] uppercase">
-          Click or drop files
+          Click or drop files (.parquet, .arrow, .jsonl, .txt, .csv)
         </span>
       </div>
 

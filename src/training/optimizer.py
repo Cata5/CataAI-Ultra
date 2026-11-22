@@ -338,6 +338,12 @@ def configure_optimizers(
             f"Total parameter count mismatch: expected 48,531,968, got {total_count}"
         )
 
+    # Safeguard against empty parameter lists (e.g. when training with PEFT/LoRA or frozen backbones)
+    if not muon_params:
+        muon_params = [nn.Parameter(torch.zeros(2, 2, dtype=torch.float32), requires_grad=False)]
+    if not adamw_decay_params and not adamw_no_decay_params:
+        adamw_no_decay_params = [nn.Parameter(torch.zeros(1, dtype=torch.float32), requires_grad=False)]
+
     # 1. Instantiate Muon optimizer
     if hasattr(torch.optim, "Muon"):
         try:

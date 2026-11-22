@@ -13,6 +13,7 @@ import logging
 import os
 import shutil
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -1253,6 +1254,120 @@ async def handle_create_eval_suite(request: web.Request) -> web.Response:
         return web.json_response({"error": str(e)}, status=400)
 
 
+# ---------------- Open-Weights Foundation Models & Multi-GPU ----------------
+
+async def handle_get_foundation_presets(request: web.Request) -> web.Response:
+    from ..networks.foundation_loader import FoundationModelManager
+    presets = FoundationModelManager().list_presets()
+    return web.json_response(presets)
+
+
+async def handle_import_hf_model(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+    repo_id = data.get("repo_id")
+    if not repo_id:
+        return web.json_response({"error": "Missing 'repo_id' field (e.g. 'Qwen/Qwen2.5-0.5B-Instruct')"}, status=400)
+
+    custom_name = data.get("custom_name")
+    hf_token = data.get("hf_token")
+    ws_id = get_request_workspace_id(request)
+
+    try:
+        from ..networks.foundation_loader import FoundationModelManager
+        net_cfg = FoundationModelManager().import_to_registry(
+            repo_id=repo_id,
+            custom_name=custom_name,
+            workspace_id=ws_id,
+            hf_token=hf_token,
+        )
+        return web.json_response({"success": True, "network": net_cfg})
+    except Exception as e:
+        logger.error("Failed importing HF model %s: %s", repo_id, e)
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_get_compute_topology(request: web.Request) -> web.Response:
+    from ..training.distributed import detect_available_compute
+    topology = detect_available_compute()
+    return web.json_response(topology)
+
+
+async def handle_v1_models(request: web.Request) -> web.Response:
+    ws_id = get_request_workspace_id(request)
+    networks = NETWORK_REGISTRY.list_networks(workspace_id=ws_id)
+    models_list = []
+    for n in networks:
+        models_list.append({
+            "id": n.get("id"),
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": "cataai-user",
+            "permission": [],
+            "root": n.get("id"),
+        })
+    return web.json_response({"object": "list", "data": models_list})
+
+
+async def handle_v1_chat_completions(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": {"message": "Invalid JSON payload", "type": "invalid_request_error"}}, status=400)
+
+    model_name = data.get("model", "cataai")
+    messages = data.get("messages", [])
+    stream = bool(data.get("stream", False))
+    temperature = float(data.get("temperature", 0.7))
+    max_tokens = int(data.get("max_tokens", 256))
+
+    from ..tokenizer.chat_template import ChatTemplateRenderer
+    renderer = ChatTemplateRenderer("chatml")
+    formatted_prompt = renderer.render(messages, add_generation_prompt=True)
+
+    request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+
+    if stream:
+        response = web.StreamResponse(
+            status=200,
+            reason="OK",
+            headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
+        await response.prepare(request)
+
+        from ..infer.serving import SERVING_ENGINE, build_chat_completion_chunk
+        for chunk in SERVING_ENGINE.generate_stream(formatted_prompt, max_tokens=max_tokens, temperature=temperature):
+            sse_str = build_chat_completion_chunk(request_id, model_name, chunk)
+            await response.write(sse_str.encode("utf-8"))
+            await asyncio.sleep(0.005)
+
+        end_chunk = build_chat_completion_chunk(request_id, model_name, "", finish_reason="stop")
+        await response.write(end_chunk.encode("utf-8"))
+        await response.write(b"data: [DONE]\n\n")
+        return response
+    else:
+        from ..infer.serving import SERVING_ENGINE, build_full_chat_completion
+        collected = []
+        for chunk in SERVING_ENGINE.generate_stream(formatted_prompt, max_tokens=max_tokens, temperature=temperature):
+            collected.append(chunk)
+        full_content = "".join(collected)
+        full_res = build_full_chat_completion(request_id, model_name, full_content)
+        return web.json_response(full_res)
+
+
+async def handle_export_ollama(request: web.Request) -> web.Response:
+    model_id = request.match_info.get("id") or "model"
+    try:
+        from ..infer.serving import export_ollama_modelfile
+        modelfile_path = export_ollama_modelfile(model_path=f"models/{model_id}/{model_id}_stripped.pt", model_name=model_id)
+        return web.json_response({"success": True, "modelfile_path": modelfile_path})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 # ---------------- WebSocket ----------------
 
 async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
@@ -1393,6 +1508,16 @@ def create_app() -> web.Application:
     app.router.add_post("/api/networks", handle_save_network)
     app.router.add_post("/api/networks/{id}/clone", handle_clone_network)
     app.router.add_delete("/api/networks/{id}", handle_delete_network)
+
+    # Open-Weights Foundation Models, Multi-GPU Compute & OpenAI-Compatible Serving
+    app.router.add_get("/api/models/foundation_presets", handle_get_foundation_presets)
+    app.router.add_post("/api/models/import_hf", handle_import_hf_model)
+    app.router.add_get("/api/compute/topology", handle_get_compute_topology)
+    app.router.add_post("/api/models/{id}/export_ollama", handle_export_ollama)
+
+    # OpenAI-Compatible v1 Endpoints (for Cursor, LangChain, OpenAI Python SDK)
+    app.router.add_get("/v1/models", handle_v1_models)
+    app.router.add_post("/v1/chat/completions", handle_v1_chat_completions)
 
     # Legacy routes
     app.router.add_get("/api/state", handle_get_state)

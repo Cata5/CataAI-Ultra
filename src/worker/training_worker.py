@@ -262,6 +262,30 @@ class TrainingWorkerProcess:
         # 1. Initialize Model
         try:
             model = create_model_from_dict(config_arch).to(device=device)
+
+            # Check for PEFT / LoRA
+            use_lora = bool(payload.get("use_lora", False))
+            lora_r = int(payload.get("lora_r", 16))
+            lora_alpha = int(payload.get("lora_alpha", 32))
+            lora_dropout = float(payload.get("lora_dropout", 0.05))
+            if use_lora:
+                try:
+                    from ..training.peft import inject_lora
+                    lora_res = inject_lora(model, r=lora_r, lora_alpha=lora_alpha, lora_dropout=lora_dropout)
+                    logger.info("PEFT LoRA active: %s", lora_res)
+                except Exception as lora_err:
+                    logger.warning("LoRA injection failed: %s", lora_err)
+
+            # Check for Multi-GPU Distributed Training
+            use_multi_gpu = bool(payload.get("use_multi_gpu", False))
+            device_ids = payload.get("device_ids")
+            if use_multi_gpu and torch.cuda.is_available() and torch.cuda.device_count() > 1:
+                try:
+                    from ..training.distributed import wrap_model_for_multi_gpu
+                    model, bound_devices = wrap_model_for_multi_gpu(model, device_ids=device_ids)
+                    logger.info("Multi-GPU training wrapped across %s", bound_devices)
+                except Exception as mgpu_err:
+                    logger.warning("Multi-GPU wrapping failed: %s", mgpu_err)
         except Exception as e:
             logger.exception("Failed to initialize model: %s", e)
             self._send_event(WorkerEvent(

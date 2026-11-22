@@ -47,15 +47,21 @@ class DatasetValidator:
             }
 
         suffix = path.suffix.lower()
-        if suffix not in (".txt", ".jsonl", ".json", ".csv"):
+        if suffix not in (".txt", ".jsonl", ".json", ".csv", ".parquet", ".arrow"):
             return {
                 "valid": False,
-                "error": f"Unsupported file extension: {suffix}. Supported: .txt, .jsonl, .json, .csv",
+                "error": f"Unsupported file extension: {suffix}. Supported: .txt, .jsonl, .json, .csv, .parquet, .arrow",
                 "total_records": 0,
                 "valid_records": 0,
                 "invalid_records": 0,
                 "errors": [f"Unsupported format {suffix}"],
             }
+
+        # Binary formats (Parquet, Arrow) skip raw UTF-8 string check
+        if suffix == ".parquet":
+            return self._validate_parquet(path)
+        elif suffix == ".arrow":
+            return self._validate_arrow(path)
 
         # 1. UTF-8 Validation
         try:
@@ -80,6 +86,107 @@ class DatasetValidator:
             return self._validate_csv(path)
         else:
             return self._validate_json(path)
+
+    def _validate_parquet(self, path: Path) -> Dict[str, Any]:
+        try:
+            import pyarrow.parquet as pq
+            parquet_file = pq.ParquetFile(str(path))
+            total_rows = parquet_file.metadata.num_rows
+            schema_names = parquet_file.schema.names
+
+            # Read first row group memory-mapped without full RAM copy
+            table = parquet_file.read_row_group(0)
+            df_dict = table.to_pydict()
+
+            valid_samples: List[str] = []
+            fmt_type = "parquet_text"
+            if "prompt" in df_dict and "chosen" in df_dict and "rejected" in df_dict:
+                fmt_type = "pairwise_preference"
+                for p, c, r in zip(df_dict["prompt"][:100], df_dict["chosen"][:100], df_dict["rejected"][:100]):
+                    valid_samples.append(f"<|prompt|>\n{p}\n<|chosen|>\n{c}\n<|rejected|>\n{r}")
+            elif "text" in df_dict:
+                fmt_type = "parquet_text"
+                for t in df_dict["text"][:100]:
+                    if t: valid_samples.append(str(t).strip())
+            else:
+                fmt_type = "parquet_table"
+                first_col = schema_names[0]
+                for v in df_dict[first_col][:100]:
+                    if v: valid_samples.append(str(v).strip())
+
+            return {
+                "valid": total_rows > 0,
+                "format": "parquet",
+                "schema_type": fmt_type,
+                "total_records": total_rows,
+                "valid_records": total_rows,
+                "invalid_records": 0,
+                "errors": [],
+                "samples_preview": valid_samples[:5],
+                "extracted_texts": valid_samples,
+                "columns": schema_names,
+            }
+        except Exception as e:
+            return {
+                "valid": False,
+                "format": "parquet",
+                "error": f"Failed reading Parquet file: {e}",
+                "total_records": 0,
+                "valid_records": 0,
+                "invalid_records": 0,
+                "errors": [str(e)],
+            }
+
+    def _validate_arrow(self, path: Path) -> Dict[str, Any]:
+        try:
+            import pyarrow as pa
+            with pa.memory_map(str(path), "r") as source:
+                try:
+                    reader = pa.ipc.open_stream(source)
+                except Exception:
+                    reader = pa.ipc.open_file(source)
+                table = reader.read_all()
+                total_rows = table.num_rows
+                schema_names = table.schema.names
+                df_dict = table.slice(0, 100).to_pydict()
+
+            valid_samples: List[str] = []
+            if "prompt" in df_dict and "chosen" in df_dict and "rejected" in df_dict:
+                fmt_type = "pairwise_preference"
+                for p, c, r in zip(df_dict["prompt"][:100], df_dict["chosen"][:100], df_dict["rejected"][:100]):
+                    valid_samples.append(f"<|prompt|>\n{p}\n<|chosen|>\n{c}\n<|rejected|>\n{r}")
+            elif "text" in df_dict:
+                fmt_type = "arrow_text"
+                for t in df_dict["text"][:100]:
+                    if t: valid_samples.append(str(t).strip())
+            else:
+                fmt_type = "arrow_table"
+                first_col = schema_names[0]
+                for v in df_dict[first_col][:100]:
+                    if v: valid_samples.append(str(v).strip())
+
+            return {
+                "valid": total_rows > 0,
+                "format": "arrow",
+                "schema_type": fmt_type,
+                "total_records": total_rows,
+                "valid_records": total_rows,
+                "invalid_records": 0,
+                "errors": [],
+                "samples_preview": valid_samples[:5],
+                "extracted_texts": valid_samples,
+                "columns": schema_names,
+            }
+        except Exception as e:
+            return {
+                "valid": False,
+                "format": "arrow",
+                "error": f"Failed reading Arrow file: {e}",
+                "total_records": 0,
+                "valid_records": 0,
+                "invalid_records": 0,
+                "errors": [str(e)],
+            }
 
     def _validate_csv(self, path: Path) -> Dict[str, Any]:
         import csv
@@ -174,6 +281,17 @@ class DatasetValidator:
                     if not isinstance(obj, dict):
                         errors.append(f"Line {line_num}: JSON record is not an object.")
                         continue
+
+                    # Check for pairwise preference alignment schema (SimPO / ORPO / DPO)
+                    if "chosen" in obj and "rejected" in obj:
+                        prompt_str = str(obj.get("prompt", obj.get("instruction", ""))).strip()
+                        chosen_str = str(obj.get("chosen", "")).strip()
+                        rejected_str = str(obj.get("rejected", "")).strip()
+                        if chosen_str and rejected_str:
+                            formatted = f"<|prompt|>\n{prompt_str}\n<|chosen|>\n{chosen_str}\n<|rejected|>\n{rejected_str}"
+                            valid_records.append(obj)
+                            extracted_texts.append(formatted)
+                            continue
 
                     # Check for instruction tuning schema or plain text
                     if "text" in obj:

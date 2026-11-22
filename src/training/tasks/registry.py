@@ -14,6 +14,10 @@ from .causal_lm import CausalLMTask
 from .classification import ClassificationTask
 from .instruction_sft import InstructionSFTTask
 from .regression import RegressionTask
+from .simpo import SimPOTask
+from .orpo import ORPOTask
+from .grpo import GRPOTask
+from .dpo import DPOTask
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,10 @@ class TaskRegistry:
         "instruction_sft": InstructionSFTTask,
         "classification": ClassificationTask,
         "regression": RegressionTask,
+        "simpo": SimPOTask,
+        "orpo": ORPOTask,
+        "grpo": GRPOTask,
+        "dpo": DPOTask,
     }
 
     @classmethod

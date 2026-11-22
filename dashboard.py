@@ -32,15 +32,17 @@ logger = logging.getLogger("RoCanonDashboard")
 
 
 def main():
-    venv_py_win = Path(__file__).resolve().parent / ".venv" / "Scripts" / "python.exe"
-    venv_py_nix = Path(__file__).resolve().parent / ".venv" / "bin" / "python"
+    venv_dir = Path(__file__).resolve().parent / ".venv"
+    venv_py_win = venv_dir / "Scripts" / "python.exe"
+    venv_py_nix = venv_dir / "bin" / "python"
     venv_py = venv_py_win if venv_py_win.exists() else (venv_py_nix if venv_py_nix.exists() else None)
-    if venv_py and venv_py.exists() and Path(sys.executable).resolve() != venv_py.resolve():
+    if venv_py and venv_py.exists() and Path(sys.prefix).resolve() != venv_dir.resolve():
         print(f"[Launcher] Switching to project virtualenv: {venv_py}")
-        os.execv(str(venv_py), [str(venv_py)] + sys.argv)
+        import subprocess
+        sys.exit(subprocess.call([str(venv_py)] + sys.argv))
 
     parser = argparse.ArgumentParser(description="RoCanon-48.5M Training WebUI v2")
-    parser.add_argument("--port", type=int, default=8080, help="Web UI port (default: 8080)")
+    parser.add_argument("--port", type=int, default=8081, help="Web UI port (default: 8081)")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
     parser.add_argument("--train", action="store_true", help="Auto-start training worker on launch")
     parser.add_argument("--device", type=str, default=None, help="Device ('cpu', 'cuda')")
