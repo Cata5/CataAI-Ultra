@@ -90,7 +90,12 @@ export const Sidebar: React.FC = () => {
       )}
     >
       {/* Brand & Identity Header */}
-      <div className="h-14 flex items-center justify-between px-3.5 border-b border-[#273548] bg-[#090D14]/90">
+      <div
+        className={cn(
+          "h-14 flex items-center border-b border-[#273548] bg-[#090D14]/90 relative",
+          collapsed ? "justify-center px-2" : "justify-between px-3.5"
+        )}
+      >
         <Link href="/" className="flex items-center gap-2.5 overflow-hidden group">
           <div className="w-8 h-8 rounded-lg bg-[#131C29] border border-[#45CFFF]/40 flex items-center justify-center shrink-0 shadow-[0_0_12px_rgba(69,207,255,0.2)] group-hover:border-[#45CFFF] transition-colors">
             <Zap className="w-4 h-4 text-[#45CFFF]" />
@@ -112,10 +117,15 @@ export const Sidebar: React.FC = () => {
 
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className="p-1 rounded text-[#91A0B4] hover:text-[#45CFFF] hover:bg-[#182333] transition-colors"
+          className={cn(
+            "rounded transition-all text-[#91A0B4] hover:text-[#45CFFF]",
+            collapsed
+              ? "absolute -right-3 top-4 w-6 h-6 bg-[#131C29] border border-[#384C66] hover:border-[#45CFFF] rounded-full flex items-center justify-center shadow-lg z-40"
+              : "p-1 hover:bg-[#182333]"
+          )}
           title={collapsed ? "Expand navigation" : "Collapse navigation"}
         >
-          {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+          {collapsed ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronLeft className="w-4 h-4" />}
         </button>
       </div>
 

@@ -160,9 +160,17 @@ async def handle_system_status(request: web.Request) -> web.Response:
             except Exception:
                 pass
 
+    active_net = getattr(STATE, "active_model_name", None)
+    if not active_net and Path("models").exists():
+        saved_dirs = [d for d in Path("models").iterdir() if d.is_dir() and not d.name.startswith(".")]
+        if saved_dirs:
+            saved_dirs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+            active_net = saved_dirs[0].name
+
     return web.json_response({
         "state": state_val,
         "run_id": WORKER_MGR.current_run_id,
+        "active_network": active_net or "rocanon_48m",
         "latest_metrics": metrics,
         "alerts_count": len(WORKER_MGR.latest_alerts),
         "timestamp": time.time(),
@@ -267,7 +275,7 @@ async def handle_run_metrics(request: web.Request) -> web.Response:
     return web.json_response(normalized)
 
 
-# ---------------- Checkpoints ----------------
+# ---------------- Checkpoints & Local Model Packages ----------------
 
 async def handle_get_checkpoints(request: web.Request) -> web.Response:
     """Scans and returns all checkpoints on disk."""
@@ -279,6 +287,49 @@ async def handle_delete_checkpoint(request: web.Request) -> web.Response:
     chk_id = request.match_info.get("id")
     success = CHECKPOINT_MGR.delete_checkpoint(chk_id)
     return web.json_response({"success": success, "id": chk_id})
+
+
+async def handle_save_local_model(request: web.Request) -> web.Response:
+    """
+    Saves the best (or current) model weights locally into models/{name}/.
+    Generates:
+      - {name}_full.pt (resumable keep-training weights with Muon & AdamW states)
+      - {name}_stripped.pt (compact inference-only weights)
+      - val_loss_curve.png & training_dynamics.png
+      - metadata.json
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+
+    model_id = data.get("model_id") or "rocanon_48m"
+    custom_name = data.get("custom_name") or model_id
+    save_mode = data.get("save_mode") or "best"
+
+    # Check if active training worker has weights in memory
+    active_worker = getattr(WORKER_MGR, "worker", None)
+    active_model = getattr(active_worker, "model", None) if active_worker else None
+    active_opts = (getattr(active_worker, "muon_opt", None), getattr(active_worker, "adamw_opt", None)) if active_worker else None
+    active_sched = getattr(active_worker, "scheduler", None) if active_worker else None
+    active_cfg = getattr(active_worker, "training_cfg", None)
+    active_cfg_dict = vars(active_cfg) if active_cfg and hasattr(active_cfg, "__dict__") else None
+
+    try:
+        result = CHECKPOINT_MGR.save_local_model_package(
+            model_id=model_id,
+            custom_name=custom_name,
+            save_mode=save_mode,
+            active_model=active_model,
+            active_optimizers=active_opts,
+            active_scheduler=active_sched,
+            training_config=active_cfg_dict,
+        )
+        STATE.active_model_name = result.get("name", custom_name)
+        return web.json_response({"success": True, "package": result})
+    except Exception as e:
+        logger.error("Failed to save local model package: %s", e, exc_info=True)
+        return web.json_response({"error": f"Failed to save local model: {e}"}, status=500)
 
 
 # ---------------- Pipelines & Schedulers ----------------
@@ -506,6 +557,11 @@ async def handle_eval_generate(request: web.Request) -> web.Response:
     raw_ngram = data.get("no_repeat_ngram_size")
     no_repeat_ngram = int(raw_ngram) if raw_ngram is not None else 3
     checkpoint_req = data.get("checkpoint") or data.get("checkpoint_path")
+    min_p = float(data.get("min_p", 0.0))
+    pres_pen = float(data.get("presence_penalty", 0.0))
+    freq_pen = float(data.get("frequency_penalty", 0.0))
+    seed = int(data.get("seed")) if data.get("seed") is not None and int(data.get("seed")) >= 0 else None
+    stop_seqs = data.get("stop_sequences")
 
     is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)
     # GPU single-owner arbitration: if training is active on GPU, route inference to CPU
@@ -513,17 +569,12 @@ async def handle_eval_generate(request: web.Request) -> web.Response:
 
     loaded_chk_meta = None
     if checkpoint_req:
-        chk_path = Path(checkpoint_req)
-        if not chk_path.exists():
-            chk_path = Path("checkpoints") / checkpoint_req
-        if chk_path.exists():
-            try:
-                loaded_chk_meta = engine.load_checkpoint_weights(chk_path)
-            except Exception as e:
-                logger.error("Failed to load checkpoint %s for inference: %s", chk_path, e)
-                return web.json_response({"error": f"Failed to load checkpoint: {e}"}, status=400)
-        else:
-            return web.json_response({"error": f"Checkpoint not found: {checkpoint_req}"}, status=404)
+        try:
+            chk_path = CHECKPOINT_MGR.resolve_checkpoint_path(checkpoint_req)
+            loaded_chk_meta = engine.load_checkpoint_weights(chk_path)
+        except Exception as e:
+            logger.error("Failed to load checkpoint %s for inference: %s", checkpoint_req, e)
+            return web.json_response({"error": f"Failed to load checkpoint: {e}"}, status=400)
 
     res = engine.generate(
         prompt=prompt,
@@ -533,6 +584,11 @@ async def handle_eval_generate(request: web.Request) -> web.Response:
         top_k=top_k,
         repetition_penalty=rep_pen,
         no_repeat_ngram_size=no_repeat_ngram,
+        min_p=min_p,
+        presence_penalty=pres_pen,
+        frequency_penalty=freq_pen,
+        seed=seed,
+        stop_sequences=stop_seqs,
         chat_mode=chat_mode,
     )
     res["device"] = str(engine.device)
@@ -566,15 +622,12 @@ async def handle_eval_stream(request: web.Request) -> web.StreamResponse:
     engine = get_inference_engine(force_cpu=is_training_active)
 
     if checkpoint_req:
-        chk_path = Path(checkpoint_req)
-        if not chk_path.exists():
-            chk_path = Path("checkpoints") / checkpoint_req
-        if chk_path.exists():
-            try:
-                engine.load_checkpoint_weights(chk_path)
-            except Exception as e:
-                logger.error("Failed to load checkpoint %s for stream inference: %s", chk_path, e)
-                return web.json_response({"error": f"Failed to load checkpoint: {e}"}, status=400)
+        try:
+            chk_path = CHECKPOINT_MGR.resolve_checkpoint_path(checkpoint_req)
+            engine.load_checkpoint_weights(chk_path)
+        except Exception as e:
+            logger.error("Failed to load checkpoint %s for stream inference: %s", checkpoint_req, e)
+            return web.json_response({"error": f"Failed to load checkpoint: {e}"}, status=400)
 
     response = web.StreamResponse(
         status=200,
@@ -633,16 +686,44 @@ async def handle_eval_compare(request: web.Request) -> web.Response:
 
     prompt = data.get("prompt", "")
     paths = data.get("checkpoint_paths", [])
-    engine = get_inference_engine()
+    max_tokens = int(data.get("max_new_tokens", 128))
+    temp = float(data.get("temperature", 0.7))
+    top_p = float(data.get("top_p", 0.9))
+    top_k = int(data.get("top_k", 50))
+    rep_pen = float(data.get("repetition_penalty", 1.15))
+    raw_ngram = data.get("no_repeat_ngram_size")
+    no_repeat_ngram = int(raw_ngram) if raw_ngram is not None else 3
+    min_p = float(data.get("min_p", 0.0))
+    pres_pen = float(data.get("presence_penalty", 0.0))
+    freq_pen = float(data.get("frequency_penalty", 0.0))
+    chat_mode = bool(data.get("chat_mode", False))
+    seed = int(data.get("seed")) if data.get("seed") is not None and int(data.get("seed")) >= 0 else None
+    stop_seqs = data.get("stop_sequences")
+
+    is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)
+    engine = get_inference_engine(force_cpu=is_training_active)
     comparison = engine.compare_checkpoints_sequential(
         prompt=prompt,
         checkpoint_paths=paths,
+        max_new_tokens=max_tokens,
+        temperature=temp,
+        top_p=top_p,
+        top_k=top_k,
+        repetition_penalty=rep_pen,
+        no_repeat_ngram_size=no_repeat_ngram,
+        min_p=min_p,
+        presence_penalty=pres_pen,
+        frequency_penalty=freq_pen,
+        chat_mode=chat_mode,
+        seed=seed,
+        stop_sequences=stop_seqs,
     )
     return web.json_response({"prompt": prompt, "results": comparison})
 
 
 async def handle_eval_benchmark(request: web.Request) -> web.Response:
-    engine = get_inference_engine()
+    is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)
+    engine = get_inference_engine(force_cpu=is_training_active)
     results = BENCHMARK_MGR.run_benchmark_suite(engine=engine)
     return web.json_response(results)
 
@@ -1235,6 +1316,7 @@ def create_app() -> web.Application:
 
     app.router.add_get("/api/checkpoints", handle_get_checkpoints)
     app.router.add_delete("/api/checkpoints/{id}", handle_delete_checkpoint)
+    app.router.add_post("/api/models/save-local", handle_save_local_model)
 
     app.router.add_get("/api/pipelines", handle_get_pipelines)
     app.router.add_post("/api/pipelines", handle_create_pipeline)

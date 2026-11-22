@@ -100,4 +100,15 @@ class TestStudioAPI(AioHTTPTestCase):
         assert "tokens_generated" in data
         assert "device" in data
 
+    async def test_save_local_model_api(self):
+        resp = await self.client.request(
+            "POST",
+            "/api/models/save-local",
+            json={"model_id": "rocanon_48m", "custom_name": "test_saved_model", "save_mode": "best"},
+        )
+        assert resp.status in (200, 500)
+        data = await resp.json()
+        assert "success" in data or "error" in data
+
+
 

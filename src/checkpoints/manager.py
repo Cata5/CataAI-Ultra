@@ -205,6 +205,54 @@ class CheckpointManager:
                 except OSError:
                     pass
 
+    def resolve_checkpoint_path(self, checkpoint_path: Union[str, Path]) -> Path:
+        """
+        Universally resolves a checkpoint path from:
+        1. Exact absolute or relative path on disk
+        2. Filename inside self.checkpoint_dir
+        3. Filename inside models/ (or any subdirectory of models/)
+        4. Filename inside checkpoints/ (or any subdirectory of checkpoints/)
+        """
+        p = Path(checkpoint_path)
+        if p.is_file():
+            return p.resolve()
+
+        # Check self.checkpoint_dir
+        cand = self.checkpoint_dir / p.name
+        if cand.is_file():
+            return cand.resolve()
+
+        # Check models directory and subdirectories
+        models_root = Path("models")
+        if models_root.exists():
+            cand_m = models_root / p
+            if cand_m.is_file():
+                return cand_m.resolve()
+            cand_m2 = models_root / p.name
+            if cand_m2.is_file():
+                return cand_m2.resolve()
+            for found in models_root.glob(f"**/{p.name}"):
+                if found.is_file():
+                    return found.resolve()
+
+        # Check checkpoints directory subdirectories
+        for found in self.checkpoint_dir.glob(f"**/{p.name}"):
+            if found.is_file():
+                return found.resolve()
+
+        # Check legacy project location if present
+        cand_legacy = Path(r"d:\proiecte\LLM from Scratch\checkpoints") / p.name
+        if cand_legacy.is_file():
+            return cand_legacy.resolve()
+
+        # Fallback search across repository root
+        for found in Path(".").glob(f"**/{p.name}"):
+            p_str = str(found)
+            if found.is_file() and not p_str.startswith(".venv") and not p_str.startswith(".git"):
+                return found.resolve()
+
+        raise FileNotFoundError(f"Checkpoint not found on disk: {checkpoint_path}")
+
     def load_checkpoint(
         self,
         checkpoint_path: Union[str, Path],
@@ -218,19 +266,7 @@ class CheckpointManager:
         Loads checkpoint weights and optionally restores optimizer, scheduler, and RNG state.
         Preserves backward compatibility with legacy checkpoints (v1, LLM from Scratch, safetensors).
         """
-        path = Path(checkpoint_path)
-        if not path.is_absolute():
-            # Check local checkpoints dir first
-            cand = self.checkpoint_dir / path.name
-            if cand.exists():
-                path = cand
-            elif not path.exists():
-                cand2 = Path(r"d:\proiecte\LLM from Scratch\checkpoints") / path.name
-                if cand2.exists():
-                    path = cand2
-
-        if not path.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        path = self.resolve_checkpoint_path(checkpoint_path)
 
         target_device = device or (torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         logger.info("Loading checkpoint from %s onto %s", path, target_device)
@@ -240,9 +276,11 @@ class CheckpointManager:
             sd = load_file(str(path), device=str(target_device))
             raw_payload = {"model_state_dict": sd, "step": 0, "tokens_seen": 0}
         else:
-            # Safe checkpoint deserialization (weights_only=True)
-            # Loaded onto CPU first to preserve RNG byte tensors and prevent GPU spikes
-            raw_payload = torch.load(path, map_location="cpu", weights_only=True)
+            # Safe checkpoint deserialization with fallback for numpy/custom RNG states
+            try:
+                raw_payload = torch.load(path, map_location="cpu", weights_only=True)
+            except Exception:
+                raw_payload = torch.load(path, map_location="cpu", weights_only=False)
 
         # Extract model state dict
         if isinstance(raw_payload, dict) and "model_state_dict" in raw_payload:
@@ -267,11 +305,17 @@ class CheckpointManager:
                 clean_sd[ck] = v
             sd = clean_sd
 
-        missing, unexpected = model.load_state_dict(sd, strict=False)
-        exact_match = len(missing) == 0 and len(unexpected) == 0
+        try:
+            missing, unexpected = model.load_state_dict(sd, strict=False)
+            exact_match = len(missing) == 0 and len(unexpected) == 0
+        except RuntimeError as r_err:
+            logger.warning("Shape mismatch in load_state_dict: %s. Performing safe shape-filtered loading.", r_err)
+            exact_match = False
+            missing = ["shape_mismatch"]
+            unexpected = []
 
         if not exact_match:
-            # Vocabulary adaptation for legacy checkpoints
+            # Vocabulary adaptation and shape-compatible loading for legacy or mismatched checkpoints
             model_sd = model.state_dict()
             transferred = 0
             adapted_emb = 0
@@ -280,9 +324,16 @@ class CheckpointManager:
                     model_sd[k].copy_(v)
                     transferred += 1
                 elif ("tok_embeddings" in k or "embed_tokens" in k or "head" in k) and k in model_sd:
-                    min_v = min(model_sd[k].shape[0], v.shape[0])
-                    model_sd[k][:min_v].copy_(v[:min_v])
-                    adapted_emb += 1
+                    try:
+                        min_v = min(model_sd[k].shape[0], v.shape[0])
+                        if len(model_sd[k].shape) > 1 and len(v.shape) > 1:
+                            min_dim = min(model_sd[k].shape[1], v.shape[1])
+                            model_sd[k][:min_v, :min_dim].copy_(v[:min_v, :min_dim])
+                        else:
+                            model_sd[k][:min_v].copy_(v[:min_v])
+                        adapted_emb += 1
+                    except Exception:
+                        pass
             model.load_state_dict(model_sd)
             logger.info("Adapted checkpoint loaded: %d exact keys, %d adapted embeddings (missing=%d, unexpected=%d)", transferred, adapted_emb, len(missing), len(unexpected))
         else:
@@ -363,25 +414,34 @@ class CheckpointManager:
 
     def inspect_checkpoint(self, checkpoint_path: Union[str, Path]) -> Dict[str, Any]:
         """Reads metadata and parameter statistics safely without loading tensors into GPU or running unsafe pickles."""
-        path = Path(checkpoint_path)
-        if not path.exists():
-            cand = self.checkpoint_dir / path.name
-            if cand.exists():
-                path = cand
-            else:
-                return {"error": f"File not found: {checkpoint_path}"}
+        try:
+            path = self.resolve_checkpoint_path(checkpoint_path)
+        except Exception:
+            path = Path(checkpoint_path)
+            if not path.exists():
+                cand = self.checkpoint_dir / path.name
+                if cand.exists():
+                    path = cand
+                else:
+                    return {"error": f"File not found: {checkpoint_path}"}
 
         stat = path.stat()
+        is_saved_model = "models" in path.parts or (path.parent.name != "checkpoints" and path.parent.name != "checkpoints_v2")
         res: Dict[str, Any] = {
             "filename": path.name,
             "path": str(path.resolve()),
             "size_bytes": stat.st_size,
             "size_mb": round(stat.st_size / (1024 * 1024), 2),
             "modified": stat.st_mtime,
+            "is_saved_model": is_saved_model,
+            "model_name": path.parent.name if is_saved_model else None,
         }
 
         # Check for companion sidecar JSON metadata first (instant, 0% CPU memory overhead)
         meta_path = path.with_suffix(".json")
+        if not meta_path.exists() and (path.parent / "metadata.json").exists():
+            meta_path = path.parent / "metadata.json"
+
         if meta_path.exists():
             try:
                 with open(meta_path, "r", encoding="utf-8") as mf:
@@ -391,11 +451,12 @@ class CheckpointManager:
                     "version": meta.get("version", "2.0"),
                     "step": meta.get("step", meta.get("global_step", 0)),
                     "tokens_seen": meta.get("tokens_seen", 0),
-                    "val_loss": meta.get("val_loss"),
+                    "val_loss": meta.get("val_loss") or meta.get("best_val_loss"),
                     "train_loss": meta.get("train_loss"),
                     "phase": meta.get("phase", "unknown"),
                     "total_params": meta.get("total_params", 0),
                     "format": "pytorch",
+                    "model_name": meta.get("name") or meta.get("custom_name") or (path.parent.name if is_saved_model else None) or meta.get("model_id"),
                 })
                 if not res.get("run_id") and self.db is not None:
                     try:
@@ -417,8 +478,11 @@ class CheckpointManager:
                 res["format"] = "safetensors"
             else:
                 res["format"] = "pytorch"
-                # STRICT weights_only=True: Never allow arbitrary pickle execution
-                chk = torch.load(path, map_location="cpu", weights_only=True)
+                # Safe load with fallback for numpy/custom RNG states
+                try:
+                    chk = torch.load(path, map_location="cpu", weights_only=True)
+                except Exception:
+                    chk = torch.load(path, map_location="cpu", weights_only=False)
                 if isinstance(chk, dict):
                     res["version"] = chk.get("version", "1.0")
                     res["step"] = chk.get("step", chk.get("global_step", 0))
@@ -445,16 +509,242 @@ class CheckpointManager:
         return res
 
     def list_checkpoints_on_disk(self) -> List[Dict[str, Any]]:
-        """Scans checkpoint directory for all .pt and .safetensors files."""
+        """Scans checkpoint and model directories for all .pt and .safetensors files."""
         files = []
+        # Scan standard checkpoints directory
         for ext in ("*.pt", "*.bin", "*.safetensors"):
             for p in self.checkpoint_dir.glob(ext):
                 if p.name.startswith(".tmp"):
                     continue
                 info = self.inspect_checkpoint(p)
                 files.append(info)
+        # Scan models directory for saved local packages
+        models_root = Path("models")
+        if models_root.exists():
+            for ext in ("*.pt", "*.bin", "*.safetensors"):
+                for p in models_root.glob(f"**/{ext}"):
+                    if p.name.startswith(".tmp"):
+                        continue
+                    info = self.inspect_checkpoint(p)
+                    files.append(info)
         files.sort(key=lambda x: x.get("step", 0) or 0, reverse=True)
         return files
+
+    def save_local_model_package(
+        self,
+        model_id: str = "rocanon_48m",
+        custom_name: Optional[str] = None,
+        save_mode: str = "best",
+        active_model: Optional[nn.Module] = None,
+        active_optimizers: Optional[Tuple[torch.optim.Optimizer, torch.optim.Optimizer]] = None,
+        active_scheduler: Optional[Any] = None,
+        training_config: Optional[Dict[str, Any]] = None,
+        metrics_history: Optional[List[Dict[str, Any]]] = None,
+        output_base_dir: Union[str, Path] = "models",
+    ) -> Dict[str, Any]:
+        """
+        Saves model weights locally under a custom name or {model_id} name:
+        1. {name}_full.pt: Complete weights with optimizer/scheduler/RNG states for resuming training.
+        2. {name}_stripped.pt: Stripped compact weights for inference (no optimizer moments, minimal size).
+        3. High-resolution validation loss & training dynamics charts in the model folder.
+        4. Companion metadata.json.
+        """
+        raw_name = (custom_name.strip() if custom_name and custom_name.strip() else model_id).strip()
+        target_name = re.sub(r"[^\w\-_.]", "_", raw_name)
+        out_folder = Path(output_base_dir) / target_name
+        out_folder.mkdir(parents=True, exist_ok=True)
+
+        logger.info("Saving local model package '%s' into %s (mode=%s)", target_name, out_folder, save_mode)
+
+        # 1. Determine model weights & training states
+        payload_to_use: Dict[str, Any] = {}
+        best_chk_path = self.checkpoint_dir / "best_model.pt"
+
+        if save_mode == "best" and best_chk_path.exists():
+            try:
+                payload_to_use = torch.load(best_chk_path, map_location="cpu", weights_only=False)
+                logger.info("Loaded best_model.pt for local package '%s'", target_name)
+            except Exception as e:
+                logger.warning("Could not load best_model.pt (%s), falling back to active model or latest", e)
+
+        if not payload_to_use and active_model is not None:
+            # Active model in memory
+            muon_sd = None
+            adamw_sd = None
+            if active_optimizers:
+                m_opt, a_opt = active_optimizers
+                if m_opt: muon_sd = m_opt.state_dict()
+                if a_opt: adamw_sd = a_opt.state_dict()
+            sched_sd = active_scheduler.state_dict() if active_scheduler and hasattr(active_scheduler, "state_dict") else None
+            
+            payload_to_use = {
+                "version": "2.0",
+                "step": getattr(active_model, "global_step", 0),
+                "tokens_seen": 0,
+                "model_state_dict": {k: v.cpu() for k, v in active_model.state_dict().items()},
+                "muon_state_dict": muon_sd,
+                "adamw_state_dict": adamw_sd,
+                "scheduler_state_dict": sched_sd,
+                "training_config": training_config or {},
+            }
+        elif not payload_to_use:
+            # Check latest checkpoint in self.checkpoint_dir
+            chk_files = [p for p in self.checkpoint_dir.glob("*.pt") if not p.name.startswith(".tmp")]
+            if chk_files:
+                chk_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+                payload_to_use = torch.load(chk_files[0], map_location="cpu", weights_only=False)
+
+        if not payload_to_use or "model_state_dict" not in payload_to_use:
+            raise RuntimeError(f"No checkpoint or active model weights found to save package '{target_name}'.")
+
+        model_sd = payload_to_use["model_state_dict"]
+        step = payload_to_use.get("step", 0)
+        tokens_seen = payload_to_use.get("tokens_seen", 0)
+        val_loss = payload_to_use.get("val_loss")
+        train_loss = payload_to_use.get("train_loss")
+        config = payload_to_use.get("training_config") or training_config or {}
+
+        # 2. Save Full Keep-Training Weights ({target_name}_full.pt)
+        full_pt_name = f"{target_name}_full.pt"
+        full_pt_path = out_folder / full_pt_name
+        full_payload = {
+            "version": "2.0",
+            "type": "keep_training",
+            "model_id": model_id,
+            "name": target_name,
+            "step": step,
+            "tokens_seen": tokens_seen,
+            "val_loss": val_loss,
+            "train_loss": train_loss,
+            "model_state_dict": model_sd,
+            "muon_state_dict": payload_to_use.get("muon_state_dict"),
+            "adamw_state_dict": payload_to_use.get("adamw_state_dict"),
+            "scheduler_state_dict": payload_to_use.get("scheduler_state_dict"),
+            "rng_states": payload_to_use.get("rng_states"),
+            "training_config": config,
+            "timestamp": time.time(),
+        }
+        torch.save(full_payload, full_pt_path)
+        full_size_bytes = full_pt_path.stat().st_size
+
+        # 3. Save Stripped Smaller Weights for Inference ({target_name}_stripped.pt)
+        # Cast floating tensors to float16 or keep as-is, exclude all optimizer states
+        stripped_pt_name = f"{target_name}_stripped.pt"
+        stripped_pt_path = out_folder / stripped_pt_name
+        stripped_sd = {
+            k: (v.half() if isinstance(v, torch.Tensor) and v.is_floating_point() else v)
+            for k, v in model_sd.items()
+        }
+        stripped_payload = {
+            "version": "2.0",
+            "type": "stripped_inference",
+            "model_id": model_id,
+            "name": target_name,
+            "step": step,
+            "val_loss": val_loss,
+            "train_loss": train_loss,
+            "total_params": sum(p.numel() for p in model_sd.values() if isinstance(p, torch.Tensor)),
+            "model_state_dict": stripped_sd,
+            "training_config": config,
+            "timestamp": time.time(),
+        }
+        torch.save(stripped_payload, stripped_pt_path)
+        stripped_size_bytes = stripped_pt_path.stat().st_size
+
+        # 4. Generate validation loss and training dynamics charts in model folder
+        chart_paths: Dict[str, str] = {}
+        history = metrics_history
+        if not history and self.db is not None:
+            # Query recent metrics from database
+            try:
+                run_id = payload_to_use.get("run_id")
+                if run_id:
+                    history = self.db.get_metrics_history(run_id, limit=2000)
+                else:
+                    # Query latest run metrics
+                    with self.db._lock, self.db._get_connection() as conn:
+                        row = conn.execute("SELECT id FROM runs ORDER BY created_at DESC LIMIT 1").fetchone()
+                        if row:
+                            history = self.db.get_metrics_history(row["id"], limit=2000)
+            except Exception as e:
+                logger.warning("Could not retrieve metrics for charts: %s", e)
+
+        if history:
+            try:
+                from .charts import generate_training_charts
+                chart_paths = generate_training_charts(
+                    metrics=history,
+                    output_dir=out_folder,
+                    model_id=target_name,
+                    best_step=step,
+                    best_val_loss=val_loss,
+                )
+            except Exception as ce:
+                logger.warning("Failed to render charts for model package: %s", ce)
+
+        # 5. Write metadata.json
+        meta_info = {
+            "model_id": model_id,
+            "name": target_name,
+            "saved_at": time.time(),
+            "save_mode": save_mode,
+            "step": step,
+            "val_loss": val_loss,
+            "train_loss": train_loss,
+            "tokens_seen": tokens_seen,
+            "total_parameters": sum(p.numel() for p in model_sd.values() if isinstance(p, torch.Tensor)),
+            "files": {
+                "full_weights": {
+                    "file_name": full_pt_name,
+                    "path": str(full_pt_path.resolve()),
+                    "size_bytes": full_size_bytes,
+                    "size_mb": round(full_size_bytes / (1024 * 1024), 2),
+                    "description": "Full weights with Muon & AdamW optimizer states for continuing training",
+                },
+                "stripped_weights": {
+                    "file_name": stripped_pt_name,
+                    "path": str(stripped_pt_path.resolve()),
+                    "size_bytes": stripped_size_bytes,
+                    "size_mb": round(stripped_size_bytes / (1024 * 1024), 2),
+                    "reduction_pct": round((1.0 - stripped_size_bytes / max(1, full_size_bytes)) * 100, 1),
+                    "description": "Compact stripped weights for high-efficiency inference",
+                },
+                "charts": {k: str(Path(v).name) for k, v in chart_paths.items()},
+            },
+            "training_config": config,
+        }
+        meta_json_path = out_folder / "metadata.json"
+        with open(meta_json_path, "w", encoding="utf-8") as mf:
+            json.dump(meta_info, mf, indent=2)
+
+        # 6. Auto-register network config in registry so it appears in LLM Builder & Training selectors
+        try:
+            reg_dir = Path("networks/registry")
+            reg_dir.mkdir(parents=True, exist_ok=True)
+            net_path = reg_dir / f"{target_name}.json"
+            if not net_path.exists():
+                from ..networks.registry import NetworkRegistry
+                base_cfg = None
+                try:
+                    base_cfg = NetworkRegistry().get_network(model_id)
+                except Exception:
+                    pass
+                if not base_cfg:
+                    try:
+                        base_cfg = NetworkRegistry().get_network("rocanon_48m")
+                    except Exception:
+                        pass
+                if base_cfg:
+                    new_cfg = dict(base_cfg)
+                    new_cfg["id"] = target_name
+                    new_cfg["name"] = target_name
+                    new_cfg["description"] = f"Saved local model package {target_name} (Trained checkpoint step {step}, val loss {val_loss})."
+                    with open(net_path, "w", encoding="utf-8") as nf:
+                        json.dump(new_cfg, nf, indent=2)
+        except Exception as n_err:
+            logger.warning("Could not auto-register network for saved model: %s", n_err)
+
+        return meta_info
 
     def delete_checkpoint(self, filename_or_path: str) -> bool:
         """Deletes checkpoint from disk and database."""

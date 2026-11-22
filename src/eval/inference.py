@@ -39,15 +39,21 @@ class InferenceEngine:
     def load_checkpoint_weights(self, checkpoint_path: str | Path) -> Dict[str, Any]:
         """Loads weights into the model, dynamically creating custom architectures if saved."""
         import json
-        chk_path = Path(checkpoint_path)
+        chk_path = self.checkpoint_manager.resolve_checkpoint_path(checkpoint_path)
         meta_p = chk_path.with_suffix(".json")
+        if not meta_p.exists() and (chk_path.parent / "metadata.json").exists():
+            meta_p = chk_path.parent / "metadata.json"
         arch_cfg = None
         if meta_p.exists():
             try:
                 with open(meta_p, "r", encoding="utf-8") as mf:
                     meta = json.load(mf)
-                    arch_cfg = meta.get("config_arch") or meta.get("arch")
-                    net_id = meta.get("network_id")
+                    arch_cfg = (
+                        meta.get("config_arch")
+                        or meta.get("arch")
+                        or meta.get("training_config", {}).get("arch")
+                    )
+                    net_id = meta.get("network_id") or meta.get("model_id")
                     if not arch_cfg and net_id:
                         from ..networks.registry import NetworkRegistry
                         arch_cfg = NetworkRegistry().get_network(net_id)
@@ -61,6 +67,79 @@ class InferenceEngine:
                 self.model.eval()
             except Exception as e:
                 logger.warning("Could not instantiate custom architecture for inference: %s", e)
+
+        # Inspect checkpoint state_dict directly to verify and auto-adapt model dimensions
+        try:
+            if chk_path.suffix == ".safetensors":
+                from safetensors.torch import load_file
+                chk_sd = load_file(str(chk_path), device="cpu")
+            else:
+                try:
+                    payload = torch.load(chk_path, map_location="cpu", weights_only=True)
+                except Exception:
+                    payload = torch.load(chk_path, map_location="cpu", weights_only=False)
+                chk_sd = payload.get("model_state_dict", payload) if isinstance(payload, dict) else {}
+
+            if isinstance(chk_sd, dict) and any("embed_tokens.weight" in k or "weight" in k for k in chk_sd.keys()):
+                import re
+                clean_keys = {}
+                for k, v in chk_sd.items():
+                    ck = k
+                    for pfx in ("_orig_mod.", "module.", "model."):
+                        if ck.startswith(pfx):
+                            ck = ck[len(pfx):]
+                    clean_keys[ck] = v
+
+                embed_w = clean_keys.get("embed_tokens.weight")
+                if embed_w is None:
+                    embed_w = clean_keys.get("tok_embeddings.weight")
+                if embed_w is not None and len(embed_w.shape) == 2:
+                    chk_vocab = embed_w.shape[0]
+                    chk_d_model = embed_w.shape[1]
+
+                    layer_idxs = [int(m.group(1)) for k in clean_keys.keys() for m in [re.search(r"layers\.(\d+)\.", k)] if m]
+                    chk_n_layers = (max(layer_idxs) + 1) if layer_idxs else 16
+
+                    gate_w = clean_keys.get("layers.0.mlp.gate_proj.weight")
+                    chk_d_ff = gate_w.shape[0] if gate_w is not None else (chk_d_model * 4)
+
+                    q_norm_w = clean_keys.get("layers.0.attn.q_norm.weight")
+                    chk_d_h = q_norm_w.shape[0] if q_norm_w is not None else 64
+
+                    q_w = clean_keys.get("layers.0.attn.q_proj.weight")
+                    chk_n_q = (q_w.shape[0] // chk_d_h) if q_w is not None and chk_d_h > 0 else 8
+
+                    k_w = clean_keys.get("layers.0.attn.k_proj.weight")
+                    chk_n_kv = (k_w.shape[0] // chk_d_h) if k_w is not None and chk_d_h > 0 else 2
+
+                    conv_w = clean_keys.get("layers.0.canon_a.conv.weight")
+                    chk_kernel_size = conv_w.shape[-1] if conv_w is not None and len(conv_w.shape) >= 3 else 4
+
+                    # Check if currently active model has matching architecture
+                    curr_cfg = getattr(self.model, "config", None)
+                    needs_rebuild = (
+                        curr_cfg is None
+                        or getattr(curr_cfg, "d_model", None) != chk_d_model
+                        or getattr(curr_cfg, "n_layers", None) != chk_n_layers
+                        or getattr(curr_cfg, "d_ff", None) != chk_d_ff
+                        or getattr(curr_cfg, "n_q", None) != chk_n_q
+                        or getattr(curr_cfg, "n_kv", None) != chk_n_kv
+                    )
+                    if needs_rebuild:
+                        new_cfg = RoCanonConfig()
+                        new_cfg.vocab_size = chk_vocab
+                        new_cfg.d_model = chk_d_model
+                        new_cfg.n_layers = chk_n_layers
+                        new_cfg.d_ff = chk_d_ff
+                        new_cfg.d_h = chk_d_h
+                        new_cfg.n_q = chk_n_q
+                        new_cfg.n_kv = chk_n_kv
+                        new_cfg.kernel_size = chk_kernel_size
+                        self.model = RoCanonForCausalLM(new_cfg).to(device=self.device)
+                        self.model.eval()
+                        logger.info("Auto-adapted InferenceEngine model architecture to match checkpoint tensors: d_model=%d, n_layers=%d, d_ff=%d", chk_d_model, chk_n_layers, chk_d_ff)
+        except Exception as e:
+            logger.warning("Could not auto-inspect checkpoint tensor shapes: %s", e)
 
         return self.checkpoint_manager.load_checkpoint(
             checkpoint_path=chk_path,
@@ -79,11 +158,20 @@ class InferenceEngine:
         top_k: int = 50,
         repetition_penalty: float = 1.15,
         no_repeat_ngram_size: int = 3,
+        min_p: float = 0.0,
+        presence_penalty: float = 0.0,
+        frequency_penalty: float = 0.0,
+        seed: Optional[int] = None,
         stop_tokens: Optional[List[int]] = None,
+        stop_sequences: Optional[List[str]] = None,
         chat_mode: bool = False,
     ) -> Dict[str, Any]:
         """Executes text generation and returns text along with token throughput metrics."""
         t0 = time.time()
+        if seed is not None and seed >= 0:
+            torch.manual_seed(seed)
+            if torch.cuda.is_available():
+                torch.cuda.manual_seed_all(seed)
 
         # ChatML / Instruction formatting
         formatted_prompt = prompt
@@ -105,6 +193,7 @@ class InferenceEngine:
         generated_token_ids: List[int] = []
 
         max_seq_len = getattr(self.model.config, "max_seq_len", 2048)
+        token_counts: Dict[int, int] = {}
 
         for _ in range(max_new_tokens):
             if curr_ids.shape[1] > max_seq_len:
@@ -116,6 +205,13 @@ class InferenceEngine:
             if isinstance(logits, tuple):
                 logits = logits[0]
             next_token_logits = logits[0, -1, :].clone()
+
+            # Presence and Frequency penalties
+            if presence_penalty != 0.0 or frequency_penalty != 0.0:
+                for tid, count in token_counts.items():
+                    if count > 0:
+                        penalty = (presence_penalty if presence_penalty != 0.0 else 0.0) + (frequency_penalty * count)
+                        next_token_logits[tid] -= penalty
 
             # Repetition penalty
             if repetition_penalty != 1.0:
@@ -150,6 +246,13 @@ class InferenceEngine:
                     indices_to_remove = sorted_indices[sorted_indices_to_remove]
                     next_token_logits[indices_to_remove] = -float("Inf")
 
+                # Min-P (filters tokens with prob < min_p * max_prob)
+                if min_p > 0.0:
+                    probs_all = F.softmax(next_token_logits, dim=-1)
+                    p_max = probs_all.max()
+                    threshold = p_max * min_p
+                    next_token_logits[probs_all < threshold] = -float("Inf")
+
                 probs = F.softmax(next_token_logits, dim=-1)
                 next_token = torch.multinomial(probs, num_samples=1).item()
             else:
@@ -159,7 +262,14 @@ class InferenceEngine:
                 break
 
             generated_token_ids.append(next_token)
+            token_counts[next_token] = token_counts.get(next_token, 0) + 1
             curr_ids = torch.cat([curr_ids, torch.tensor([[next_token]], device=self.device)], dim=1)
+
+            # Check custom stop sequences
+            if stop_sequences:
+                curr_text = self.tokenizer.decode(generated_token_ids)
+                if any(s in curr_text for s in stop_sequences):
+                    break
 
         dt = time.time() - t0
         tok_count = len(generated_token_ids)
@@ -283,37 +393,69 @@ class InferenceEngine:
         max_new_tokens: int = 128,
         temperature: float = 0.7,
         top_p: float = 0.9,
+        top_k: int = 50,
+        repetition_penalty: float = 1.15,
+        no_repeat_ngram_size: int = 3,
+        min_p: float = 0.0,
+        presence_penalty: float = 0.0,
+        frequency_penalty: float = 0.0,
+        chat_mode: bool = False,
+        seed: Optional[int] = None,
+        stop_sequences: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Sequentially tests multiple checkpoints with identical parameters.
-        Reuses the single model instance on the GPU to guarantee 0 risk of CUDA OOM.
+        Sequentially tests multiple checkpoints with user-configured parameters.
+        Reuses the model instance and dynamically handles architectures safely.
         """
         results: List[Dict[str, Any]] = []
 
         for chk_path in checkpoint_paths:
             try:
-                load_meta = self.load_checkpoint_weights(chk_path)
+                resolved_p = self.checkpoint_manager.resolve_checkpoint_path(chk_path)
+                load_meta = self.load_checkpoint_weights(resolved_p)
                 gen_res = self.generate(
                     prompt=prompt,
                     max_new_tokens=max_new_tokens,
                     temperature=temperature,
                     top_p=top_p,
+                    top_k=top_k,
+                    repetition_penalty=repetition_penalty,
+                    no_repeat_ngram_size=no_repeat_ngram_size,
+                    min_p=min_p,
+                    presence_penalty=presence_penalty,
+                    frequency_penalty=frequency_penalty,
+                    chat_mode=chat_mode,
+                    seed=seed,
+                    stop_sequences=stop_sequences,
                 )
+                chk_name = Path(resolved_p).name
                 results.append({
-                    "checkpoint_path": chk_path,
-                    "checkpoint_name": Path(chk_path).name,
+                    "checkpoint": chk_name,
+                    "checkpoint_name": chk_name,
+                    "checkpoint_path": str(resolved_p),
                     "step": load_meta.get("step", 0),
                     "val_loss": load_meta.get("val_loss"),
-                    "generated_text": gen_res["generated_text"],
-                    "tokens_per_sec": gen_res["tokens_per_sec"],
-                    "generation_time_sec": gen_res["generation_time_sec"],
+                    "generated_text": gen_res.get("generated_text", ""),
+                    "completion": gen_res.get("completion", gen_res.get("generated_text", "")),
+                    "tokens_per_sec": gen_res.get("tokens_per_sec", 0),
+                    "tokens_per_second": gen_res.get("tokens_per_sec", 0),
+                    "generation_time_sec": gen_res.get("generation_time_sec", 0),
                     "success": True,
                 })
             except Exception as e:
                 logger.exception("Failed evaluation on checkpoint %s: %s", chk_path, e)
+                fallback_name = Path(chk_path).name
                 results.append({
-                    "checkpoint_path": chk_path,
-                    "checkpoint_name": Path(chk_path).name,
+                    "checkpoint": fallback_name,
+                    "checkpoint_name": fallback_name,
+                    "checkpoint_path": str(chk_path),
+                    "step": 0,
+                    "val_loss": None,
+                    "generated_text": f"[Error: {e}]",
+                    "completion": f"[Error: {e}]",
+                    "tokens_per_sec": 0,
+                    "tokens_per_second": 0,
+                    "generation_time_sec": 0,
                     "success": False,
                     "error": str(e),
                 })

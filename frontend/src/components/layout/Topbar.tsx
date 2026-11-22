@@ -10,7 +10,6 @@ import {
   WifiOff,
   Terminal,
   Sparkles,
-  Globe,
   Briefcase,
   ChevronDown,
 } from "lucide-react";
@@ -20,7 +19,6 @@ import { SetupWizardModal } from "@/components/onboarding/SetupWizardModal";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useHardwareTelemetry } from "@/hooks/useHardwareTelemetry";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
-import { useTranslation } from "@/i18n";
 
 const TITLES: Record<string, { section: string; title: string }> = {
   "/": { section: "Workspace", title: "Overview" },
@@ -44,7 +42,6 @@ export const Topbar: React.FC = () => {
   const { isConnected, currentState, recentAlerts } = useWebSocket();
   const { status } = useSystemStatus(4000);
   const { telemetry } = useHardwareTelemetry(3000);
-  const { locale, setLocale, t } = useTranslation();
 
   // First-run onboarding check
   useEffect(() => {
@@ -266,16 +263,6 @@ export const Topbar: React.FC = () => {
           >
             <Sparkles className="w-3.5 h-3.5" />
             <span className="hidden lg:inline font-semibold">Wizard</span>
-          </button>
-
-          {/* Language Toggle (EN / RO) */}
-          <button
-            onClick={() => setLocale(locale === "en" ? "ro" : "en")}
-            className="flex items-center gap-1 px-2 py-1 rounded-md bg-[#131C29] border border-[#273548] hover:border-[#384C66] text-[#91A0B4] hover:text-[#ECF3FC] font-mono text-xs transition-colors"
-            title="Toggle Language (English / Română)"
-          >
-            <Globe className="w-3.5 h-3.5 text-[#45CFFF]" />
-            <span className="uppercase font-bold">{locale}</span>
           </button>
         </div>
       </header>

@@ -1,0 +1,365 @@
+{
+  "id": "catai_10M",
+  "name": "CataAI 10M",
+  "task_type": "causal_lm",
+  "architecture_type": "hybrid_cnn_transformer",
+  "vocab_size": 12288,
+  "d_model": 280,
+  "n_layers": 10,
+  "n_q": 8,
+  "n_kv": 1,
+  "d_ff": 560,
+  "kernel_size": 3,
+  "tied_embeddings": true,
+  "layers": [
+    {
+      "id": "node-embed",
+      "type": "Embedding",
+      "label": "Token & Position Embed",
+      "config": {
+        "vocab_size": 12288,
+        "d_model": 280
+      },
+      "position": {
+        "x": 250,
+        "y": 30
+      }
+    },
+    {
+      "id": "node-norm1",
+      "type": "RMSNorm",
+      "label": "Input RMSNorm",
+      "config": {
+        "d_model": 280,
+        "eps": 1e-06
+      },
+      "position": {
+        "x": 250,
+        "y": 150
+      }
+    },
+    {
+      "id": "node-attn",
+      "type": "GQAAttention",
+      "label": "RoCanon GQA Blocks (16x)",
+      "config": {
+        "d_model": 280,
+        "n_q": 8,
+        "n_kv": 2
+      },
+      "position": {
+        "x": 250,
+        "y": 270
+      }
+    },
+    {
+      "id": "node-ffn",
+      "type": "SwiGLU",
+      "label": "SwiGLU FFN Blocks (16x)",
+      "config": {
+        "d_model": 280,
+        "d_ff": 1280
+      },
+      "position": {
+        "x": 250,
+        "y": 390
+      }
+    },
+    {
+      "id": "node-head",
+      "type": "Linear",
+      "label": "LM Head (Tied)",
+      "config": {
+        "in_features": 280,
+        "out_features": 12288,
+        "bias": false
+      },
+      "position": {
+        "x": 250,
+        "y": 510
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "node-embed",
+      "type": "archNode",
+      "position": {
+        "x": 250,
+        "y": 30
+      },
+      "data": {
+        "label": "Token & Position Embed",
+        "category": "embedding",
+        "layerType": "Embedding",
+        "config": {
+          "vocab_size": 12288,
+          "d_model": 280
+        },
+        "inputShape": "[B, S]",
+        "outputShape": "[B, S, 280]",
+        "params": 6291456,
+        "isValid": true
+      },
+      "measured": {
+        "width": 238,
+        "height": 103
+      }
+    },
+    {
+      "id": "node-norm1",
+      "type": "archNode",
+      "position": {
+        "x": 250,
+        "y": 150
+      },
+      "data": {
+        "label": "Input RMSNorm",
+        "category": "norm",
+        "layerType": "RMSNorm",
+        "config": {
+          "d_model": 280,
+          "eps": 1e-06
+        },
+        "inputShape": "[B, S, 280]",
+        "outputShape": "[B, S, 280]",
+        "params": 512,
+        "isValid": true
+      },
+      "measured": {
+        "width": 200,
+        "height": 103
+      }
+    },
+    {
+      "id": "node-attn",
+      "type": "archNode",
+      "position": {
+        "x": 250,
+        "y": 270
+      },
+      "data": {
+        "label": "RoCanon GQA Blocks (16x)",
+        "category": "attention",
+        "layerType": "GQAAttention",
+        "config": {
+          "d_model": 280,
+          "n_q": 8,
+          "n_kv": 2
+        },
+        "inputShape": "[B, S, 280]",
+        "outputShape": "[B, S, 280]",
+        "params": 8388608,
+        "isValid": true
+      },
+      "measured": {
+        "width": 252,
+        "height": 103
+      }
+    },
+    {
+      "id": "node-ffn",
+      "type": "archNode",
+      "position": {
+        "x": 250,
+        "y": 390
+      },
+      "data": {
+        "label": "SwiGLU FFN Blocks (16x)",
+        "category": "feedforward",
+        "layerType": "SwiGLU",
+        "config": {
+          "d_model": 280,
+          "d_ff": 1280
+        },
+        "inputShape": "[B, S, 280]",
+        "outputShape": "[B, S, 280]",
+        "params": 31457280,
+        "isValid": true
+      },
+      "measured": {
+        "width": 245,
+        "height": 103
+      }
+    },
+    {
+      "id": "node-head",
+      "type": "archNode",
+      "position": {
+        "x": 250,
+        "y": 510
+      },
+      "data": {
+        "label": "LM Head (Tied)",
+        "category": "embedding",
+        "layerType": "Linear",
+        "config": {
+          "in_features": 280,
+          "out_features": 12288,
+          "bias": false
+        },
+        "inputShape": "[B, S, 280]",
+        "outputShape": "[B, S, 1280288]",
+        "params": 0,
+        "isValid": true
+      },
+      "measured": {
+        "width": 200,
+        "height": 103
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1-2",
+      "source": "node-embed",
+      "target": "node-norm1",
+      "animated": true
+    },
+    {
+      "id": "e2-3",
+      "source": "node-norm1",
+      "target": "node-attn",
+      "animated": true
+    },
+    {
+      "id": "e3-4",
+      "source": "node-attn",
+      "target": "node-ffn",
+      "animated": true
+    },
+    {
+      "id": "e4-5",
+      "source": "node-ffn",
+      "target": "node-head",
+      "animated": true
+    }
+  ],
+  "parameters": {
+    "total_parameters": 9914520,
+    "trainable_parameters": 9914520,
+    "non_embedding_parameters": 6473880,
+    "embedding_parameters": 3440640,
+    "attention_parameters": 1764000,
+    "ffn_parameters": 4704000,
+    "conv_parameters": 0,
+    "norm_parameters": 5880,
+    "output_head_parameters": 0,
+    "tied_embeddings": true,
+    "layer_count": 10,
+    "layers": [
+      {
+        "layer_index": 0,
+        "attention_params": 176400,
+        "ffn_params": 470400,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 560,
+        "total_layer_params": 647360
+      },
+      {
+        "layer_index": 1,
+        "attention_params": 176400,
+        "ffn_params": 470400,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 560,
+        "total_layer_params": 647360
+      },
+      {
+        "layer_index": 2,
+        "attention_params": 176400,
+        "ffn_params": 470400,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 560,
+        "total_layer_params": 647360
+      },
+      {
+        "layer_index": 3,
+        "attention_params": 176400,
+        "ffn_params": 470400,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 560,
+        "total_layer_params": 647360
+      },
+      {
+        "layer_index": 4,
+        "attention_params": 176400,
+        "ffn_params": 470400,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 560,
+        "total_layer_params": 647360
+      },
+      {
+        "layer_index": 5,
+        "attention_params": 176400,
+        "ffn_params": 470400,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 560,
+        "total_layer_params": 647360
+      },
+      {
+        "layer_index": 6,
+        "attention_params": 176400,
+        "ffn_params": 470400,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 560,
+        "total_layer_params": 647360
+      },
+      {
+        "layer_index": 7,
+        "attention_params": 176400,
+        "ffn_params": 470400,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 560,
+        "total_layer_params": 647360
+      },
+      {
+        "layer_index": 8,
+        "attention_params": 176400,
+        "ffn_params": 470400,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 560,
+        "total_layer_params": 647360
+      },
+      {
+        "layer_index": 9,
+        "attention_params": 176400,
+        "ffn_params": 470400,
+        "conv_params": 0,
+        "custom_module_params": 0,
+        "norm_params": 560,
+        "total_layer_params": 647360
+      }
+    ],
+    "total_params": 9914520,
+    "trainable_params": 9914520
+  },
+  "memory": {
+    "parameter_count": 9914520,
+    "precision": "bfloat16",
+    "model_weights_mb": 18.9,
+    "gradients_mb": 37.8,
+    "optimizer_states_mb": 51,
+    "activations_mb": 93,
+    "workspace_headroom_mb": 350,
+    "total_training_vram_mb": 550.7,
+    "total_training_vram_gb": 0.54,
+    "inference_vram_mb": 237.5,
+    "inference_vram_gb": 0.23,
+    "storage_file_size_mb": 18.9,
+    "hardware_target": "NVIDIA GeForce RTX 3060 Laptop GPU (6.0GB)",
+    "safety_status": "SAFE",
+    "recommendation": "Fits comfortably on NVIDIA GeForce RTX 3060 Laptop GPU (6.0GB) with active safety margin (0.54 GB <= 4.8 GB safe ceiling)."
+  },
+  "total_parameters": 9914520,
+  "updated_at": 1795289501.9096687,
+  "created_at": 1795289501.9096694
+}

@@ -8,6 +8,7 @@ import { api } from "@/services/api";
 import { ChartPanel } from "@/components/ui/ChartPanel";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { SaveModelModal } from "@/components/ui/SaveModelModal";
 import { DatasetItem, NetworkConfig, CheckpointItem } from "@/types/api";
 import {
   Play,
@@ -27,6 +28,7 @@ import {
   RotateCcw,
   Calculator,
   Info,
+  HardDrive,
 } from "lucide-react";
 import {
   cn,
@@ -67,7 +69,7 @@ export interface TrainingFormConfig {
 const STORAGE_KEY = "llm_maker_training_config_v2";
 
 const DEFAULT_TRAINING_CONFIG: TrainingFormConfig = {
-  selectedNetwork: "rocanon_48_5m",
+  selectedNetwork: "rocanon_48m",
   selectedDataset: "tech_wiki_ro",
   selectedTask: "causal_lm",
   optimizer: "muon_adamw",
@@ -138,6 +140,7 @@ export const TrainingView: React.FC = () => {
 
   // Dialogs & Notifications
   const [confirmStop, setConfirmStop] = useState(false);
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -427,13 +430,23 @@ export const TrainingView: React.FC = () => {
         {/* Action Buttons */}
         <div className="flex items-center gap-2">
           {!isRunning && !isPaused ? (
-            <button
-              onClick={handleStartTraining}
-              disabled={isSubmitting}
-              className="inline-flex items-center gap-2 px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] disabled:opacity-40 text-[#090D14] text-xs font-mono font-bold transition-all shadow-[0_0_12px_rgba(69,207,255,0.25)]"
-            >
-              <Play className="w-3.5 h-3.5 fill-current" /> START TRAINING
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsSaveModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#182333] border border-[#273548] hover:border-[#45CFFF]/50 text-xs font-mono text-[#ECF3FC] transition-all"
+                title="Save model locally under a custom name with full/stripped weights & charts"
+              >
+                <HardDrive className="w-3.5 h-3.5 text-[#45CFFF]" /> SAVE LOCAL MODEL
+              </button>
+              <button
+                onClick={handleStartTraining}
+                disabled={isSubmitting}
+                className="inline-flex items-center gap-2 px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] disabled:opacity-40 text-[#090D14] text-xs font-mono font-bold transition-all shadow-[0_0_12px_rgba(69,207,255,0.25)]"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" /> START TRAINING
+              </button>
+            </div>
           ) : (
             <>
               <button
@@ -456,6 +469,15 @@ export const TrainingView: React.FC = () => {
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#182333] border border-[#273548] hover:border-[#35D49A]/50 text-xs font-mono text-[#ECF3FC] transition-all"
               >
                 <Bookmark className="w-3.5 h-3.5 text-[#35D49A]" /> SAVE CHECKPOINT
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setIsSaveModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#182333] border border-[#273548] hover:border-[#45CFFF]/50 text-xs font-mono text-[#45CFFF] transition-all"
+                title="Save model locally under a custom name with full/stripped weights & charts"
+              >
+                <HardDrive className="w-3.5 h-3.5" /> SAVE LOCAL MODEL
               </button>
 
               <button
@@ -513,8 +535,9 @@ export const TrainingView: React.FC = () => {
               "—"
             )}
           </div>
-          <div className="text-[9px] text-[#5E7188] mt-0.5">
-            {effectiveValStep ? `Evaluated at Step ${effectiveValStep}` : `Interval: every ${scheduledInterval} steps`}
+          <div className="text-[9px] text-[#5E7188] mt-0.5 flex justify-between">
+            <span>{effectiveValStep ? `Step ${effectiveValStep}` : "Awaiting"}</span>
+            <span>Next: Step {nextValStep}</span>
           </div>
         </div>
 
@@ -574,7 +597,7 @@ export const TrainingView: React.FC = () => {
           </div>
         </div>
 
-        {/* AdamW Effective LR & Next Eval */}
+        {/* AdamW Effective LR & Floor */}
         <div className="glass-panel p-2.5 rounded-lg border-l-2 border-l-[#35D49A]">
           <div className="text-[10px] text-[#91A0B4] uppercase font-semibold flex items-center justify-between">
             <span>ADAMW LR (VECTORS)</span>
@@ -584,7 +607,7 @@ export const TrainingView: React.FC = () => {
             {adamwEffLr > 0 ? adamwEffLr.toExponential(2) : "—"}
           </div>
           <div className="text-[9px] text-[#5E7188] mt-0.5">
-            Next eval: Step {nextValStep}
+            Cosine floor: {form.minLr.toExponential(1)}
           </div>
         </div>
       </div>
@@ -707,12 +730,16 @@ export const TrainingView: React.FC = () => {
                 className="w-full bg-[#0E1420] border border-[#273548] rounded px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]"
               >
                 <option value="">Start Fresh (No checkpoint restore)</option>
-                {checkpoints.map((c) => (
-                  <option key={c.id || c.path || c.filename} value={c.path || c.filename}>
-                    {c.filename} {c.run_id ? `[${c.run_id}]` : ""} (Step {c.step}
-                    {c.val_loss ? ` | Val Loss: ${c.val_loss.toFixed(4)}` : ""})
-                  </option>
-                ))}
+                {checkpoints.map((c) => {
+                  const valStr = c.val_loss !== null && c.val_loss !== undefined ? ` | Val: ${Number(c.val_loss).toFixed(4)}` : "";
+                  const prefix = c.is_saved_model ? "📦 Saved Model:" : "💾 Checkpoint:";
+                  const name = c.model_name || c.filename;
+                  return (
+                    <option key={c.id || c.path || c.filename} value={c.path || c.filename}>
+                      {prefix} {name} (Step {c.step}{valStr})
+                    </option>
+                  );
+                })}
               </select>
             </div>
           </div>
@@ -1198,6 +1225,14 @@ export const TrainingView: React.FC = () => {
         variant="danger"
         onConfirm={handleStopRun}
         onCancel={() => setConfirmStop(false)}
+      />
+
+      {/* Save Local Model Modal */}
+      <SaveModelModal
+        isOpen={isSaveModalOpen}
+        onClose={() => setIsSaveModalOpen(false)}
+        defaultModelId={form.selectedNetwork || "rocanon_48m"}
+        onSaved={(pkg) => setFeedback(`Saved local package '${pkg.name}' in models/${pkg.name}/`)}
       />
     </div>
   );

@@ -8,32 +8,40 @@ interface EmptyStateProps {
   description?: string;
   action?: React.ReactNode;
   className?: string;
+  /** Compact variant for use inside panels/tables. */
+  compact?: boolean;
 }
 
 export const EmptyState: React.FC<EmptyStateProps> = ({
-  icon = <Inbox className="w-8 h-8 text-[#5E7188]" />,
+  icon = <Inbox className="w-6 h-6 text-[#5E7188]" />,
   title,
   description,
   action,
   className,
+  compact = false,
 }) => {
   return (
     <div
       className={cn(
-        "glass-panel rounded-lg p-8 flex flex-col items-center justify-center text-center space-y-3 border border-[#273548]",
+        "panel flex flex-col items-center justify-center text-center",
+        compact ? "p-6 gap-2" : "p-10 gap-3",
         className
       )}
     >
-      <div className="p-3 bg-[#0E1420] rounded-full border border-[#273548] text-[#91A0B4]">
+      <div
+        className="flex items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--bg-subtle)] text-[#91A0B4]"
+        style={{ width: compact ? 40 : 48, height: compact ? 40 : 48 }}
+        aria-hidden="true"
+      >
         {icon}
       </div>
-      <h4 className="font-mono text-sm font-semibold text-[#ECF3FC] uppercase tracking-wider">
+      <h4 className="font-mono text-[12px] font-semibold text-[#ECF3FC] uppercase tracking-wider">
         {title}
       </h4>
       {description && (
-        <p className="text-xs text-[#91A0B4] max-w-sm">{description}</p>
+        <p className="max-w-sm text-[12px] leading-relaxed text-[#91A0B4]">{description}</p>
       )}
-      {action && <div className="pt-2">{action}</div>}
+      {action && <div className="pt-1.5">{action}</div>}
     </div>
   );
 };

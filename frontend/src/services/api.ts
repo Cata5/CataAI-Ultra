@@ -75,11 +75,16 @@ export const api = {
   getRunMetrics: (runId: string, startStep: number = 0, limit: number = 2000) =>
     request<MetricPoint[]>(`/api/runs/${runId}/metrics?start_step=${startStep}&limit=${limit}`),
 
-  // Checkpoints
+  // Checkpoints & Local Model Packages
   listCheckpoints: () => request<CheckpointItem[]>("/api/checkpoints"),
   deleteCheckpoint: (id: string) =>
     request<{ success: boolean; id: string }>(`/api/checkpoints/${encodeURIComponent(id)}`, {
       method: "DELETE",
+    }),
+  saveLocalModel: (data: { model_id?: string; custom_name?: string; save_mode?: "best" | "current" }) =>
+    request<{ success: boolean; package: any }>("/api/models/save-local", {
+      method: "POST",
+      body: JSON.stringify(data),
     }),
 
   // Pipelines
@@ -167,6 +172,11 @@ export const api = {
     top_k?: number;
     repetition_penalty?: number;
     no_repeat_ngram_size?: number;
+    min_p?: number;
+    presence_penalty?: number;
+    frequency_penalty?: number;
+    seed?: number;
+    stop_sequences?: string[];
     checkpoint?: string;
     chat_mode?: boolean;
   }) =>
@@ -185,7 +195,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify(params),
     }),
-  compareEvaluation: (params: { prompt: string; checkpoint_paths: string[] }) =>
+  compareEvaluation: (params: {
+    prompt: string;
+    checkpoint_paths: string[];
+    max_new_tokens?: number;
+    temperature?: number;
+    top_p?: number;
+    top_k?: number;
+    repetition_penalty?: number;
+    no_repeat_ngram_size?: number;
+    min_p?: number;
+    presence_penalty?: number;
+    frequency_penalty?: number;
+    seed?: number;
+    stop_sequences?: string[];
+    chat_mode?: boolean;
+  }) =>
     request<{ prompt: string; results: any[] }>("/api/evaluation/compare", {
       method: "POST",
       body: JSON.stringify(params),

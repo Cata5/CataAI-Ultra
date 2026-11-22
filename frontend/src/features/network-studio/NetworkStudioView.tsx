@@ -205,27 +205,9 @@ const INITIAL_EDGES: Edge[] = [
 ];
 
 const PRESET_GRAPHS: Record<string, { config: any; nodes: Node[]; edges: Edge[] }> = {
-  rocanon_48_5m: {
-    config: {
-      id: "rocanon_48_5m",
-      name: "RoCanon-48.5M Baseline",
-      task_type: "causal_lm",
-      architecture_type: "hybrid_cnn_transformer",
-      vocab_size: 12288,
-      d_model: 512,
-      n_layers: 16,
-      n_q: 8,
-      n_kv: 2,
-      d_ff: 1280,
-      kernel_size: 4,
-      tied_embeddings: true,
-    },
-    nodes: INITIAL_NODES,
-    edges: INITIAL_EDGES,
-  },
   rocanon_48m: {
     config: {
-      id: "rocanon_48_5m",
+      id: "rocanon_48m",
       name: "RoCanon-48.5M Baseline",
       task_type: "causal_lm",
       architecture_type: "hybrid_cnn_transformer",
@@ -531,7 +513,7 @@ export const NetworkStudioView: React.FC = () => {
 
   // Global Config state
   const [globalConfig, setGlobalConfig] = useState({
-    id: "rocanon_48_5m",
+    id: "rocanon_48m",
     name: "RoCanon-48.5M Baseline",
     task_type: "causal_lm",
     architecture_type: "hybrid_cnn_transformer",
@@ -1330,7 +1312,7 @@ export const NetworkStudioView: React.FC = () => {
       setConfirmDeleteNet(false);
       setStatusMessage(`Deleted '${globalConfig.name}' from Registry`);
       await fetchAllNetworks();
-      handleLoadNetwork("rocanon_48_5m");
+      handleLoadNetwork("rocanon_48m");
     } catch (e: any) {
       alert(`Delete error: ${e.message}`);
     }
@@ -1340,7 +1322,6 @@ export const NetworkStudioView: React.FC = () => {
 
   const defaultTemplateIds = [
     "rocanon_48m",
-    "rocanon_48_5m",
     "mini_gpt_15m",
     "bert_encoder_25m",
     "conv1d_network_4m",

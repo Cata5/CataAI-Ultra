@@ -1,8 +1,19 @@
 @import "tailwindcss";
 @import "@xyflow/react/dist/style.css";
 
+/* ------------------------------------------------------------------
+   LLM Maker — Neural Research Interface
+   Restrained sci-fi token system.
+
+   Rules:
+   - Surfaces stay dark blue-gray; never pure black.
+   - Cyan is an accent, not a coating: no ambient glows on idle chrome.
+   - One radius scale (10px panels, 8px controls, 6px chips).
+   - Custom component classes live in @layer components so utilities can
+     still override them (border color, background, padding...).
+------------------------------------------------------------------- */
+
 :root {
-  /* LLM Maker — Neural Research Interface Token System */
   /* Surfaces */
   --bg-base: #090D14;
   --bg-subtle: #0E1420;
@@ -11,7 +22,7 @@
   --bg-hover: #1E2B3E;
 
   /* Borders */
-  --border-subtle: #1E2A3A;
+  --border-subtle: #1B2636;
   --border-default: #273548;
   --border-strong: #384C66;
   --border-accent: rgba(69, 207, 255, 0.4);
@@ -34,6 +45,21 @@
   --status-error: #FF657A;
   --status-neutral: #8291A5;
 
+  /* Radii */
+  --radius-panel: 10px;
+  --radius-control: 8px;
+  --radius-chip: 5px;
+
+  /* Depth */
+  --shadow-panel: inset 0 1px 0 rgba(255, 255, 255, 0.03),
+    0 1px 2px rgba(0, 0, 0, 0.35), 0 14px 40px -28px rgba(0, 0, 0, 0.9);
+  --shadow-raised: inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 18px 50px -24px rgba(0, 0, 0, 0.95);
+
+  /* Motion */
+  --motion-fast: 140ms cubic-bezier(0.2, 0, 0.2, 1);
+  --motion-slow: 220ms cubic-bezier(0.2, 0, 0.2, 1);
+
   /* Backward Compatibility Aliases */
   --background: var(--bg-base);
   --surface: var(--bg-surface);
@@ -50,138 +76,524 @@
   --status-active: var(--accent-cyan);
 }
 
-body {
-  background-color: var(--bg-base);
-  color: var(--text-primary);
-  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
-  overflow-x: hidden;
-  margin: 0;
-  padding: 0;
-  min-height: 100vh;
+@layer base {
+  html,
+  body {
+    background-color: var(--bg-base);
+    color: var(--text-primary);
+  }
+
+  body {
+    font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* The `hidden` attribute must always win over display utilities. */
+  [hidden] {
+    display: none !important;
+  }
+
+  /* Visible, consistent keyboard focus on every interactive element. */
+  :where(button, a, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid rgba(69, 207, 255, 0.85);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: rgba(69, 207, 255, 0.25);
+    color: var(--text-primary);
+  }
 }
 
-/* Sci-Fi Ambient Grid */
+/* ==================================================================
+   Component classes
+   Wrapped in @layer components so Tailwind utilities (layer utilities)
+   can still override borders, backgrounds and padding per usage.
+================================================================== */
+@layer components {
+
+/* ------ Surfaces ------ */
+
+/* Sci-Fi Ambient Grid — kept very quiet so it reads as texture, not noise */
 .sci-fi-grid {
-  background-image: 
-    linear-gradient(to right, rgba(39, 53, 72, 0.2) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(39, 53, 72, 0.2) 1px, transparent 1px);
-  background-size: 32px 32px;
+  background-image:
+    linear-gradient(to right, rgba(39, 53, 72, 0.14) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(39, 53, 72, 0.14) 1px, transparent 1px);
+  background-size: 40px 40px;
+  background-position: -1px -1px;
 }
 
-/* Neural Research Interface Panels */
 .glass-panel {
-  background: #131C29;
-  border: 1px solid #273548;
-  box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.4), inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-panel);
 }
 
 .glass-panel-elevated {
-  background: #182333;
-  border: 1px solid #384C66;
-  box-shadow: 0 8px 30px -4px rgba(0, 0, 0, 0.5), inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-raised);
 }
 
 .glass-panel-accent {
-  background: #131C29;
-  border: 1px solid rgba(69, 207, 255, 0.35);
-  box-shadow: 0 0 20px -4px rgba(69, 207, 255, 0.12), inset 0 1px 0 0 rgba(69, 207, 255, 0.15);
+  background: var(--bg-surface);
+  border: 1px solid rgba(69, 207, 255, 0.32);
+  box-shadow: var(--shadow-panel);
 }
 
 .glass-panel-glow {
-  border-color: rgba(69, 207, 255, 0.4);
-  box-shadow: 0 0 16px rgba(69, 207, 255, 0.15), inset 0 1px 0 0 rgba(69, 207, 255, 0.1);
+  border-color: rgba(69, 207, 255, 0.42);
+  box-shadow: var(--shadow-panel), 0 0 0 1px rgba(69, 207, 255, 0.06);
 }
 
-/* Technical Monospace Numbers & Telemetry */
+/* Canonical panel: prefer this over glass-panel in new code. */
+.panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.panel-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-primary);
+}
+
+.panel-title::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 2px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--accent-cyan);
+  opacity: 0.85;
+}
+
+.panel-title--muted::before {
+  background: var(--text-tertiary);
+}
+
+/* ==================================================================
+   Controls
+================================================================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: var(--radius-control);
+  border: 1px solid transparent;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color var(--motion-fast), border-color var(--motion-fast),
+    color var(--motion-fast), opacity var(--motion-fast);
+}
+
+.btn:disabled,
+.btn[aria-disabled="true"] {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.btn-sm {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 10px;
+  gap: 5px;
+}
+
+.btn-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.btn-primary {
+  background: var(--accent-cyan);
+  border-color: var(--accent-cyan);
+  color: #06121A;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-ice);
+  border-color: var(--accent-ice);
+}
+
+.btn-primary:active:not(:disabled) {
+  background: #5DC4E8;
+  border-color: #5DC4E8;
+}
+
+.btn-secondary {
+  background: var(--bg-elevated);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
+}
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-secondary);
+}
+
+.btn-ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.btn-danger {
+  background: rgba(255, 101, 122, 0.1);
+  border-color: rgba(255, 101, 122, 0.38);
+  color: var(--status-error);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(255, 101, 122, 0.18);
+  border-color: rgba(255, 101, 122, 0.6);
+}
+
+.btn-warning {
+  background: rgba(242, 184, 91, 0.1);
+  border-color: rgba(242, 184, 91, 0.38);
+  color: var(--status-warning);
+}
+
+.btn-warning:hover:not(:disabled) {
+  background: rgba(242, 184, 91, 0.18);
+  border-color: rgba(242, 184, 91, 0.6);
+}
+
+/* Icon-only control (28px square) */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-control);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color var(--motion-fast), color var(--motion-fast),
+    border-color var(--motion-fast);
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+  color: var(--text-primary);
+}
+
+.icon-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.icon-btn[aria-pressed="true"] {
+  background: rgba(69, 207, 255, 0.12);
+  border-color: rgba(69, 207, 255, 0.4);
+  color: var(--accent-cyan);
+}
+
+.input {
+  height: 32px;
+  width: 100%;
+  padding: 0 10px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-default);
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--motion-fast), background-color var(--motion-fast);
+}
+
+.input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.input:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+.input:focus {
+  border-color: rgba(69, 207, 255, 0.7);
+  background: var(--bg-base);
+}
+
+.input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Range slider */
+.range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  outline: none;
+  cursor: pointer;
+}
+
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  border: 2px solid var(--bg-base);
+  box-shadow: 0 0 0 1px rgba(69, 207, 255, 0.5);
+  cursor: pointer;
+  transition: box-shadow var(--motion-fast);
+}
+
+.range:hover::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgba(69, 207, 255, 0.16);
+}
+
+.range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  border: 2px solid var(--bg-base);
+  box-shadow: 0 0 0 1px rgba(69, 207, 255, 0.5);
+  cursor: pointer;
+}
+
+.range:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border-default);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+/* ==================================================================
+   Typography helpers
+================================================================== */
+
 .font-mono-num {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-feature-settings: "tnum" 1, "zero" 1;
   font-variant-numeric: tabular-nums;
 }
 
-/* Refined Accents */
 .text-glow-cyan {
-  text-shadow: 0 0 8px rgba(69, 207, 255, 0.35);
+  text-shadow: 0 0 10px rgba(69, 207, 255, 0.25);
 }
 
 .text-glow-violet {
-  text-shadow: 0 0 8px rgba(155, 140, 255, 0.35);
+  text-shadow: 0 0 10px rgba(155, 140, 255, 0.25);
 }
 
-/* Tech Badges */
+.eyebrow {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+/* ==================================================================
+   Badges & alerts
+================================================================== */
+
 .tech-badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.375rem;
-  padding: 0.125rem 0.5rem;
-  border-radius: 0.375rem;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.65rem;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: var(--radius-chip);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  background: rgba(14, 20, 32, 0.8);
-  border: 1px solid #273548;
-  color: #91A0B4;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  white-space: nowrap;
 }
 
 .tech-badge-cyan {
   background: rgba(69, 207, 255, 0.08);
-  border-color: rgba(69, 207, 255, 0.3);
-  color: #45CFFF;
+  border-color: rgba(69, 207, 255, 0.28);
+  color: var(--accent-cyan);
 }
 
 .tech-badge-violet {
   background: rgba(155, 140, 255, 0.08);
-  border-color: rgba(155, 140, 255, 0.3);
-  color: #9B8CFF;
+  border-color: rgba(155, 140, 255, 0.28);
+  color: var(--accent-violet);
 }
 
 .tech-badge-emerald {
   background: rgba(53, 212, 154, 0.08);
-  border-color: rgba(53, 212, 154, 0.3);
-  color: #35D49A;
+  border-color: rgba(53, 212, 154, 0.28);
+  color: var(--status-success);
 }
 
 .tech-badge-amber {
   background: rgba(242, 184, 91, 0.08);
-  border-color: rgba(242, 184, 91, 0.3);
-  color: #F2B85B;
+  border-color: rgba(242, 184, 91, 0.28);
+  color: var(--status-warning);
 }
 
 .tech-badge-rose {
   background: rgba(255, 101, 122, 0.08);
-  border-color: rgba(255, 101, 122, 0.3);
-  color: #FF657A;
+  border-color: rgba(255, 101, 122, 0.28);
+  color: var(--status-error);
 }
 
-/* Custom Refined Scrollbars */
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-panel);
+  border: 1px solid var(--border-default);
+  background: var(--bg-subtle);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.alert-info {
+  border-color: rgba(69, 207, 255, 0.28);
+  background: rgba(69, 207, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.alert-success {
+  border-color: rgba(53, 212, 154, 0.28);
+  background: rgba(53, 212, 154, 0.06);
+  color: var(--text-primary);
+}
+
+.alert-warning {
+  border-color: rgba(242, 184, 91, 0.3);
+  background: rgba(242, 184, 91, 0.06);
+  color: var(--text-primary);
+}
+
+.alert-error {
+  border-color: rgba(255, 101, 122, 0.32);
+  background: rgba(255, 101, 122, 0.07);
+  color: var(--text-primary);
+}
+
+/* ==================================================================
+   Loading states
+================================================================== */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-elevated) 25%,
+    var(--bg-hover) 37%,
+    var(--bg-elevated) 63%
+  );
+  background-size: 400% 100%;
+  border-radius: 6px;
+  animation: skeleton-sweep 1.6s ease-in-out infinite;
+}
+
+@keyframes skeleton-sweep {
+  0% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+/* ==================================================================
+   Scrollbars
+================================================================== */
+
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #090D14;
+  background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #273548;
+  background: var(--border-default);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #384C66;
+  background: var(--border-strong);
 }
 
-/* Live Pulse Indicator */
+/* ==================================================================
+   Live indicators
+================================================================== */
+
 @keyframes cyber-pulse {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 1;
     transform: scale(1);
   }
   50% {
-    opacity: 0.5;
+    opacity: 0.55;
     transform: scale(0.97);
   }
 }
@@ -190,27 +602,49 @@ body {
   animation: cyber-pulse 2s infinite ease-in-out;
 }
 
-/* React Flow Sci-Fi Overrides */
+/* ==================================================================
+   React Flow overrides
+================================================================== */
+
 .react-flow__background {
-  background-color: #090D14 !important;
+  background-color: var(--bg-base) !important;
 }
 
 .react-flow__handle {
-  width: 10px !important;
-  height: 10px !important;
-  border-radius: 3px !important;
-  background-color: #45CFFF !important;
-  border: 1px solid #131C29 !important;
-  box-shadow: 0 0 6px rgba(69, 207, 255, 0.5);
+  width: 9px !important;
+  height: 9px !important;
+  border-radius: 2px !important;
+  background-color: var(--accent-cyan) !important;
+  border: 1px solid var(--bg-surface) !important;
 }
 
 .react-flow__edge-path {
-  stroke: #273548 !important;
-  stroke-width: 2 !important;
+  stroke: var(--border-default) !important;
+  stroke-width: 1.8 !important;
 }
 
 .react-flow__edge.selected .react-flow__edge-path {
-  stroke: #45CFFF !important;
-  stroke-width: 2.5 !important;
-  filter: drop-shadow(0 0 6px rgba(69, 207, 255, 0.6));
+  stroke: var(--accent-cyan) !important;
+  stroke-width: 2.2 !important;
+}
+
+} /* @layer components */
+
+/* ==================================================================
+   Motion preferences
+================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .skeleton {
+    animation: none;
+  }
 }

@@ -53,7 +53,6 @@ export const ConfigInspector: React.FC<ConfigInspectorProps> = ({
   // Determine if currently selected architecture is custom (user-created) or built-in template
   const defaultTemplateIds = [
     "rocanon_48m",
-    "rocanon_48_5m",
     "mini_gpt_15m",
     "bert_encoder_25m",
     "conv1d_network_4m",

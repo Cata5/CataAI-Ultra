@@ -23,6 +23,6 @@ This document catalogues all personal, hardware-specific, language-specific, and
 
 ## 2. Invariant Baselines Preserved
 
-- The **RoCanon-48.5M** architecture is retained as a built-in model template (`rocanon_48_5m` in Model Registry).
+- The **RoCanon-48.5M** architecture is retained as a built-in model template (`rocanon_48m` in Model Registry).
 - Byte-Level BPE tokenizer with 12,288 vocabulary size is retained as the baseline tokenizer for RoCanon models.
 - The `default` workspace preserves all historical runs (`runs.db`), existing checkpoints in `checkpoints/`, and existing datasets in `data/`.

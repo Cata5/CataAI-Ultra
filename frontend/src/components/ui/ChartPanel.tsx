@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -14,6 +14,7 @@ import {
   Filler,
 } from "chart.js";
 import { Line } from "react-chartjs-2";
+import type { ChartOptions } from "chart.js";
 import { cn } from "@/lib/utils";
 import { Maximize2, Minimize2, LineChart as ChartIcon } from "lucide-react";
 
@@ -50,6 +51,10 @@ interface ChartPanelProps {
   allowLogScale?: boolean;
   className?: string;
   height?: number;
+  /** Renders a skeleton plot while the first payload is in flight. */
+  loading?: boolean;
+  emptyTitle?: string;
+  emptyHint?: string;
 }
 
 export const ChartPanel: React.FC<ChartPanelProps> = ({
@@ -61,9 +66,23 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
   allowLogScale = true,
   className,
   height = 240,
+  loading = false,
+  emptyTitle = "No telemetry yet",
+  emptyHint = "Data points appear here once the run emits metrics.",
 }) => {
   const [isLogScale, setIsLogScale] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    if (!isFullscreen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsFullscreen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isFullscreen]);
+
+  const isEmpty = labels.length === 0 || datasets.length === 0;
 
   const chartData = {
     labels: labels.map(String),
@@ -81,16 +100,20 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
     })),
   };
 
-  const chartOptions: any = {
+  const chartOptions: ChartOptions<"line"> = {
     responsive: true,
     maintainAspectRatio: false,
     animation: {
       duration: 0,
     },
+    interaction: {
+      mode: "index",
+      intersect: false,
+    },
     scales: {
       x: {
         grid: {
-          color: "rgba(39, 53, 72, 0.45)",
+          color: "rgba(39, 53, 72, 0.35)",
           lineWidth: 1,
         },
         ticks: {
@@ -108,7 +131,7 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
       y: {
         type: isLogScale ? "logarithmic" : "linear",
         grid: {
-          color: "rgba(39, 53, 72, 0.45)",
+          color: "rgba(39, 53, 72, 0.35)",
           lineWidth: 1,
         },
         ticks: {
@@ -151,44 +174,40 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
   };
 
   return (
-    <div
+    <section
       className={cn(
-        "glass-panel rounded-lg p-3.5 flex flex-col relative overflow-hidden",
-        isFullscreen ? "fixed inset-4 z-50 p-6 bg-[#0E1420]/95 backdrop-blur-md" : "",
+        "panel flex flex-col p-3.5",
+        isFullscreen
+          ? "fixed inset-3 z-50 p-5 bg-[var(--bg-base)] md:inset-6"
+          : "",
         className
       )}
+      aria-label={title}
     >
-      {/* Top Hairline Highlight */}
-      <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/15 to-transparent pointer-events-none" />
+      <div className="panel-header">
+        <h3 className="panel-title">
+          <span className="truncate">{title}</span>
+        </h3>
 
-      <div className="flex items-center justify-between pb-2 mb-2 border-b border-[#273548]">
-        <div className="flex items-center gap-2">
-          <span className="w-1.5 h-3 bg-[#45CFFF] rounded-sm shadow-[0_0_6px_rgba(69,207,255,0.4)]" />
-          <h3 className="font-mono text-xs font-semibold text-[#ECF3FC] tracking-wider uppercase">
-            {title}
-          </h3>
-        </div>
-
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           {allowLogScale && (
             <button
+              type="button"
               onClick={() => setIsLogScale(!isLogScale)}
-              className={cn(
-                "px-2 py-0.5 text-[10px] font-mono rounded border transition-colors",
-                isLogScale
-                  ? "bg-[#45CFFF]/15 text-[#45CFFF] border-[#45CFFF]/50"
-                  : "bg-[#0E1420] text-[#91A0B4] border-[#273548] hover:text-[#ECF3FC] hover:border-[#384C66]"
-              )}
-              title="Toggle Logarithmic Scale"
+              aria-pressed={isLogScale}
+              className="btn btn-ghost btn-sm px-2"
+              title="Toggle logarithmic scale"
             >
               LOG
             </button>
           )}
 
           <button
+            type="button"
             onClick={() => setIsFullscreen(!isFullscreen)}
-            className="p-1 rounded text-[#91A0B4] hover:text-[#45CFFF] hover:bg-[#182333] transition-colors"
-            title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+            className="icon-btn"
+            aria-label={isFullscreen ? "Exit fullscreen" : "Expand chart fullscreen"}
+            title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
           >
             {isFullscreen ? (
               <Minimize2 className="w-3.5 h-3.5" />
@@ -199,16 +218,26 @@ export const ChartPanel: React.FC<ChartPanelProps> = ({
         </div>
       </div>
 
-      <div style={{ height: isFullscreen ? "calc(100% - 40px)" : `${height}px` }} className="w-full">
-        {labels.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center font-mono text-xs text-[#5E7188] gap-1.5">
-            <ChartIcon className="w-5 h-5 text-[#384C66]" />
-            <span>Awaiting telemetry stream...</span>
+      <div
+        style={{ height: isFullscreen ? "calc(100% - 44px)" : `${height}px` }}
+        className="w-full min-h-0"
+      >
+        {loading ? (
+          <div className="h-full flex flex-col justify-end gap-2 pb-2" aria-label="Loading chart">
+            <span className="skeleton block h-full w-full opacity-60" />
+          </div>
+        ) : isEmpty ? (
+          <div className="h-full flex flex-col items-center justify-center text-center gap-2 px-4">
+            <ChartIcon className="w-5 h-5 text-[#384C66]" aria-hidden="true" />
+            <p className="font-mono text-[11px] font-semibold uppercase tracking-wider text-[#91A0B4]">
+              {emptyTitle}
+            </p>
+            <p className="max-w-[260px] text-[11px] leading-relaxed text-[#5E7188]">{emptyHint}</p>
           </div>
         ) : (
-          <Line data={chartData} options={chartOptions} />
+          <Line data={chartData} options={chartOptions} aria-label={`${title} chart`} role="img" />
         )}
       </div>
-    </div>
+    </section>
   );
 };

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { api } from "@/services/api";
 import { CheckpointItem, BenchmarkResult } from "@/types/api";
 import { DataTable, Column } from "@/components/ui/DataTable";
@@ -14,29 +14,63 @@ import {
   Clock,
   Bookmark,
   Award,
+  RotateCcw,
+  RefreshCw,
+  Sliders,
+  AlertCircle,
+  X,
+  CheckCircle2,
+  Package,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+interface SamplingConfig {
+  maxTokens: number;
+  temperature: number;
+  topP: number;
+  topK: number;
+  minP: number;
+  repPenalty: number;
+  noRepeatNgram: number;
+  presencePenalty: number;
+  frequencyPenalty: number;
+  seed: string;
+  stopSequences: string;
+}
+
+const DEFAULT_CONFIG: SamplingConfig = {
+  maxTokens: 128,
+  temperature: 0.7,
+  topP: 0.9,
+  topK: 50,
+  minP: 0.0,
+  repPenalty: 1.15,
+  noRepeatNgram: 3,
+  presencePenalty: 0.0,
+  frequencyPenalty: 0.0,
+  seed: "",
+  stopSequences: "",
+};
 
 export const EvaluationView: React.FC = () => {
   const [checkpoints, setCheckpoints] = useState<CheckpointItem[]>([]);
   const [selectedCheckpoint, setSelectedCheckpoint] = useState<string>("");
   const [benchmarks, setBenchmarks] = useState<BenchmarkResult[]>([]);
+  const [isLoadingCheckpoints, setIsLoadingCheckpoints] = useState<boolean>(false);
 
-  // Generation parameters
+  // Prompt state
   const [prompt, setPrompt] = useState<string>(
     "Inteligența artificială modernă funcționează prin"
   );
-  const [maxTokens, setMaxTokens] = useState<number>(128);
-  const [temperature, setTemperature] = useState<number>(0.7);
-  const [topP, setTopP] = useState<number>(0.9);
-  const [topK, setTopK] = useState<number>(50);
-  const [repPenalty, setRepPenalty] = useState<number>(1.2);
-  const [noRepeatNgram, setNoRepeatNgram] = useState<number>(3);
   const [isChatMode, setIsChatMode] = useState<boolean>(true);
 
-  // Single inference result
+  // Granular Sampling Parameters (Fully configurable, NO PRESETS)
+  const [config, setConfig] = useState<SamplingConfig>(DEFAULT_CONFIG);
+
+  // Single inference result & error feedback
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
   const [generationResult, setGenerationResult] = useState<any | null>(null);
+  const [evalError, setEvalError] = useState<string | null>(null);
 
   // Side-by-side comparison
   const [isCompareMode, setIsCompareMode] = useState<boolean>(false);
@@ -47,39 +81,79 @@ export const EvaluationView: React.FC = () => {
   // Benchmark suite
   const [isRunningBenchmarks, setIsRunningBenchmarks] = useState<boolean>(false);
 
-  useEffect(() => {
-    api.listCheckpoints().then((list) => {
+  const fetchCheckpoints = useCallback(async () => {
+    setIsLoadingCheckpoints(true);
+    try {
+      const list = await api.listCheckpoints();
       setCheckpoints(list);
-      if (list.length > 0) {
+      if (list.length > 0 && !selectedCheckpoint) {
         setSelectedCheckpoint(list[0].path || list[0].filename);
-        if (list.length >= 2) {
-          setCompareCheckpoints([list[0].path || list[0].filename, list[1].path || list[1].filename]);
-        }
       }
-    });
+      if (list.length >= 2 && compareCheckpoints.length === 0) {
+        setCompareCheckpoints([list[0].path || list[0].filename, list[1].path || list[1].filename]);
+      }
+    } catch (err: any) {
+      console.error("Failed to load checkpoints:", err);
+    } finally {
+      setIsLoadingCheckpoints(false);
+    }
+  }, [selectedCheckpoint, compareCheckpoints.length]);
 
+  useEffect(() => {
+    fetchCheckpoints();
     api.listBenchmarkResults().then(setBenchmarks).catch(console.error);
-  }, []);
+  }, [fetchCheckpoints]);
+
+  const updateParam = <K extends keyof SamplingConfig>(key: K, value: SamplingConfig[K]) => {
+    setConfig((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleResetDefaults = () => {
+    setConfig(DEFAULT_CONFIG);
+  };
+
+  const parseStopSequences = (raw: string): string[] | undefined => {
+    if (!raw.trim()) return undefined;
+    return raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  };
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return;
     setIsGenerating(true);
     setGenerationResult(null);
+    setEvalError(null);
+
+    const parsedSeed = config.seed.trim() !== "" ? parseInt(config.seed, 10) : undefined;
+    const stopSeqs = parseStopSequences(config.stopSequences);
+
     try {
       const res = await api.generateEvaluation({
         prompt,
-        max_new_tokens: maxTokens,
-        temperature,
-        top_p: topP,
-        top_k: topK,
-        repetition_penalty: repPenalty,
-        no_repeat_ngram_size: noRepeatNgram,
+        max_new_tokens: config.maxTokens,
+        temperature: config.temperature,
+        top_p: config.topP,
+        top_k: config.topK,
+        min_p: config.minP,
+        repetition_penalty: config.repPenalty,
+        no_repeat_ngram_size: config.noRepeatNgram,
+        presence_penalty: config.presencePenalty,
+        frequency_penalty: config.frequencyPenalty,
+        seed: isNaN(parsedSeed as number) ? undefined : parsedSeed,
+        stop_sequences: stopSeqs,
         checkpoint: selectedCheckpoint || undefined,
         chat_mode: isChatMode,
       });
-      setGenerationResult(res);
+
+      if ((res as any).error) {
+        setEvalError((res as any).error);
+      } else {
+        setGenerationResult(res);
+      }
     } catch (e: any) {
-      alert(`Inference failed: ${e.message}`);
+      setEvalError(e.message || "Unknown inference error occurred.");
     } finally {
       setIsGenerating(false);
     }
@@ -89,14 +163,36 @@ export const EvaluationView: React.FC = () => {
     if (!prompt.trim() || compareCheckpoints.length === 0) return;
     setIsComparing(true);
     setCompareResults([]);
+    setEvalError(null);
+
+    const parsedSeed = config.seed.trim() !== "" ? parseInt(config.seed, 10) : undefined;
+    const stopSeqs = parseStopSequences(config.stopSequences);
+
     try {
       const res = await api.compareEvaluation({
         prompt,
         checkpoint_paths: compareCheckpoints,
+        max_new_tokens: config.maxTokens,
+        temperature: config.temperature,
+        top_p: config.topP,
+        top_k: config.topK,
+        min_p: config.minP,
+        repetition_penalty: config.repPenalty,
+        no_repeat_ngram_size: config.noRepeatNgram,
+        presence_penalty: config.presencePenalty,
+        frequency_penalty: config.frequencyPenalty,
+        seed: isNaN(parsedSeed as number) ? undefined : parsedSeed,
+        stop_sequences: stopSeqs,
+        chat_mode: isChatMode,
       });
-      setCompareResults(res.results || []);
+
+      if (res.results && Array.isArray(res.results)) {
+        setCompareResults(res.results);
+      } else {
+        setCompareResults([]);
+      }
     } catch (e: any) {
-      alert(`Comparison failed: ${e.message}`);
+      setEvalError(`Comparison failed: ${e.message}`);
     } finally {
       setIsComparing(false);
     }
@@ -127,7 +223,7 @@ export const EvaluationView: React.FC = () => {
       header: "CHECKPOINT",
       accessorKey: "checkpoint_id",
       cell: (b) => (
-        <span className="text-[#91A0B4] font-mono">{b.checkpoint_id || "Active Run"}</span>
+        <span className="text-[#91A0B4] font-mono">{b.checkpoint_id || "Active Weights"}</span>
       ),
     },
     {
@@ -173,7 +269,7 @@ export const EvaluationView: React.FC = () => {
               EVALUATION LAB & INFERENCE PLAYGROUND
             </h2>
             <p className="text-[10px] text-[#91A0B4] mt-0.5">
-              Interactive token generation, checkpoint cross-evaluations and quality benchmarking.
+              Granular hyperparameter tuning, multi-model side-by-side matrices, and automated benchmarks.
             </p>
           </div>
         </div>
@@ -205,7 +301,7 @@ export const EvaluationView: React.FC = () => {
         </div>
       </div>
 
-      {/* Main Grid: Inputs & Controls (Left 1 col) + Output Console (Right 2 cols) */}
+      {/* Main Grid: Controls Column (1 col) + Output & Prompt (2 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Controls Column */}
         <div className="space-y-3">
@@ -213,175 +309,375 @@ export const EvaluationView: React.FC = () => {
           <div className="glass-panel p-3.5 rounded-lg space-y-3 relative overflow-hidden">
             <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/15 to-transparent pointer-events-none" />
 
-            <h4 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider pb-1.5 border-b border-[#273548] flex items-center gap-1.5">
-              <Bookmark className="w-3.5 h-3.5 text-[#45CFFF]" /> MODEL CHECKPOINT
-            </h4>
+            <div className="flex items-center justify-between pb-1.5 border-b border-[#273548]">
+              <h4 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider flex items-center gap-1.5">
+                <Bookmark className="w-3.5 h-3.5 text-[#45CFFF]" /> MODEL CHECKPOINT
+              </h4>
+              <button
+                type="button"
+                onClick={fetchCheckpoints}
+                disabled={isLoadingCheckpoints}
+                className="text-[10px] text-[#91A0B4] hover:text-[#45CFFF] transition-colors flex items-center gap-1"
+                title="Refresh checkpoints and saved models from disk"
+              >
+                <RefreshCw className={cn("w-3 h-3", isLoadingCheckpoints && "animate-spin")} />
+                Refresh
+              </button>
+            </div>
 
             {!isCompareMode ? (
-              <div>
-                <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-                  Selected Weights
-                </label>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[10px] text-[#91A0B4]">
+                  <span>WEIGHT SOURCE</span>
+                  {selectedCheckpoint && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCheckpoint("")}
+                      className="text-[#80DEFF] hover:underline"
+                    >
+                      Use In-Memory
+                    </button>
+                  )}
+                </div>
                 <select
                   value={selectedCheckpoint}
                   onChange={(e) => setSelectedCheckpoint(e.target.value)}
                   className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2.5 py-1.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]/50 text-xs"
                 >
-                  <option value="">Current In-Memory Weights</option>
-                  {checkpoints.map((c) => (
-                    <option key={c.id} value={c.path || c.filename}>
-                      {c.filename} (Step {c.step}
-                      {c.val_loss ? ` | Val: ${c.val_loss.toFixed(4)}` : ""})
-                    </option>
-                  ))}
+                  <option value="">⚡ Current In-Memory Weights (Active Model)</option>
+                  {checkpoints.map((c) => {
+                    const valStr = c.val_loss !== null && c.val_loss !== undefined ? ` | Val: ${Number(c.val_loss).toFixed(4)}` : "";
+                    const prefix = c.is_saved_model ? "📦 Saved Model:" : "💾 Checkpoint:";
+                    const displayName = c.model_name || c.filename;
+                    return (
+                      <option key={c.id || c.path || c.filename} value={c.path || c.filename}>
+                        {prefix} {displayName} (Step {c.step}{valStr})
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             ) : (
-              <div>
-                <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-                  Checkpoints to Compare
-                </label>
-                <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                  {checkpoints.map((c) => {
-                    const path = c.path || c.filename;
-                    const isChecked = compareCheckpoints.includes(path);
-                    return (
-                      <label
-                        key={c.id}
-                        className="flex items-center gap-2 p-1.5 rounded-md bg-[#0E1420] border border-[#273548] text-[11px] cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isChecked}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setCompareCheckpoints([...compareCheckpoints, path]);
-                            } else {
-                              setCompareCheckpoints(
-                                compareCheckpoints.filter((p) => p !== path)
-                              );
-                            }
-                          }}
-                          className="accent-[#45CFFF]"
-                        />
-                        <span className="truncate text-[#ECF3FC]">{c.filename}</span>
-                        <span className="text-[9px] text-[#5E7188] ml-auto">
-                          Step {c.step}
-                        </span>
-                      </label>
-                    );
-                  })}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-[10px] text-[#91A0B4]">
+                  <span>MODELS TO COMPARE ({compareCheckpoints.length} selected)</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCompareCheckpoints(checkpoints.map((c) => c.path || c.filename))}
+                      className="text-[#80DEFF] hover:underline"
+                    >
+                      All
+                    </button>
+                    <span>·</span>
+                    <button
+                      type="button"
+                      onClick={() => setCompareCheckpoints([])}
+                      className="text-[#80DEFF] hover:underline"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {checkpoints.length === 0 ? (
+                    <div className="text-[11px] text-[#5E7188] italic p-2">
+                      No saved models or checkpoints found.
+                    </div>
+                  ) : (
+                    checkpoints.map((c) => {
+                      const path = c.path || c.filename;
+                      const isChecked = compareCheckpoints.includes(path);
+                      return (
+                        <label
+                          key={c.id || path}
+                          className={cn(
+                            "flex items-center gap-2 p-1.5 rounded-md border text-[11px] cursor-pointer transition-all",
+                            isChecked
+                              ? "bg-[#131C29] border-[#45CFFF]/40 text-[#ECF3FC]"
+                              : "bg-[#0E1420] border-[#273548] text-[#91A0B4] hover:text-[#ECF3FC]"
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setCompareCheckpoints([...compareCheckpoints, path]);
+                              } else {
+                                setCompareCheckpoints(compareCheckpoints.filter((p) => p !== path));
+                              }
+                            }}
+                            className="accent-[#45CFFF] rounded"
+                          />
+                          <div className="flex items-center gap-1.5 truncate flex-1 min-w-0">
+                            {c.is_saved_model ? (
+                              <Package className="w-3 h-3 text-[#35D49A] shrink-0" />
+                            ) : (
+                              <Bookmark className="w-3 h-3 text-[#45CFFF] shrink-0" />
+                            )}
+                            <span className="truncate">{c.model_name || c.filename}</span>
+                          </div>
+                          <span className="text-[9px] text-[#5E7188] shrink-0 font-mono-num">
+                            Step {c.step}
+                          </span>
+                        </label>
+                      );
+                    })
+                  )}
                 </div>
               </div>
             )}
           </div>
 
-          {/* Sampling Hyperparameters */}
+          {/* Granular Sampling Hyperparameters (NO PRESETS - Fully Configurable) */}
           <div className="glass-panel p-3.5 rounded-lg space-y-3 relative overflow-hidden">
             <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/15 to-transparent pointer-events-none" />
 
-            <h4 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider pb-1.5 border-b border-[#273548] flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-[#45CFFF]" /> SAMPLING PARAMETERS
-            </h4>
+            <div className="flex items-center justify-between pb-1.5 border-b border-[#273548]">
+              <h4 className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider flex items-center gap-1.5">
+                <Sliders className="w-3.5 h-3.5 text-[#45CFFF]" /> SAMPLING CONFIGURATION
+              </h4>
+              <button
+                type="button"
+                onClick={handleResetDefaults}
+                className="text-[10px] text-[#91A0B4] hover:text-[#45CFFF] transition-colors flex items-center gap-1"
+                title="Reset all generation parameters to recommended defaults"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Defaults
+              </button>
+            </div>
 
+            {/* Max New Tokens (Slider + Direct Input) */}
             <div>
-              <div className="flex justify-between text-[10px] text-[#91A0B4] mb-1">
-                <span>MAX NEW TOKENS</span>
-                <span className="text-[#45CFFF] font-bold font-mono-num">{maxTokens}</span>
+              <div className="flex justify-between items-center text-[10px] text-[#91A0B4] mb-1">
+                <span className="font-semibold uppercase">MAX NEW TOKENS</span>
+                <input
+                  type="number"
+                  min="16"
+                  max="2048"
+                  step="16"
+                  value={config.maxTokens}
+                  onChange={(e) => updateParam("maxTokens", Math.max(16, parseInt(e.target.value) || 16))}
+                  className="w-16 bg-[#0E1420] border border-[#273548] rounded px-1.5 py-0.5 text-right text-[#45CFFF] font-bold font-mono-num text-[11px] focus:outline-none focus:border-[#45CFFF]"
+                />
               </div>
               <input
                 type="range"
                 min="16"
-                max="512"
+                max="1024"
                 step="16"
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(parseInt(e.target.value))}
+                value={config.maxTokens}
+                onChange={(e) => updateParam("maxTokens", parseInt(e.target.value))}
                 className="w-full accent-[#45CFFF] bg-[#0E1420] h-1.5 rounded cursor-pointer"
               />
             </div>
 
+            {/* Temperature (Slider + Direct Input, 0.0 = Greedy) */}
             <div>
-              <div className="flex justify-between text-[10px] text-[#91A0B4] mb-1">
-                <span>TEMPERATURE</span>
-                <span className="text-[#45CFFF] font-bold font-mono-num">{temperature.toFixed(2)}</span>
+              <div className="flex justify-between items-center text-[10px] text-[#91A0B4] mb-1">
+                <span className="font-semibold uppercase">
+                  TEMPERATURE <span className="text-[9px] text-[#5E7188]">{config.temperature === 0 ? "(GREEDY)" : ""}</span>
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  max="2.0"
+                  step="0.05"
+                  value={config.temperature}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    updateParam("temperature", isNaN(v) ? 0 : Math.max(0, Math.min(2.0, v)));
+                  }}
+                  className="w-16 bg-[#0E1420] border border-[#273548] rounded px-1.5 py-0.5 text-right text-[#45CFFF] font-bold font-mono-num text-[11px] focus:outline-none focus:border-[#45CFFF]"
+                />
               </div>
               <input
                 type="range"
-                min="0.1"
+                min="0.0"
                 max="2.0"
                 step="0.05"
-                value={temperature}
-                onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                value={config.temperature}
+                onChange={(e) => updateParam("temperature", parseFloat(e.target.value))}
                 className="w-full accent-[#45CFFF] bg-[#0E1420] h-1.5 rounded cursor-pointer"
               />
             </div>
 
+            {/* Top-P (Nucleus) & Top-K Dual Numeric Inputs */}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-                  Top-P (Nucleus)
-                </label>
+                <div className="flex justify-between items-center text-[10px] text-[#91A0B4] mb-1">
+                  <span className="font-semibold uppercase">TOP-P</span>
+                  <span className="text-[#ECF3FC] font-mono-num">{config.topP.toFixed(2)}</span>
+                </div>
                 <input
                   type="number"
                   step="0.05"
-                  min="0.1"
+                  min="0.05"
                   max="1.0"
-                  value={topP}
-                  onChange={(e) => setTopP(parseFloat(e.target.value) || 0.9)}
-                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC]"
+                  value={config.topP}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    updateParam("topP", isNaN(v) ? 0.9 : Math.max(0.05, Math.min(1.0, v)));
+                  }}
+                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC] text-xs font-mono-num focus:outline-none focus:border-[#45CFFF]"
                 />
               </div>
 
               <div>
-                <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-                  Top-K
-                </label>
+                <div className="flex justify-between items-center text-[10px] text-[#91A0B4] mb-1">
+                  <span className="font-semibold uppercase">TOP-K</span>
+                  <span className="text-[#ECF3FC] font-mono-num">{config.topK === 0 ? "Off" : config.topK}</span>
+                </div>
                 <input
                   type="number"
-                  value={topK}
-                  onChange={(e) => setTopK(parseInt(e.target.value) || 50)}
-                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC]"
+                  min="0"
+                  max="200"
+                  step="1"
+                  value={config.topK}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    updateParam("topK", isNaN(v) ? 0 : Math.max(0, v));
+                  }}
+                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC] text-xs font-mono-num focus:outline-none focus:border-[#45CFFF]"
                 />
               </div>
             </div>
 
+            {/* Min-P Sampling & Repetition Penalty */}
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-                  Repetition Penalty
-                </label>
+                <div className="flex justify-between items-center text-[10px] text-[#91A0B4] mb-1">
+                  <span className="font-semibold uppercase">MIN-P</span>
+                  <span className="text-[#ECF3FC] font-mono-num">{config.minP === 0 ? "Off" : config.minP.toFixed(2)}</span>
+                </div>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.0"
+                  max="1.0"
+                  value={config.minP}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    updateParam("minP", isNaN(v) ? 0 : Math.max(0.0, Math.min(1.0, v)));
+                  }}
+                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC] text-xs font-mono-num focus:outline-none focus:border-[#45CFFF]"
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center text-[10px] text-[#91A0B4] mb-1">
+                  <span className="font-semibold uppercase">REP PENALTY</span>
+                  <span className="text-[#ECF3FC] font-mono-num">{config.repPenalty.toFixed(2)}</span>
+                </div>
                 <input
                   type="number"
                   step="0.05"
                   min="1.0"
+                  max="3.0"
+                  value={config.repPenalty}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    updateParam("repPenalty", isNaN(v) ? 1.0 : Math.max(1.0, v));
+                  }}
+                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC] text-xs font-mono-num focus:outline-none focus:border-[#45CFFF]"
+                />
+              </div>
+            </div>
+
+            {/* No Repeat N-Gram (0 = disabled) & RNG Seed */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <div className="flex justify-between items-center text-[10px] text-[#91A0B4] mb-1">
+                  <span className="font-semibold uppercase">NO REPEAT N-GRAM</span>
+                  <span className="text-[#ECF3FC] font-mono-num">{config.noRepeatNgram === 0 ? "Off" : config.noRepeatNgram}</span>
+                </div>
+                <input
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="1"
+                  value={config.noRepeatNgram}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    if (raw === "") {
+                      updateParam("noRepeatNgram", 0);
+                      return;
+                    }
+                    const parsed = parseInt(raw, 10);
+                    updateParam("noRepeatNgram", isNaN(parsed) ? 0 : Math.max(0, parsed));
+                  }}
+                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC] text-xs font-mono-num focus:outline-none focus:border-[#45CFFF]"
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between items-center text-[10px] text-[#91A0B4] mb-1">
+                  <span className="font-semibold uppercase">RNG SEED</span>
+                  <span className="text-[#5E7188] text-[9px]">{config.seed ? `#${config.seed}` : "Random"}</span>
+                </div>
+                <input
+                  type="number"
+                  placeholder="e.g. 42"
+                  value={config.seed}
+                  onChange={(e) => updateParam("seed", e.target.value)}
+                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC] text-xs font-mono-num placeholder-[#5E7188] focus:outline-none focus:border-[#45CFFF]"
+                />
+              </div>
+            </div>
+
+            {/* Presence & Frequency Penalties */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
+                  PRESENCE PENALTY
+                </label>
+                <input
+                  type="number"
+                  step="0.05"
+                  min="0.0"
                   max="2.0"
-                  value={repPenalty}
-                  onChange={(e) => setRepPenalty(parseFloat(e.target.value) || 1.2)}
-                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC]"
+                  value={config.presencePenalty}
+                  onChange={(e) => {
+                    const v = parseFloat(e.target.value);
+                    updateParam("presencePenalty", isNaN(v) ? 0 : Math.max(0, v));
+                  }}
+                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC] text-xs font-mono-num focus:outline-none focus:border-[#45CFFF]"
                 />
               </div>
 
               <div>
                 <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
-                  No Repeat N-Gram (0 = Off)
+                  FREQUENCY PENALTY
                 </label>
                 <input
                   type="number"
-                  min="0"
-                  max="10"
-                  value={noRepeatNgram}
+                  step="0.05"
+                  min="0.0"
+                  max="2.0"
+                  value={config.frequencyPenalty}
                   onChange={(e) => {
-                    const raw = e.target.value;
-                    if (raw === "") {
-                      setNoRepeatNgram(0);
-                      return;
-                    }
-                    const parsed = parseInt(raw, 10);
-                    setNoRepeatNgram(isNaN(parsed) ? 0 : Math.max(0, parsed));
+                    const v = parseFloat(e.target.value);
+                    updateParam("frequencyPenalty", isNaN(v) ? 0 : Math.max(0, v));
                   }}
-                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC]"
+                  className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC] text-xs font-mono-num focus:outline-none focus:border-[#45CFFF]"
                 />
               </div>
+            </div>
+
+            {/* Custom Stop Sequences */}
+            <div>
+              <label className="text-[10px] text-[#91A0B4] uppercase font-semibold block mb-1">
+                CUSTOM STOP SEQUENCES
+              </label>
+              <input
+                type="text"
+                placeholder="<|end_turn|>, \n\n, </s>"
+                value={config.stopSequences}
+                onChange={(e) => updateParam("stopSequences", e.target.value)}
+                className="w-full bg-[#0E1420] border border-[#273548] rounded-md px-2 py-1 text-[#ECF3FC] text-xs font-mono placeholder-[#5E7188] focus:outline-none focus:border-[#45CFFF]"
+              />
             </div>
           </div>
         </div>
@@ -406,7 +702,7 @@ export const EvaluationView: React.FC = () => {
                       ? "bg-[#45CFFF]/15 text-[#45CFFF] border-[#45CFFF]/30"
                       : "bg-[#0E1420] text-[#91A0B4] border-[#273548] hover:text-[#ECF3FC]"
                   )}
-                  title="Wrap prompt with <|user|> ... <|assistant|> and stop on <|end_turn|>"
+                  title="Wrap prompt with <|user|> ... <|assistant|> ChatML tags"
                 >
                   <Sparkles className="w-2.5 h-2.5" />
                   {isChatMode ? "CHAT FORMAT" : "RAW COMPLETION"}
@@ -425,7 +721,7 @@ export const EvaluationView: React.FC = () => {
                 </button>
                 <button
                   onClick={() => {
-                    setPrompt("Explică pe scurt ce este un model de limbaj neuronal.");
+                    setPrompt("Explică pe scurt ce este un model de limbaj neuronal și cum funcționează atenția.");
                     setIsChatMode(true);
                   }}
                   className="px-2 py-0.5 rounded-md bg-[#0E1420] border border-[#273548] text-[#91A0B4] hover:text-[#45CFFF] hover:border-[#45CFFF]/40 transition-colors"
@@ -434,9 +730,7 @@ export const EvaluationView: React.FC = () => {
                 </button>
                 <button
                   onClick={() => {
-                    setPrompt(
-                      "Definiția rețelelor neuronale artificiale și a mecanismului de atenție:"
-                    );
+                    setPrompt("Definiția rețelelor neuronale artificiale și a mecanismului de atenție:");
                     setIsChatMode(false);
                   }}
                   className="px-2 py-0.5 rounded-md bg-[#0E1420] border border-[#273548] text-[#91A0B4] hover:text-[#45CFFF] transition-colors"
@@ -445,7 +739,7 @@ export const EvaluationView: React.FC = () => {
                 </button>
                 <button
                   onClick={() => {
-                    setPrompt("Capitala României este București, iar istoria sa");
+                    setPrompt("Capitala României este București, iar istoria sa modernă începe cu");
                     setIsChatMode(false);
                   }}
                   className="px-2 py-0.5 rounded-md bg-[#0E1420] border border-[#273548] text-[#91A0B4] hover:text-[#45CFFF] transition-colors"
@@ -460,30 +754,57 @@ export const EvaluationView: React.FC = () => {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               className="w-full bg-[#0E1420] border border-[#273548] rounded-md p-2.5 text-[#ECF3FC] focus:outline-none focus:border-[#45CFFF]/50"
+              placeholder="Type your prompt here..."
             />
 
-            <div className="flex justify-end pt-1">
-              {!isCompareMode ? (
-                <button
-                  onClick={handleGenerate}
-                  disabled={isGenerating}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] disabled:opacity-40 text-[#090D14] font-bold transition-all shadow-sm"
-                >
-                  <Play className="w-3.5 h-3.5 fill-current" />
-                  {isGenerating ? "GENERATING TOKENS..." : "EXECUTE INFERENCE"}
-                </button>
-              ) : (
-                <button
-                  onClick={handleRunComparison}
-                  disabled={isComparing || compareCheckpoints.length === 0}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] disabled:opacity-40 text-[#090D14] font-bold transition-all shadow-sm"
-                >
-                  <Columns className="w-3.5 h-3.5" />
-                  {isComparing ? "COMPARING CHECKPOINTS..." : "COMPARE CHECKPOINTS"}
-                </button>
-              )}
+            <div className="flex justify-between items-center pt-1">
+              <div className="text-[10px] text-[#5E7188]">
+                {prompt.length} chars · ~{Math.round(prompt.length / 4)} tokens
+              </div>
+              <div>
+                {!isCompareMode ? (
+                  <button
+                    onClick={handleGenerate}
+                    disabled={isGenerating || !prompt.trim()}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] disabled:opacity-40 text-[#090D14] font-bold transition-all shadow-sm"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    {isGenerating ? "GENERATING TOKENS..." : "EXECUTE INFERENCE"}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleRunComparison}
+                    disabled={isComparing || compareCheckpoints.length === 0 || !prompt.trim()}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-[#45CFFF] hover:bg-[#80DEFF] disabled:opacity-40 text-[#090D14] font-bold transition-all shadow-sm"
+                  >
+                    <Columns className="w-3.5 h-3.5" />
+                    {isComparing ? "COMPARING CHECKPOINTS..." : `COMPARE (${compareCheckpoints.length}) CHECKPOINTS`}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
+
+          {/* Inline Error Alert */}
+          {evalError && (
+            <div className="p-3 rounded-lg bg-[#FF657A]/15 border border-[#FF657A]/40 text-[#FF657A] flex items-start justify-between gap-2 animate-in fade-in">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <div>
+                  <strong className="block text-xs font-bold uppercase tracking-wider">Inference Error</strong>
+                  <p className="text-[11px] text-[#FF657A]/90 mt-0.5 whitespace-pre-wrap">{evalError}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEvalError(null)}
+                className="text-[#FF657A] hover:opacity-80 p-1"
+                title="Dismiss"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Single Generation Output */}
           {!isCompareMode && (
@@ -491,18 +812,22 @@ export const EvaluationView: React.FC = () => {
               <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/15 to-transparent pointer-events-none" />
 
               <div className="flex items-center justify-between pb-2 border-b border-[#273548]">
-                <span className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider">
-                  GENERATED COMPLETION
+                <span className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-[#45CFFF]" /> GENERATED COMPLETION
                 </span>
                 {generationResult && (
                   <div className="flex items-center gap-3 text-[10px] font-mono text-[#91A0B4]">
                     <span className="flex items-center gap-1">
                       <Gauge className="w-3 h-3 text-[#45CFFF]" />
-                      <span className="text-[#ECF3FC] font-mono-num font-bold">{Math.round(generationResult.tokens_per_second || 0)}</span> tok/s
+                      <span className="text-[#ECF3FC] font-mono-num font-bold">
+                        {Math.round(generationResult.tokens_per_sec || generationResult.tokens_per_second || 0)}
+                      </span> tok/s
                     </span>
                     <span className="flex items-center gap-1">
                       <Clock className="w-3 h-3 text-[#9B8CFF]" />
-                      <span className="text-[#ECF3FC] font-mono-num">{generationResult.generation_time_sec?.toFixed(2)}s</span>
+                      <span className="text-[#ECF3FC] font-mono-num">
+                        {generationResult.generation_time_sec?.toFixed(2) || "0.00"}s
+                      </span>
                     </span>
                     <span className="flex items-center gap-1">
                       <Cpu className="w-3 h-3 text-[#5E7188]" />
@@ -513,15 +838,21 @@ export const EvaluationView: React.FC = () => {
               </div>
 
               {generationResult ? (
-                <div className="p-3 bg-[#090D14] border border-[#273548] rounded-md font-mono text-xs leading-relaxed text-[#ECF3FC] whitespace-pre-wrap">
+                <div className="p-3 bg-[#090D14] border border-[#273548] rounded-md font-mono text-xs leading-relaxed text-[#ECF3FC] whitespace-pre-wrap select-text">
                   {isChatMode ? (
                     <div>
                       <div className="text-[10px] text-[#45CFFF] font-bold uppercase mb-1 flex items-center gap-1.5">
-                        <Sparkles className="w-3 h-3 text-[#45CFFF]" />
-                        <span>ASSISTANT GENERATION:</span>
+                        <CheckCircle2 className="w-3 h-3 text-[#35D49A]" />
+                        <span>ASSISTANT OUTPUT:</span>
                       </div>
                       <div className="text-[#ECF3FC] pl-2 border-l-2 border-[#45CFFF]/50">
-                        {generationResult.completion || generationResult.generated_text}
+                        {(generationResult.completion || generationResult.generated_text) ? (
+                          generationResult.completion || generationResult.generated_text
+                        ) : (
+                          <span className="text-[#5E7188] italic">
+                            [Model emitted stop/EOS token immediately; no output tokens generated]
+                          </span>
+                        )}
                       </div>
                     </div>
                   ) : (
@@ -533,7 +864,14 @@ export const EvaluationView: React.FC = () => {
                 </div>
               ) : (
                 <div className="h-32 flex items-center justify-center text-[#5E7188] font-mono text-xs">
-                  Enter prompt and click Execute Inference to evaluate model outputs.
+                  {isGenerating ? (
+                    <div className="flex items-center gap-2 text-[#45CFFF]">
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Synthesizing tokens from transformer forward pass...</span>
+                    </div>
+                  ) : (
+                    <span>Configure parameters and click Execute Inference to evaluate output quality.</span>
+                  )}
                 </div>
               )}
             </div>
@@ -545,37 +883,90 @@ export const EvaluationView: React.FC = () => {
               <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-[#45CFFF]/15 to-transparent pointer-events-none" />
 
               <div className="flex items-center justify-between pb-2 border-b border-[#273548]">
-                <span className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider">
-                  COMPARISON MATRIX ({compareResults.length} checkpoints)
+                <span className="text-xs font-bold text-[#ECF3FC] uppercase tracking-wider flex items-center gap-1.5">
+                  <Columns className="w-3.5 h-3.5 text-[#45CFFF]" />
+                  CHECKPOINT COMPARISON MATRIX ({compareResults.length} / {compareCheckpoints.length} evaluated)
                 </span>
+                {compareResults.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setCompareResults([])}
+                    className="text-[10px] text-[#91A0B4] hover:text-[#ECF3FC]"
+                  >
+                    Clear Results
+                  </button>
+                )}
               </div>
 
               {compareResults.length === 0 ? (
                 <div className="h-32 flex items-center justify-center text-[#5E7188] font-mono text-xs">
-                  Select 2+ checkpoints and click Compare Checkpoints to view side-by-side outputs.
+                  {isComparing ? (
+                    <div className="flex items-center gap-2 text-[#45CFFF]">
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Running sequential inference passes across selected checkpoints...</span>
+                    </div>
+                  ) : (
+                    <span>Select 2+ checkpoints on the left and click Compare Checkpoints.</span>
+                  )}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {compareResults.map((r, i) => (
-                    <div
-                      key={i}
-                      className="p-3 rounded-lg bg-[#0E1420] border border-[#273548] space-y-2 flex flex-col justify-between"
-                    >
-                      <div className="flex justify-between items-center pb-1.5 border-b border-[#273548] text-[10px]">
-                        <span className="font-bold text-[#45CFFF] truncate max-w-[180px]">
-                          {r.checkpoint}
-                        </span>
-                        <span className="text-[#5E7188]">Step {r.step || "—"}</span>
+                  {compareResults.map((r, i) => {
+                    const isErr = r.success === false || !!r.error;
+                    const text = r.generated_text || r.completion || "";
+                    const modelTitle = r.checkpoint || r.checkpoint_name || `Model #${i + 1}`;
+                    return (
+                      <div
+                        key={i}
+                        className={cn(
+                          "p-3 rounded-lg border space-y-2 flex flex-col justify-between transition-all",
+                          isErr
+                            ? "bg-[#FF657A]/10 border-[#FF657A]/40"
+                            : "bg-[#0E1420] border-[#273548]"
+                        )}
+                      >
+                        <div className="flex justify-between items-center pb-1.5 border-b border-[#273548] text-[10px]">
+                          <span className={cn("font-bold truncate max-w-[200px]", isErr ? "text-[#FF657A]" : "text-[#45CFFF]")}>
+                            {modelTitle}
+                          </span>
+                          <span className="text-[#5E7188] font-mono-num">
+                            Step {r.step || "—"} {r.val_loss ? `| Val ${Number(r.val_loss).toFixed(4)}` : ""}
+                          </span>
+                        </div>
+
+                        <div className="text-xs text-[#ECF3FC] whitespace-pre-wrap leading-relaxed flex-1 py-1 font-mono select-text">
+                          {isErr ? (
+                            <span className="text-[#FF657A] flex items-center gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                              <span>{r.error || text || "Evaluation failed on this checkpoint."}</span>
+                            </span>
+                          ) : text.trim() ? (
+                            text
+                          ) : (
+                            <span className="text-[#5E7188] italic">
+                              [Model emitted stop/EOS token immediately; no output tokens generated]
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="pt-1.5 border-t border-[#273548] flex justify-between text-[10px] text-[#91A0B4]">
+                          <span>
+                            Speed:{" "}
+                            <strong className="text-[#ECF3FC] font-mono-num">
+                              {Math.round(r.tokens_per_sec || r.tokens_per_second || 0)}
+                            </strong>{" "}
+                            tok/s
+                          </span>
+                          <span>
+                            Time:{" "}
+                            <strong className="text-[#ECF3FC] font-mono-num">
+                              {r.generation_time_sec?.toFixed(2) || "0.00"}s
+                            </strong>
+                          </span>
+                        </div>
                       </div>
-                      <p className="text-xs text-[#ECF3FC] whitespace-pre-wrap leading-relaxed flex-1">
-                        {r.generated_text}
-                      </p>
-                      <div className="pt-1.5 border-t border-[#273548] flex justify-between text-[10px] text-[#91A0B4]">
-                        <span>Speed: <strong className="text-[#ECF3FC] font-mono-num">{Math.round(r.tokens_per_second || 0)}</strong> tok/s</span>
-                        <span>Time: <strong className="text-[#ECF3FC] font-mono-num">{r.generation_time_sec?.toFixed(2)}s</strong></span>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

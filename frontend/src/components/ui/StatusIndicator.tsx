@@ -9,6 +9,38 @@ interface StatusIndicatorProps {
   className?: string;
 }
 
+type StateStyle = {
+  dot: string;
+  text: string;
+  ring: string;
+  pulse?: boolean;
+};
+
+const STATE_STYLES: Record<string, StateStyle> = {
+  RUNNING: {
+    dot: "bg-[#45CFFF]",
+    text: "text-[#45CFFF]",
+    ring: "bg-[rgba(69,207,255,0.35)]",
+    pulse: true,
+  },
+  STARTING: {
+    dot: "bg-[#80DEFF]",
+    text: "text-[#80DEFF]",
+    ring: "bg-[rgba(128,222,255,0.3)]",
+    pulse: true,
+  },
+  PAUSED: { dot: "bg-[#F2B85B]", text: "text-[#F2B85B]", ring: "bg-[rgba(242,184,91,0.3)]" },
+  STOPPING: { dot: "bg-[#F2B85B]", text: "text-[#F2B85B]", ring: "bg-[rgba(242,184,91,0.3)]" },
+  STOPPED: { dot: "bg-[#8291A5]", text: "text-[#91A0B4]", ring: "bg-[rgba(130,145,165,0.25)]" },
+  COMPLETED: { dot: "bg-[#35D49A]", text: "text-[#35D49A]", ring: "bg-[rgba(53,212,154,0.3)]" },
+  FAILED: { dot: "bg-[#FF657A]", text: "text-[#FF657A]", ring: "bg-[rgba(255,101,122,0.35)]", pulse: true },
+  CRITICAL: { dot: "bg-[#FF657A]", text: "text-[#FF657A]", ring: "bg-[rgba(255,101,122,0.35)]", pulse: true },
+  ERROR: { dot: "bg-[#FF657A]", text: "text-[#FF657A]", ring: "bg-[rgba(255,101,122,0.35)]", pulse: true },
+  IDLE: { dot: "bg-[#5E7188]", text: "text-[#91A0B4]", ring: "bg-[rgba(94,113,136,0.2)]" },
+};
+
+const FALLBACK: StateStyle = STATE_STYLES.IDLE;
+
 export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
   state = "IDLE",
   size = "md",
@@ -16,76 +48,29 @@ export const StatusIndicator: React.FC<StatusIndicatorProps> = ({
   className,
 }) => {
   const normalized = state.toUpperCase();
-
-  let colorBg = "bg-[#5E7188]";
-  let colorGlow = "rgba(94, 113, 136, 0.4)";
-  let textColor = "text-[#91A0B4]";
-  let isPulsing = false;
-
-  switch (normalized) {
-    case "RUNNING":
-      colorBg = "bg-[#45CFFF]";
-      colorGlow = "rgba(69, 207, 255, 0.6)";
-      textColor = "text-[#45CFFF]";
-      isPulsing = true;
-      break;
-    case "STARTING":
-      colorBg = "bg-[#80DEFF]";
-      colorGlow = "rgba(128, 222, 255, 0.5)";
-      textColor = "text-[#80DEFF]";
-      isPulsing = true;
-      break;
-    case "PAUSED":
-      colorBg = "bg-[#F2B85B]";
-      colorGlow = "rgba(242, 184, 91, 0.5)";
-      textColor = "text-[#F2B85B]";
-      break;
-    case "COMPLETED":
-      colorBg = "bg-[#35D49A]";
-      colorGlow = "rgba(53, 212, 154, 0.5)";
-      textColor = "text-[#35D49A]";
-      break;
-    case "FAILED":
-    case "CRITICAL":
-    case "ERROR":
-      colorBg = "bg-[#FF657A]";
-      colorGlow = "rgba(255, 101, 122, 0.6)";
-      textColor = "text-[#FF657A]";
-      isPulsing = true;
-      break;
-    case "STOPPING":
-      colorBg = "bg-[#F2B85B]";
-      colorGlow = "rgba(242, 184, 91, 0.5)";
-      textColor = "text-[#F2B85B]";
-      break;
-    default:
-      colorBg = "bg-[#5E7188]";
-      colorGlow = "rgba(94, 113, 136, 0.2)";
-      textColor = "text-[#91A0B4]";
-      break;
-  }
+  const style = STATE_STYLES[normalized] ?? FALLBACK;
 
   const dotSize =
-    size === "sm" ? "w-2 h-2" : size === "lg" ? "w-3.5 h-3.5" : "w-2.5 h-2.5";
+    size === "sm" ? "w-2 h-2" : size === "lg" ? "w-3 h-3" : "w-2.5 h-2.5";
 
   return (
-    <div className={cn("inline-flex items-center gap-2", className)}>
-      <span className="relative flex items-center justify-center">
-        {isPulsing && (
-          <span
-            className={cn("absolute rounded-full animate-ping opacity-75", dotSize, colorBg)}
-          />
+    <div
+      className={cn("inline-flex items-center gap-2", className)}
+      title={normalized}
+      role="status"
+      aria-label={`Run state: ${normalized}`}
+    >
+      <span className="relative flex items-center justify-center" aria-hidden="true">
+        {style.pulse && (
+          <span className={cn("absolute rounded-full animate-ping opacity-60", dotSize, style.ring)} />
         )}
-        <span
-          className={cn("relative rounded-full shadow-sm", dotSize, colorBg)}
-          style={{ boxShadow: `0 0 8px ${colorGlow}` }}
-        />
+        <span className={cn("relative rounded-full", dotSize, style.dot)} />
       </span>
       {showLabel && (
         <span
           className={cn(
-            "font-mono text-xs font-semibold tracking-wider uppercase",
-            textColor
+            "font-mono text-[11px] font-semibold tracking-[0.08em] uppercase",
+            style.text
           )}
         >
           {normalized}

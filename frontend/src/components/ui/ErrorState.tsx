@@ -1,42 +1,54 @@
 import React from "react";
 import { cn } from "@/lib/utils";
 import { AlertTriangle, RefreshCw } from "lucide-react";
+import { Button } from "./Button";
 
 interface ErrorStateProps {
   title?: string;
   message: string;
+  hint?: string;
   onRetry?: () => void;
+  retrying?: boolean;
   className?: string;
 }
 
 export const ErrorState: React.FC<ErrorStateProps> = ({
-  title = "Telemetry Error",
+  title = "Something went wrong",
   message,
+  hint,
   onRetry,
+  retrying = false,
   className,
 }) => {
   return (
     <div
+      role="alert"
       className={cn(
-        "glass-panel border-[#FF657A]/30 rounded-lg p-6 flex flex-col items-center justify-center text-center space-y-3",
+        "panel flex flex-col items-center justify-center text-center gap-3 p-8 border-[rgba(255,101,122,0.28)]",
         className
       )}
     >
-      <div className="p-2.5 bg-[#FF657A]/10 rounded-full border border-[#FF657A]/30 text-[#FF657A]">
-        <AlertTriangle className="w-6 h-6" />
+      <div className="flex items-center justify-center w-11 h-11 rounded-full border border-[rgba(255,101,122,0.3)] bg-[rgba(255,101,122,0.08)] text-[#FF657A]">
+        <AlertTriangle className="w-5 h-5" aria-hidden="true" />
       </div>
-      <h4 className="font-mono text-sm font-semibold text-[#FF657A] uppercase tracking-wider">
+      <h4 className="font-mono text-[12px] font-semibold text-[#FF657A] uppercase tracking-wider">
         {title}
       </h4>
-      <p className="text-xs font-mono text-[#91A0B4] max-w-md">{message}</p>
+      <p className="max-w-md text-[12px] leading-relaxed text-[#C3CEE0] font-mono break-words">
+        {message}
+      </p>
+      {hint && <p className="max-w-md text-[11px] leading-relaxed text-[#5E7188]">{hint}</p>}
       {onRetry && (
-        <button
+        <Button
+          variant="secondary"
+          size="sm"
           onClick={onRetry}
-          className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#182333] border border-[#273548] hover:border-[#45CFFF] text-xs font-mono text-[#ECF3FC] transition-colors"
+          loading={retrying}
+          icon={<RefreshCw className="w-3.5 h-3.5 text-[#45CFFF]" />}
+          className="mt-1"
         >
-          <RefreshCw className="w-3.5 h-3.5 text-[#45CFFF]" />
-          RETRY
-        </button>
+          Retry
+        </Button>
       )}
     </div>
   );

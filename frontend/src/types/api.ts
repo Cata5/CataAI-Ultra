@@ -179,6 +179,8 @@ export interface CheckpointItem {
   created_at?: string;
   path: string;
   is_best?: boolean;
+  is_saved_model?: boolean;
+  model_name?: string;
 }
 
 export interface DatasetItem {

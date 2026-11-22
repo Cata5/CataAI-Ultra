@@ -228,5 +228,87 @@ class TestStreamingInference(unittest.TestCase):
         self.assertEqual(full_text, "Salut lume!")
 
 
+class TestLocalModelSaver(unittest.TestCase):
+    """Verifies local model package saving with keep-training .pt, stripped .pt, and charts."""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp()
+        self.chk_dir = os.path.join(self.test_dir, "checkpoints")
+        self.models_dir = os.path.join(self.test_dir, "models")
+        os.makedirs(self.chk_dir, exist_ok=True)
+        os.makedirs(self.models_dir, exist_ok=True)
+
+        from src.checkpoints.manager import CheckpointManager
+        self.mgr = CheckpointManager(checkpoint_dir=self.chk_dir)
+
+    def tearDown(self):
+        shutil.rmtree(self.test_dir, ignore_errors=True)
+
+    def test_save_local_model_package_dual_weights_and_charts(self):
+        # Create a simple dummy model with linear layers and optimizer
+        model = nn.Sequential(
+            nn.Linear(16, 32),
+            nn.ReLU(),
+            nn.Linear(32, 16),
+        )
+        opt = torch.optim.AdamW(model.parameters(), lr=1e-3)
+        # Populate optimizer state
+        dummy_in = torch.randn(2, 16)
+        loss = model(dummy_in).sum()
+        loss.backward()
+        opt.step()
+
+        # Dummy metrics history
+        metrics = [
+            {"step": i, "train_loss": 3.0 - 0.01 * i, "val_loss": 3.2 - 0.008 * i if i % 10 == 0 else None,
+             "muon_lr": 0.02, "adamw_lr": 0.002, "tokens_per_second": 5000, "step_time_ms": 150}
+            for i in range(1, 31)
+        ]
+
+        result = self.mgr.save_local_model_package(
+            model_id="test_model_48m",
+            custom_name="my_custom_model",
+            save_mode="current",
+            active_model=model,
+            active_optimizers=(None, opt),
+            metrics_history=metrics,
+            output_base_dir=self.models_dir,
+        )
+
+        self.assertIn("files", result)
+        full_info = result["files"]["full_weights"]
+        stripped_info = result["files"]["stripped_weights"]
+
+        # Check full .pt exists and loads
+        self.assertTrue(os.path.exists(full_info["path"]))
+        full_sd = torch.load(full_info["path"], map_location="cpu", weights_only=False)
+        self.assertIn("model_state_dict", full_sd)
+        self.assertIn("adamw_state_dict", full_sd)
+        self.assertEqual(full_sd["type"], "keep_training")
+
+        # Check stripped .pt exists and loads without optimizer states
+        self.assertTrue(os.path.exists(stripped_info["path"]))
+        stripped_sd = torch.load(stripped_info["path"], map_location="cpu", weights_only=False)
+        self.assertIn("model_state_dict", stripped_sd)
+        self.assertNotIn("adamw_state_dict", stripped_sd)
+        self.assertEqual(stripped_sd["type"], "stripped_inference")
+
+        # Check file size reduction: stripped weights should be smaller or equal
+        self.assertLessEqual(stripped_info["size_bytes"], full_info["size_bytes"])
+
+        # Check metadata.json exists
+        meta_path = os.path.join(self.models_dir, "my_custom_model", "metadata.json")
+        self.assertTrue(os.path.exists(meta_path))
+
+        # Check generated charts
+        charts = result["files"]["charts"]
+        self.assertIn("val_loss_curve", charts)
+        self.assertIn("training_dynamics", charts)
+        val_chart_file = os.path.join(self.models_dir, "my_custom_model", charts["val_loss_curve"])
+        dynamics_chart_file = os.path.join(self.models_dir, "my_custom_model", charts["training_dynamics"])
+        self.assertTrue(os.path.exists(val_chart_file))
+        self.assertTrue(os.path.exists(dynamics_chart_file))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -326,15 +326,11 @@ class TrainingWorkerProcess:
         start_tokens = 0
         if checkpoint_to_load:
             try:
-                cand_p = Path(checkpoint_to_load)
-                if not cand_p.is_absolute() and not cand_p.exists():
-                    for search_dir in [Path("checkpoints"), self.checkpoint_manager.checkpoint_dir, Path(r"d:\proiecte\LLM from Scratch\checkpoints")]:
-                        if (search_dir / cand_p.name).exists():
-                            checkpoint_to_load = str((search_dir / cand_p.name).resolve())
-                            break
+                resolved_chk_p = self.checkpoint_manager.resolve_checkpoint_path(checkpoint_to_load)
+                checkpoint_to_load = str(resolved_chk_p)
 
                 load_res = self.checkpoint_manager.load_checkpoint(
-                    checkpoint_path=checkpoint_to_load,
+                    checkpoint_path=resolved_chk_p,
                     model=model,
                     optimizers=(muon_opt, adamw_opt),
                     scheduler=scheduler,
@@ -989,6 +985,78 @@ class TrainingWorkerProcess:
                         is_completed = True
 
                 if is_completed:
+                    # Ensure final validation pass runs so the run completes with true final evaluation metrics
+                    if val_inputs is not None and self.latest_val_step != step:
+                        logger.info("Executing final completion validation sweep at step %d...", step)
+                        model.eval()
+                        val_loss_acc = 0.0
+                        with torch.no_grad():
+                            with torch.autocast(device_type=device.type, dtype=torch.bfloat16 if device.type == "cuda" else torch.float32):
+                                for v_idx in range(val_batches):
+                                    v_start = (v_idx * batch_len) % val_len
+                                    v_idx_tensor = (torch.arange(batch_len, device=device) + v_start) % val_len
+                                    if is_seq_tokens:
+                                        v_in_batch = val_inputs[v_idx_tensor].view(training_cfg.micro_batch_size, training_cfg.seq_len)
+                                        v_tgt_batch = (
+                                            val_labels[v_idx_tensor].view(training_cfg.micro_batch_size, training_cfg.seq_len)
+                                            if val_labels is not None
+                                            else v_in_batch
+                                        )
+                                    else:
+                                        v_in_batch = val_inputs[v_idx_tensor]
+                                        v_tgt_batch = val_labels[v_idx_tensor] if val_labels is not None else None
+
+                                    v_loss_t, _, _ = task_adapter.forward_loss(
+                                        model=model,
+                                        inputs=v_in_batch,
+                                        targets=v_tgt_batch,
+                                        loss_fn=trainer.loss_fn,
+                                        autocast_dtype=training_cfg.dtype,
+                                    )
+                                    val_loss_acc += float(v_loss_t.item())
+
+                        val_loss = val_loss_acc / val_batches
+                        self.latest_val_loss = val_loss
+                        self.latest_val_step = step
+                        self.latest_val_timestamp = time.time()
+
+                        val_record = detector.evaluate_step(
+                            step=step,
+                            train_loss=train_loss,
+                            val_loss=val_loss,
+                            model=model,
+                        )
+                        gen_gap = val_record.generalization_gap
+
+                        if detector.best_step == step:
+                            logger.info("Final step %d achieved new best validation loss: %.4f", step, val_loss)
+                            self.checkpoint_manager.save_checkpoint(
+                                model=model,
+                                step=step,
+                                tokens_seen=total_tokens,
+                                optimizers=(muon_opt, adamw_opt),
+                                scheduler=scheduler,
+                                phase=phase,
+                                val_loss=val_loss,
+                                train_loss=train_loss,
+                                run_id=run_id,
+                                is_best=True,
+                            )
+
+                    # Generate training and validation charts in checkpoint folder
+                    try:
+                        from ..checkpoints.charts import generate_training_charts
+                        run_metrics = self.db.get_metrics_history(run_id, limit=3000)
+                        generate_training_charts(
+                            metrics=run_metrics,
+                            output_dir=self.checkpoint_manager.checkpoint_dir,
+                            model_id=run_id or "run",
+                            best_step=detector.best_step,
+                            best_val_loss=detector.best_val_loss if detector.best_val_loss < float("inf") else self.latest_val_loss,
+                        )
+                    except Exception as ce:
+                        logger.warning("Could not auto-generate training charts on completion: %s", ce)
+
                     self.checkpoint_manager.save_checkpoint(
                         model=model,
                         step=step,
@@ -996,6 +1064,8 @@ class TrainingWorkerProcess:
                         optimizers=(muon_opt, adamw_opt),
                         scheduler=scheduler,
                         phase=phase,
+                        val_loss=self.latest_val_loss,
+                        train_loss=train_loss,
                         run_id=run_id,
                         filename_prefix="final_phase_completed",
                     )
@@ -1004,7 +1074,7 @@ class TrainingWorkerProcess:
                         get_notifier(db=self.db).notify_run_completed(
                             run_id=run_id,
                             step=step,
-                            final_loss=float(val_loss) if val_loss is not None else None,
+                            final_loss=float(self.latest_val_loss) if self.latest_val_loss is not None else (float(val_loss) if val_loss is not None else None),
                             tokens_seen=total_tokens,
                         )
                     except Exception as n_err:
@@ -1015,6 +1085,12 @@ class TrainingWorkerProcess:
                         event_type=EventType.RUN_COMPLETED,
                         run_id=run_id,
                         step=step,
+                        payload={
+                            "final_val_loss": self.latest_val_loss,
+                            "final_train_loss": train_loss,
+                            "best_val_loss": detector.best_val_loss,
+                            "best_step": detector.best_step,
+                        },
                     ))
                     break
 
@@ -1053,6 +1129,18 @@ class TrainingWorkerProcess:
                         run_id=run_id,
                         filename_prefix="stopped_snapshot",
                     )
+                    try:
+                        from ..checkpoints.charts import generate_training_charts
+                        run_metrics = self.db.get_metrics_history(run_id, limit=3000)
+                        generate_training_charts(
+                            metrics=run_metrics,
+                            output_dir=self.checkpoint_manager.checkpoint_dir,
+                            model_id=run_id or "run",
+                            best_step=detector.best_step,
+                            best_val_loss=detector.best_val_loss if detector.best_val_loss < float("inf") else self.latest_val_loss,
+                        )
+                    except Exception as ce:
+                        logger.debug("Chart generation on stop: %s", ce)
                 except Exception as save_err:
                     logger.warning("Could not save stopped snapshot: %s", save_err)
 

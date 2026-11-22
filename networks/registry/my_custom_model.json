@@ -1,0 +1,29 @@
+{
+  "id": "my_custom_model",
+  "name": "my_custom_model",
+  "description": "Saved local model package my_custom_model (Trained checkpoint step 0, val loss None).",
+  "architecture_family": "decoder_only",
+  "vocab_size": 12288,
+  "max_seq_len": 2048,
+  "d_model": 512,
+  "n_layers": 16,
+  "n_q": 8,
+  "n_kv": 2,
+  "d_h": 64,
+  "d_ff": 1280,
+  "norm_type": "rmsnorm",
+  "activation": "swiglu",
+  "pos_encoding": "rope",
+  "has_conv1d": true,
+  "conv_kernel_size": 4,
+  "qk_norm": true,
+  "pre_norm": true,
+  "tie_word_embeddings": true,
+  "supported_tasks": [
+    "causal_lm"
+  ],
+  "version": "1.0",
+  "total_parameters": 48284160,
+  "created_at": 1794678857.2469065,
+  "updated_at": 1794678857.2469075
+}
