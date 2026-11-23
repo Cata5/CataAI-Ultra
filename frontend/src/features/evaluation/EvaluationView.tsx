@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 
 interface SamplingConfig {
   maxTokens: number;
+  minTokens: number;
   temperature: number;
   topP: number;
   topK: number;
@@ -40,6 +41,7 @@ interface SamplingConfig {
 
 const DEFAULT_CONFIG: SamplingConfig = {
   maxTokens: 128,
+  minTokens: 1,
   temperature: 0.7,
   topP: 0.9,
   topK: 50,
@@ -133,6 +135,7 @@ export const EvaluationView: React.FC = () => {
         prompt: formatted,
         checkpoint: selectedCheckpoint || undefined,
         max_new_tokens: config.maxTokens,
+        min_new_tokens: config.minTokens,
         temperature: config.temperature,
         top_p: config.topP,
         top_k: config.topK,
@@ -173,6 +176,7 @@ export const EvaluationView: React.FC = () => {
         prompt: formatted,
         checkpoint_paths: compareCheckpoints,
         max_new_tokens: config.maxTokens,
+        min_new_tokens: config.minTokens,
         temperature: config.temperature,
         top_p: config.topP,
         top_k: config.topK,
@@ -439,29 +443,54 @@ export const EvaluationView: React.FC = () => {
               </button>
             </div>
 
-            {/* Max New Tokens */}
-            <div>
-              <div className="flex justify-between items-center text-[10px] text-[#737373] mb-1">
-                <span className="uppercase">Max Tokens</span>
+            {/* Max & Min New Tokens */}
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <div className="flex justify-between items-center text-[10px] text-[#A3A3A3] font-medium mb-1">
+                  <span className="uppercase">Min Tokens</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="256"
+                    value={config.minTokens}
+                    onChange={(e) => updateParam("minTokens", Math.max(1, parseInt(e.target.value) || 1))}
+                    className="input w-14 text-right h-5 px-1 font-mono-num text-[10px]"
+                    title="Minimum tokens before EOS/stop tokens are allowed"
+                  />
+                </div>
                 <input
-                  type="number"
-                  min="16"
-                  max="2048"
-                  step="16"
-                  value={config.maxTokens}
-                  onChange={(e) => updateParam("maxTokens", Math.max(16, parseInt(e.target.value) || 16))}
-                  className="input w-16 text-right h-5 px-1 font-mono-num text-[10px]"
+                  type="range"
+                  min="1"
+                  max="64"
+                  value={config.minTokens}
+                  onChange={(e) => updateParam("minTokens", parseInt(e.target.value))}
+                  className="range"
                 />
               </div>
-              <input
-                type="range"
-                min="16"
-                max="1024"
-                step="16"
-                value={config.maxTokens}
-                onChange={(e) => updateParam("maxTokens", parseInt(e.target.value))}
-                className="range"
-              />
+
+              <div>
+                <div className="flex justify-between items-center text-[10px] text-[#A3A3A3] font-medium mb-1">
+                  <span className="uppercase">Max Tokens</span>
+                  <input
+                    type="number"
+                    min="16"
+                    max="2048"
+                    step="16"
+                    value={config.maxTokens}
+                    onChange={(e) => updateParam("maxTokens", Math.max(16, parseInt(e.target.value) || 16))}
+                    className="input w-14 text-right h-5 px-1 font-mono-num text-[10px]"
+                  />
+                </div>
+                <input
+                  type="range"
+                  min="16"
+                  max="1024"
+                  step="16"
+                  value={config.maxTokens}
+                  onChange={(e) => updateParam("maxTokens", parseInt(e.target.value))}
+                  className="range"
+                />
+              </div>
             </div>
 
             {/* Temperature */}

@@ -153,6 +153,7 @@ class InferenceEngine:
         self,
         prompt: str,
         max_new_tokens: int = 128,
+        min_new_tokens: int = 1,
         temperature: float = 0.7,
         top_p: float = 0.9,
         top_k: int = 50,
@@ -259,7 +260,18 @@ class InferenceEngine:
                 next_token = torch.argmax(next_token_logits, dim=-1).item()
 
             if next_token in stops:
-                break
+                if len(generated_token_ids) >= min_new_tokens:
+                    break
+                else:
+                    for s in stops:
+                        next_token_logits[s] = -float("Inf")
+                    if temperature > 0:
+                        probs = F.softmax(next_token_logits, dim=-1)
+                        next_token = torch.multinomial(probs, num_samples=1).item()
+                    else:
+                        next_token = torch.argmax(next_token_logits, dim=-1).item()
+                    if next_token in stops:
+                        break
 
             generated_token_ids.append(next_token)
             token_counts[next_token] = token_counts.get(next_token, 0) + 1
@@ -374,7 +386,18 @@ class InferenceEngine:
                 next_token = torch.argmax(next_token_logits, dim=-1).item()
 
             if next_token in stops:
-                break
+                if len(generated_token_ids) >= min_new_tokens:
+                    break
+                else:
+                    for s in stops:
+                        next_token_logits[s] = -float("Inf")
+                    if temperature > 0:
+                        probs = F.softmax(next_token_logits, dim=-1)
+                        next_token = torch.multinomial(probs, num_samples=1).item()
+                    else:
+                        next_token = torch.argmax(next_token_logits, dim=-1).item()
+                    if next_token in stops:
+                        break
 
             generated_token_ids.append(next_token)
             curr_ids = torch.cat([curr_ids, torch.tensor([[next_token]], device=self.device)], dim=1)

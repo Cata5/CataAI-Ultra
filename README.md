@@ -1,170 +1,146 @@
 # LLM Maker 🧠⚡
-> **High-Performance Local Neural Architecture Studio & LLM Training Platform**
+> **High-Performance Local Neural Architecture Studio & Distributed LLM Training Platform**
 
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.2+-EE4C2C.svg?style=flat&logo=pytorch)](https://pytorch.org)
 [![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900.svg?style=flat&logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
-[![Next.js](https://img.shields.io/badge/Next.js-14-black.svg?style=flat&logo=next.js)](https://nextjs.org)
+[![Tauri](https://img.shields.io/badge/Tauri-2.0-24C8DB.svg?style=flat&logo=tauri)](https://tauri.app)
+[![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat&logo=rust)](https://rust-lang.org)
+[![Next.js](https://img.shields.io/badge/Next.js-16-black.svg?style=flat&logo=next.js)](https://nextjs.org)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/Tests-272%20Passed-brightgreen.svg)]()
 
-**LLM Maker** is an end-to-end, local-first research platform designed to democratize pretraining, fine-tuning, and architectural experimentation for Large Language Models. Built for consumer hardware (from 6GB VRAM laptop GPUs up to enterprise clusters), it combines a **visual node-based neural architecture builder**, **WDDM-aware zero-paging VRAM protection**, **hybrid Muon + AdamW optimizers**, and a **multi-phase training engine** (Pretrain &rarr; SFT &rarr; Chat).
+**LLM Maker** is an end-to-end, local-first research platform designed to democratize pretraining, post-training alignment, and architectural experimentation for Large Language Models. Built for consumer hardware (from 6GB VRAM laptop GPUs up to multi-node distributed clusters), it combines a **native desktop workstation** (Rust + Tauri 2.0), **visual node-based neural architecture studio**, **WDDM-aware zero-paging VRAM protection**, **hybrid Muon + AdamW optimizers**, **percentage-based WSD scheduling**, and **Hugging Face Hub foundation imports**.
 
 ---
 
-## 🚀 Key Features
+## 📸 Platform Tour
 
-### 1. Visual Neural Architecture Builder
+### 1. Visual Neural Architecture Studio
+Design, inspect, and benchmark custom transformer and hybrid architectures on a node-based visual canvas. Validates tensor shapes and calculates memory headroom in real time before training.
+
+![Network Studio](screenshots/network_studio.png)
+
+---
+
+### 2. Training Controller & Dynamic WSD Engine
+Real-time loss telemetry, percentage-based Warmup-Stable-Decay scheduling curve visualization, on-the-fly learning rate steering, and zero-paging VRAM protection.
+
+![Training Controller](screenshots/training.png)
+
+---
+
+### 3. Evaluation & Interactive Inference Lab
+Test model checkpoints with full sampling controls (temperature, top-p, top-k, min-p, min new tokens, repetition penalties, chat templates), multi-model comparison matrix, and automated benchmark suites.
+
+![Evaluation & Inference Lab](screenshots/evaluation.png)
+
+---
+
+### 4. Dataset Manager & Binary Memmap Tokenization
+Inspect, curate, and tokenize datasets into high-speed binary memmaps (`.bin` + `.meta.json`). Guarantees zero runtime tokenization overhead and constant memory consumption.
+
+![Dataset Manager](screenshots/datasets.png)
+
+---
+
+## 🚀 Key Capabilities
+
+### 1. Native Desktop Workstation (Rust + Tauri 2.0)
+- **Zero Browser Overhead**: Ships as an optimized native executable (`llm-maker.exe`) communicating directly with a decoupled Python ML worker via high-speed asynchronous OS IPC.
+- **0 MB Idle VRAM**: When not actively training, PyTorch CUDA memory is cleanly released back to the operating system, keeping GPU idle consumption at 0 MB.
+- **Resilient Process Supervisor**: Continuous stderr streaming to `tauri_debug.log` prevents OS pipe buffer exhaustion and captures worker telemetry without deadlocks.
+- **Dual Mode**: Run natively on the desktop or launch as a shared web studio over your LAN.
+
+### 2. Flexible Compute Targets: Single GPU, CPU, Multi-GPU & Cluster DDP
+LLM Maker dynamically inspects your hardware topology via NVML and provides 1-click execution target selection:
+- **Single GPU (`cuda:0` / `cuda:1`)**: Hardware-accelerated training with active WDDM paging cliff protection (restricting peak allocations beneath Windows OS limits to prevent throughput collapse).
+- **CPU Fallback (`cpu`)**: Pure CPU execution utilizing host RAM for smoke testing and debugging without a dedicated GPU.
+- **Multi-GPU Parallel (`multi_gpu`)**: Automatically wraps models across all local GPUs on the machine via PyTorch DataParallel with balanced tensor distribution.
+- **Distributed Node Cluster (`cluster` / PyTorch DDP)**:
+  - Automatically detects cluster topology from environment variables (`MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE`, `RANK`) or explicit UI input.
+  - Coordinates multi-node training across networked machines via TCP/IP sockets with NCCL (CUDA) or Gloo (CPU) backends.
+
+### 3. Task-Specific Optimal Hyperparameter Presets
+Different LLM training tasks require fundamentally different learning dynamics. Selecting any task in LLM Maker immediately applies verified AdamW, Muon, learning rate floor, warmup, and stable percentages:
+
+| Task Preset | Optimizer | AdamW Peak LR | Muon Peak LR | Min LR Floor | Warmup % | Stable % | Decay % | Rationale |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **Pretrain Causal LM** | `Muon + AdamW` | `0.003` (3e-3) | `0.02` (2e-2) | `0.0001` (1e-4) | `3%` | `82%` | `15%` | Long stable plateau maximizes raw token throughput & representation formation |
+| **Instruction SFT** | `Muon + AdamW` | `0.0003` (3e-4) | `0.005` (5e-3) | `0.00001` (1e-5) | `5%` | `45%` | `50%` | Gentle steering preserves base capabilities and prevents catastrophic forgetting |
+| **SimPO / ORPO** | `Muon + AdamW` | `0.00005` (5e-5) | `0.001` (1e-3) | `0.000005` (5e-6) | `10%` | `30%` | `60%` | Reference-free preference optimization requires conservative step sizes |
+| **GRPO** | `Muon + AdamW` | `0.00002` (2e-5) | `0.0005` (5e-4) | `0.000001` (1e-6) | `10%` | `40%` | `50%` | Group relative policy optimization with tight reward clipping bounds |
+| **DPO** | `Muon + AdamW` | `0.00002` (2e-5) | `0.0005` (5e-4) | `0.000002` (2e-6) | `10%` | `20%` | `70%` | Implicit reward model alignment benefits from extended decay annealing |
+| **Masked LM** | `Muon + AdamW` | `0.002` (2e-3) | `0.015` (1.5e-2) | `0.0001` (1e-4) | `5%` | `75%` | `20%` | Bidirectional representation learning |
+| **Classification / Regression** | `Muon + AdamW` | `0.0001` (1e-4) | `0.002` (2e-3) | `0.00001` (1e-5) | `10%` | `40%` | `50%` | Downstream head convergence |
+
+### 4. Percentage-Based WSD (Warmup-Stable-Decay) Scheduling
+Unlike rigid step-count schedulers, LLM Maker schedules training by percentage ratios (`warmup_steps_pct` and `stable_steps_pct`). When your planned steps or epoch target changes, warmup, plateau, and decay automatically scale proportionally:
+- **Warmup Phase ($0 \to \text{Warmup}$)**: Linear increase from min LR floor to peak LR.
+- **Stable Plateau ($\text{Warmup} \to \text{Stable}$)**: Constant maximum learning rate where the bulk of token representations are learned.
+- **Decay Phase ($\text{Stable} \to \text{Total}$)**: Cosine annealing condensing representations down to the minimum learning rate floor.
+
+### 5. Hugging Face Pretrained Model Import
+- Load pretrained foundation models directly from the Hugging Face Hub (e.g. `meta-llama/Llama-3.2-1B`, `Qwen/Qwen2.5-0.5B`, `mistralai/Mistral-7B`, `gpt2`).
+- 1-click import pulls model configuration, tokenizer vocabularies, and safetensors weights.
+- Converts Hub models into native LLM Maker JSON architecture configs (`networks/registry/`) ready for SFT, PEFT/LoRA, or architecture surgery in the visual builder.
+
+### 6. Zero-Copy Binary Memmap Tokenization
+- High-throughput multi-threaded tokenization converts raw text or JSONL datasets into optimized `uint16` binary memmaps (`.bin` + `.meta.json`).
+- Pre-tokenized binaries are cached on disk and memory-mapped directly into PyTorch worker processes with zero runtime re-tokenization overhead.
+- Constant RAM footprint regardless of whether the dataset contains 1M or 100M tokens.
+
+### 7. Visual Neural Architecture Studio
 - **Drag-and-Drop Canvas**: Visually compose custom transformer and hybrid architectures with strict tensor dimension contracts.
 - **Modular Blocks**: MHA, GQA, MQA, RoPE (Rotary Position Embeddings), RMSNorm, LayerNorm, SwiGLU, GeLU, and MoE routing.
 - **Instant Parameter & Memory Estimator**: Real-time analytical VRAM breakdown (weights, optimizer states, activations, KV-cache) before spending a single GPU second.
-- **Hot-swappable Model Registry**: Export architectures to standardized JSON configs (`networks/registry/`) and load them dynamically in training or inference.
-
-### 2. Zero-Paging VRAM Engine
-- **Active Memory Ceiling**: Constrains peak allocation beneath the Windows WDDM paging cliff (e.g. strict < 5.0 GB ceiling on 6GB GPUs) to prevent memory spills into system RAM that collapse throughput by 80–90%.
-- **Automatic Micro-Batching & Gradient Accumulation**: Solves the exact batch size and gradient accumulation steps needed to maximize token throughput without out-of-memory (OOM) faults.
-- **Hardware Telemetry**: Real-time NVML monitoring of dedicated VRAM, GPU temperature, compute utilization, and PCIe throughput.
-
-### 3. Multi-Phase Training Pipeline
-- **Phase 1: Pre-training**: Autoregressive causal language modeling with dynamic context packing and loss masking.
-- **Phase 2: Instruction Tuning (SFT)**: Supervised fine-tuning with prompt loss masking (`label: -100`) so the model only calculates gradients on responses.
-- **Phase 3: Multi-turn Chat**: ChatML tokenization and structured dialog optimization.
-- **Seamless Resume**: Atomic checkpointing with multi-phase epoch recalculation, optimizer momentum preservation, and automatic cleanup.
-
-### 4. Advanced Optimizers
-- **Hybrid Muon Optimizer**: Implements Moonshot-style Muon using quintic Newton-Schulz orthogonalization on 2D weight matrices, delivering faster loss convergence per token compared to standard AdamW.
-- **AdamW Integration**: Automatically splits 1D parameters (RMSNorm, bias, embedding tables) to AdamW while routing attention and feedforward matrices to Muon.
-
-### 5. Unified Next.js Workstation Architecture
-LLM Maker runs on a high-performance decoupled architecture:
-- **Unified Workstation UI (Next.js 14 / TypeScript, Port 8080)**: The single primary workstation interface. Features the visual node-based network editor, interactive computation graph, parameter estimation cards, real-time loss charts, evaluation laboratory with typewriter token streaming, and multi-phase training cockpit.
-- **Headless Python ML Engine (aiohttp REST & WebSocket, Port 8081)**: Manages PyTorch compute processes, GPU NVML telemetry, dataset preprocessing, checkpoint persistence, and real-time event broadcasting to the workstation. Browser visits to port 8081 automatically redirect to the Next.js workstation on port 8080.
 
 ---
 
-## 💻 Hardware Requirements
+## 💻 Hardware Requirements & Batches
 
-| Hardware Tier | Recommended Model Size | Context Length | Batch Configuration |
-| :--- | :--- | :--- | :--- |
-| **Consumer (6 GB VRAM)**<br>*(e.g. RTX 3060 / 4060 Laptop)* | 15M – 48.5M parameters | 512 – 1024 tokens | Micro-batch: 8–16<br>Accumulation: 2–4 |
-| **Mid-range (8 – 12 GB VRAM)**<br>*(e.g. RTX 3080 / 4070)* | 50M – 120M parameters | 1024 – 2048 tokens | Micro-batch: 16–32<br>Accumulation: 4 |
-| **High-end (16 – 24 GB VRAM)**<br>*(e.g. RTX 3090 / 4090)* | 150M – 500M parameters | 2048 – 4096 tokens | Micro-batch: 32–64<br>Accumulation: 4 |
-| **Datacenter (40 – 80 GB VRAM)**<br>*(e.g. A100 / H100)* | 1B – 7B parameters | 4096 – 8192 tokens | High-throughput distributed |
+| Hardware Tier | Recommended Model Size | Context Length | Batch Configuration | Compute Mode |
+| :--- | :--- | :--- | :--- | :--- |
+| **Consumer (6 GB VRAM)**<br>*(e.g. RTX 3060 / 4060 Laptop)* | 5M – 48.5M parameters | 256 – 1024 tokens | Micro-batch: 4–8<br>Accumulation: 4–8 | Single GPU (`cuda:0`) with Zero-Paging |
+| **Mid-range (8 – 12 GB VRAM)**<br>*(e.g. RTX 3080 / 4070)* | 50M – 130M parameters | 1024 – 2048 tokens | Micro-batch: 8–16<br>Accumulation: 4 | Single GPU / Multi-GPU |
+| **High-end (16 – 24 GB VRAM)**<br>*(e.g. RTX 3090 / 4090)* | 150M – 500M parameters | 2048 – 4096 tokens | Micro-batch: 16–32<br>Accumulation: 4 | Single GPU / Multi-GPU |
+| **Enterprise / Cluster**<br>*(e.g. Multi-node A100 / H100)* | 1B – 7B+ parameters | 4096 – 8192 tokens | High-throughput distributed | Distributed Cluster (PyTorch DDP) |
 
 ---
 
 ## ⚡ Quickstart
 
-### Option A: One-Click Setup (Recommended)
-
-#### Windows
+### Launch Desktop Application (Windows Native)
 ```cmd
-# Run setup script (creates .venv, installs PyTorch + CUDA, installs npm packages)
+# 1. Run one-time setup (sets up .venv with CUDA PyTorch)
 setup.bat
 
-# Launch LLM Maker Workstation
-run_studio.bat
+# 2. Launch Native Desktop App
+run_desktop.bat
 ```
+*(Or launch `llm-maker.exe` directly from the project root).*
 
-#### Linux / macOS / WSL2
+### Launch Web Studio Mode (Cross-Platform)
 ```bash
-# Make scripts executable and run setup
+# Windows
+run_studio.bat
+
+# Linux / macOS
 chmod +x setup.sh run_studio.sh
-./setup.sh
-
-# Launch LLM Maker Workstation
 ./run_studio.sh
 ```
-
----
-
-### Option B: Manual Installation
-
-#### 1. Clone the repository
-```bash
-git clone https://github.com/Cata5/CataAI-Ultra.git
-cd CataAI-Ultra
-```
-
-#### 2. Create Python virtual environment
-```bash
-python -m venv .venv
-
-# Windows
-.\.venv\Scripts\activate
-
-# Linux / macOS
-source .venv/bin/activate
-```
-
-#### 3. Install PyTorch with CUDA
-Visit [pytorch.org](https://pytorch.org/get-started/locally/) to select your CUDA version:
-```bash
-# Example for CUDA 12.8 / 12.4
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-
-# Install remaining backend dependencies
-pip install -r requirements.txt
-```
-
-#### 4. Install Frontend dependencies
-```bash
-cd frontend
-npm install
-npm run build
-cd ..
-```
-
-#### 5. Run the Platform
-
-Launch the platform with the provided launcher:
-```bash
-# Windows
-run_studio.bat
-
-# Linux / macOS
-./run_studio.sh
-```
-
-Or start both tiers manually:
-```bash
-# Terminal 1: Python ML Engine Backend (Port 8081)
-python dashboard.py --port 8081
-
-# Terminal 2: Next.js Studio UI (Port 8080)
-cd frontend
-npm run start -- -p 8080
-```
-Open **[http://localhost:8080](http://localhost:8080)** in your browser. All browser requests to port 8081 automatically redirect to the unified Next.js workstation on port 8080.
-
----
-
-## 📦 Bundled Sample Datasets
-
-The repository includes curated mini-datasets ready for immediate testing:
-
-| Dataset | Size | Tokens | Format | Purpose |
-| :--- | :--- | :--- | :--- | :--- |
-| `tech_pretrain_10M.txt` | ~25 MB | 10,000,419 | Plain Text / JSONL | Fast pre-training verification |
-| `tech_chat_instruction_1M.txt`| ~3.2 MB | 1,000,432 | Instruction / Dialog | Supervised fine-tuning (SFT) |
-| `tech_instruction_1M.txt` | ~3.2 MB | 1,000,000 | Alpaca format | Instruction alignment |
-| `tech_chat_1M.txt` | ~3.3 MB | 1,000,000 | Multi-turn Chat | Conversational fine-tuning |
-
-To train a model:
-1. Open the **Datasets** tab in the UI.
-2. Click **Import Dataset** and select `tech_pretrain_10M.txt` (Phase 1) or `tech_chat_instruction_1M.txt` (Phase 2).
-3. Switch to **Training**, choose your network architecture, and start training with live loss curves!
+Open **[http://localhost:8080](http://localhost:8080)** in your browser. All requests to the headless Python backend (port 8081) automatically synchronize with the studio interface.
 
 ---
 
 ## 🧪 Running the Test Suite
 
-LLM Maker includes 270+ automated tests verifying neural layer arithmetic, tokenizer parity, dataset pipelines, VRAM estimators, checkpoint resumption, and API endpoints.
+LLM Maker includes 270+ automated tests verifying neural layer arithmetic, tokenizer parity, dataset pipelines, VRAM estimators, checkpoint resumption, and IPC commands:
 
 ```bash
 # Run the complete test suite
 pytest
 
-# Run specific unit tests
+# Run specific modules
 pytest tests/unit/test_architecture.py
 pytest tests/unit/test_optimizer.py
 pytest tests/e2e/test_product_generalization.py
@@ -176,46 +152,45 @@ pytest tests/e2e/test_product_generalization.py
 
 ```
 llm-maker/
-├── dashboard.py               # Main control plane & server entry point
-├── requirements.txt           # Python backend dependencies
-├── pytest.ini                 # Pytest configuration
-├── run_studio.bat             # Windows launcher (Backend + Frontend)
-├── run_studio.sh              # Linux / macOS / WSL launcher
-├── setup.bat / setup.sh       # Automated installation assistants
+├── screenshots/               # Application screenshots for platform documentation
+│   ├── network_studio.png     # Visual architecture builder canvas
+│   ├── training.png           # Training controller & live WSD curve
+│   ├── evaluation.png         # Interactive inference & benchmark suite
+│   └── datasets.png           # Dataset management & tokenization lab
 │
-├── src/                       # Core Python Backend
-│   ├── checkpoints/           # Atomic checkpointing & resume engine
-│   ├── dashboard/             # aiohttp async REST & SSE control plane
-│   ├── datasets/              # Tokenization, streaming loaders & cache
+├── src-tauri/                 # Rust Native Desktop Host (Tauri 2.0)
+│   ├── src/
+│   │   ├── main.rs            # Desktop window lifecycle
+│   │   ├── lib.rs             # Tauri application entrypoint & command handlers
+│   │   ├── commands.rs        # IPC command bridges & hardware telemetry
+│   │   ├── worker.rs          # Decoupled Python ML worker supervisor
+│   │   └── database.rs        # SQLite query adapter for desktop
+│   └── Cargo.toml             # Rust package manifest
+│
+├── src/                       # Core Python ML Engine
+│   ├── checkpoints/           # Atomic checkpointing, save/load & metadata
+│   ├── dashboard/             # aiohttp async REST & control plane
+│   ├── datasets/              # Binary memmap tokenization & streaming loaders
 │   ├── db/                    # SQLite WAL persistence for metrics & runs
 │   ├── eval/                  # Real-time inference engine & benchmark lab
 │   ├── model/                 # Baseline RoCanon architectures & layers
 │   ├── networks/              # Visual Builder factory & MemoryEstimator
 │   ├── optimizers/            # Hybrid Muon + AdamW implementations
-│   ├── telemetry/             # NVML hardware monitoring
-│   ├── training/              # Task adapters (Pretrain, SFT, Chat)
-│   └── worker/                # Decoupled multiprocessing training loop
+│   ├── telemetry/             # NVML hardware monitoring & compute topology
+│   ├── training/              # Task adapters (Pretrain, SFT, SimPO, DPO, DDP)
+│   └── worker/                # Decoupled standalone ML worker process
 │
-├── frontend/                  # Next.js 14 Web Studio
+├── frontend/                  # Next.js 16 / React 19 Studio UI
 │   ├── src/
-│   │   ├── components/        # Sci-Fi UI components & visual canvas
-│   │   └── features/          # Builder, Training, Datasets, Runs, Inference
-│   ├── package.json           # Node.js dependencies
-│   └── tailwind.config.js     # Dark-mode sci-fi theme
+│   │   ├── components/        # High-contrast UI components & visual canvas
+│   │   ├── features/          # Builder, Training, Datasets, Runs, Inference
+│   │   └── services/api.ts    # Dual-mode API adapter (Tauri IPC + HTTP/WS)
+│   └── package.json
 │
 ├── networks/registry/         # Exported model architecture configs (JSON)
+├── datasets/                  # Datasets & pre-tokenized memmap binaries (.bin/.meta.json)
 └── tests/                     # 270+ unit and end-to-end tests
 ```
-
----
-
-## 🤝 Roadmap & Collaboration
-
-We are actively exploring integrations and partnerships with:
-- **Unsloth**: Integrating Unsloth's fast custom CUDA/Triton kernels and QLoRA engine directly into LLM Maker's visual modular network factory.
-- **Hugging Face**: One-click Hub model export (`AutoModelForCausalLM` / `safetensors`) and dataset streaming.
-- **Distributed Training**: FSDP and DDP support for multi-GPU scaling.
-- **GGUF / llama.cpp**: Direct visual quantization to GGUF (Q4_K_M, Q8_0) for edge deployment.
 
 ---
 

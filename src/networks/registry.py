@@ -128,6 +128,15 @@ class NetworkRegistry:
             return None
 
         if not path.exists():
+            # Fallback case-insensitive and partial match for convenient aliases (e.g. 5M -> CataAI_5M)
+            norm = network_id.lower().strip()
+            for cand in self.list_networks():
+                cid = cand.get("id", "")
+                cname = cand.get("name", "")
+                if cid.lower() == norm or cname.lower() == norm:
+                    return cand
+                if norm in cid.lower() or cid.lower().endswith(norm):
+                    return cand
             return None
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)

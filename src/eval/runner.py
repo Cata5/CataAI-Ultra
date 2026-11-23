@@ -56,6 +56,7 @@ def main():
         res = engine.generate(
             prompt=prompt,
             max_new_tokens=int(params.get("max_new_tokens", 128)),
+            min_new_tokens=int(params.get("min_new_tokens", 1)),
             temperature=float(params.get("temperature", 0.7)),
             top_p=float(params.get("top_p", 0.9)),
             top_k=int(params.get("top_k", 50)),

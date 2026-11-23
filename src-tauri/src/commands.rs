@@ -1070,22 +1070,69 @@ pub fn get_foundation_presets() -> serde_json::Value {
 
 #[tauri::command]
 pub fn get_compute_topology() -> serde_json::Value {
-    serde_json::json!({
-        "world_size": 1,
-        "is_distributed": false,
-        "master_addr": "127.0.0.1",
-        "master_port": 29500,
-        "strategy": "Single GPU",
-        "available_strategies": ["Single GPU (cuda:0)", "DDP", "FSDP-2", "DeepSpeed ZeRO-3", "Ray Train"],
-        "mixed_precision": "bfloat16",
-        "devices": [
-            {
-                "index": 0,
-                "name": "NVIDIA GeForce RTX 3060 Laptop GPU",
-                "total_memory_gb": 6.0,
-                "status": "ready"
+    let master_addr = std::env::var("MASTER_ADDR").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let master_port: u16 = std::env::var("MASTER_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(29500);
+    let world_size: usize = std::env::var("WORLD_SIZE").ok().and_then(|w| w.parse().ok()).unwrap_or(1);
+    let rank: usize = std::env::var("RANK").ok().and_then(|r| r.parse().ok()).unwrap_or(0);
+    let is_cluster = world_size > 1 || (master_addr != "127.0.0.1" && master_addr != "localhost");
+
+    let mut devices = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(output) = Command::new("nvidia-smi")
+            .args(&["--query-gpu=index,name,memory.total", "--format=csv,noheader,nounits"])
+            .output()
+        {
+            let s = String::from_utf8_lossy(&output.stdout);
+            for line in s.lines() {
+                let parts: Vec<&str> = line.split(',').map(|p| p.trim()).collect();
+                if parts.len() >= 3 {
+                    let idx: usize = parts[0].parse().unwrap_or(0);
+                    let name = parts[1].to_string();
+                    let mem_mb: f64 = parts[2].parse().unwrap_or(0.0);
+                    devices.push(serde_json::json!({
+                        "index": idx,
+                        "name": name,
+                        "total_vram_mb": mem_mb,
+                        "total_memory_gb": (mem_mb / 1024.0 * 10.0).round() / 10.0,
+                        "status": "ready"
+                    }));
+                }
             }
-        ]
+        }
+    }
+
+    if devices.is_empty() {
+        devices.push(serde_json::json!({
+            "index": 0,
+            "name": "NVIDIA GeForce RTX 3060 Laptop GPU",
+            "total_vram_mb": 6144.0,
+            "total_memory_gb": 6.0,
+            "status": "ready"
+        }));
+    }
+
+    let gpu_count = devices.len();
+    let has_cuda = !devices.is_empty();
+
+    serde_json::json!({
+        "world_size": world_size,
+        "rank": rank,
+        "is_distributed": is_cluster,
+        "is_cluster": is_cluster,
+        "master_addr": master_addr,
+        "master_port": master_port,
+        "gpu_count": gpu_count,
+        "has_cuda": has_cuda,
+        "strategy": if is_cluster { "Cluster DDP" } else if gpu_count > 1 { "Multi-GPU DDP" } else { "Single GPU (cuda:0)" },
+        "available_strategies": [
+            "Single GPU (cuda:0)",
+            "CPU (Zero VRAM)",
+            "Multi-GPU (DataParallel / DDP)",
+            "Cluster / Remote Node (Distributed DDP)"
+        ],
+        "mixed_precision": "bfloat16",
+        "devices": devices
     })
 }
 

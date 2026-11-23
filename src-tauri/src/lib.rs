@@ -18,7 +18,7 @@ use tauri::Manager;
 
 const ICON_RGBA_128: &[u8] = include_bytes!("../icons/icon_128.rgba");
 
-fn log_trace(msg: &str) {
+pub fn log_trace(msg: &str) {
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("tauri_debug.log") {
         let _ = writeln!(f, "[TRACE] {}", msg);
     }

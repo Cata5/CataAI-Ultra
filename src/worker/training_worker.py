@@ -82,7 +82,11 @@ class TrainingWorkerProcess:
         event = WorkerEvent(
             event_type=EventType.STATE_CHANGED,
             run_id=self.current_run_id,
-            payload={"old_state": old_state.value, "new_state": new_state.value},
+            payload={
+                "old_state": old_state.value,
+                "new_state": new_state.value,
+                "state": new_state.value,
+            },
         )
         self._send_event(event)
         if self.current_run_id:
@@ -234,8 +238,15 @@ class TrainingWorkerProcess:
         es_min_delta = float(payload.get("early_stopping_min_delta", 0.001))
 
         self.sched_type = str(payload.get("scheduler") or payload.get("scheduler_type") or "wsd").lower()
-        self.user_warmup_steps = int(payload.get("warmup_steps") if payload.get("warmup_steps") is not None else 20)
-        self.user_stable_steps = int(payload.get("stable_steps") if payload.get("stable_steps") is not None else 50)
+        if payload.get("warmup_steps_pct") is not None:
+            self.user_warmup_steps = max(1, int(target_steps * (float(payload["warmup_steps_pct"]) / 100.0)))
+        else:
+            self.user_warmup_steps = int(payload.get("warmup_steps") if payload.get("warmup_steps") is not None else 20)
+
+        if payload.get("stable_steps_pct") is not None:
+            self.user_stable_steps = max(1, int(target_steps * (float(payload["stable_steps_pct"]) / 100.0)))
+        else:
+            self.user_stable_steps = int(payload.get("stable_steps") if payload.get("stable_steps") is not None else 50)
         self.min_lr = float(payload.get("min_lr") if payload.get("min_lr") is not None else 0.0001)
 
         base_muon = float(payload.get("muon_lr") or config_opt.get("muon_lr", 0.02))
@@ -276,9 +287,30 @@ class TrainingWorkerProcess:
             workspace_id=self.workspace_id,
         )
 
-        device = torch.device(
-            self.device_str if self.device_str else ("cuda" if torch.cuda.is_available() else "cpu")
-        )
+        target_device_str = payload.get("device")
+        if not target_device_str:
+            target_device_str = self.device_str if self.device_str else ("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device(target_device_str)
+
+        # Cluster / Distributed Environment Setup
+        if payload.get("is_cluster") or payload.get("world_size", 1) > 1:
+            import os
+            master_addr = payload.get("master_addr") or os.environ.get("MASTER_ADDR", "127.0.0.1")
+            master_port = str(payload.get("master_port") or os.environ.get("MASTER_PORT", "29500"))
+            world_size = int(payload.get("world_size") or os.environ.get("WORLD_SIZE", "1"))
+            rank = int(payload.get("rank") or os.environ.get("RANK", "0"))
+            os.environ["MASTER_ADDR"] = master_addr
+            os.environ["MASTER_PORT"] = master_port
+            os.environ["WORLD_SIZE"] = str(world_size)
+            os.environ["RANK"] = str(rank)
+            if not torch.distributed.is_initialized():
+                try:
+                    backend = "nccl" if torch.cuda.is_available() and device.type == "cuda" else "gloo"
+                    torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size)
+                    logger.info("Cluster distributed initialized: rank %d/%d at %s:%s (backend=%s)", rank, world_size, master_addr, master_port, backend)
+                except Exception as dist_err:
+                    logger.warning("Cluster distributed initialization failed: %s", dist_err)
+
         if device.type == "cuda":
             torch.set_float32_matmul_precision("high")
         logger.info("Worker bound to compute device: %s", device)

@@ -131,12 +131,8 @@ export const api = {
   startRun: async (payload: Record<string, any>): Promise<any> => {
     const inv = await getTauriInvoke();
     if (inv) {
-      try {
-        const runId = await inv("start_training", { payloadJson: JSON.stringify(payload) });
-        return { status: "STARTING", run_id: runId };
-      } catch (e) {
-        console.warn("Tauri start_training fallback:", e);
-      }
+      const runId = await inv("start_training", { payloadJson: JSON.stringify(payload) });
+      return { status: "STARTING", run_id: runId };
     }
     return request<{ status: string; payload: any }>("/api/runs", {
       method: "POST",
@@ -146,36 +142,24 @@ export const api = {
   pauseRun: async (runId: string = "current"): Promise<{ success: boolean }> => {
     const inv = await getTauriInvoke();
     if (inv) {
-      try {
-        await inv("pause_run", { runId });
-        return { success: true };
-      } catch (e) {
-        console.warn("Tauri pause_run fallback:", e);
-      }
+      await inv("pause_run", { runId });
+      return { success: true };
     }
     return request<{ success: boolean }>(`/api/runs/${runId}/pause`, { method: "POST" });
   },
   resumeRun: async (runId: string = "current"): Promise<{ success: boolean }> => {
     const inv = await getTauriInvoke();
     if (inv) {
-      try {
-        await inv("resume_run", { runId });
-        return { success: true };
-      } catch (e) {
-        console.warn("Tauri resume_run fallback:", e);
-      }
+      await inv("resume_run", { runId });
+      return { success: true };
     }
     return request<{ success: boolean }>(`/api/runs/${runId}/resume`, { method: "POST" });
   },
   stopRun: async (runId: string = "current"): Promise<{ success: boolean }> => {
     const inv = await getTauriInvoke();
     if (inv) {
-      try {
-        await inv("stop_training");
-        return { success: true };
-      } catch (e) {
-        console.warn("Tauri stop_training fallback:", e);
-      }
+      await inv("stop_training");
+      return { success: true };
     }
     return request<{ success: boolean }>(`/api/runs/${runId}/stop`, { method: "POST" });
   },
@@ -476,6 +460,7 @@ export const api = {
   generateEvaluation: async (params: {
     prompt: string;
     max_new_tokens?: number;
+    min_new_tokens?: number;
     temperature?: number;
     top_p?: number;
     top_k?: number;
@@ -506,6 +491,7 @@ export const api = {
     prompt: string;
     checkpoint_paths: string[];
     max_new_tokens?: number;
+    min_new_tokens?: number;
     temperature?: number;
     top_p?: number;
     top_k?: number;

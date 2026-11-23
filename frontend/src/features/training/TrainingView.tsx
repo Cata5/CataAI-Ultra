@@ -57,6 +57,8 @@ export interface TrainingFormConfig {
   totalSteps: number;
   warmupSteps: number;
   stableSteps: number;
+  warmupPct: number;
+  stablePct: number;
   gradClip: number;
   chkInterval: number;
   valInterval: number;
@@ -66,11 +68,120 @@ export interface TrainingFormConfig {
   useLora: boolean;
   loraR: number;
   loraAlpha: number;
+  deviceMode: string;
+  clusterMasterAddr: string;
+  clusterMasterPort: number;
+  clusterWorldSize: number;
+  clusterRank: number;
   useMultiGpu: boolean;
   selectedGpuIds: number[];
 }
 
-const STORAGE_KEY = "llm_maker_training_config_v2";
+const STORAGE_KEY = "llm_maker_training_config_v4";
+
+export interface TaskPreset {
+  label: string;
+  optimizer: string;
+  schedulerType: string;
+  peakLr: number;
+  muonLr: number;
+  minLr: number;
+  warmupPct: number;
+  stablePct: number;
+}
+
+export const TASK_PRESETS: Record<string, TaskPreset> = {
+  causal_lm: {
+    label: "Pre-training (Causal LM)",
+    optimizer: "muon_adamw",
+    schedulerType: "wsd",
+    peakLr: 0.003,
+    muonLr: 0.02,
+    minLr: 0.0001,
+    warmupPct: 3,
+    stablePct: 82,
+  },
+  instruction_sft: {
+    label: "Instruction SFT",
+    optimizer: "muon_adamw",
+    schedulerType: "wsd",
+    peakLr: 0.0003,
+    muonLr: 0.005,
+    minLr: 0.00001,
+    warmupPct: 5,
+    stablePct: 45,
+  },
+  masked_lm: {
+    label: "Masked LM",
+    optimizer: "muon_adamw",
+    schedulerType: "wsd",
+    peakLr: 0.002,
+    muonLr: 0.015,
+    minLr: 0.0001,
+    warmupPct: 5,
+    stablePct: 75,
+  },
+  simpo: {
+    label: "SimPO Alignment",
+    optimizer: "adamw",
+    schedulerType: "wsd",
+    peakLr: 0.00005,
+    muonLr: 0.001,
+    minLr: 0.000005,
+    warmupPct: 10,
+    stablePct: 30,
+  },
+  orpo: {
+    label: "ORPO Alignment",
+    optimizer: "adamw",
+    schedulerType: "wsd",
+    peakLr: 0.00005,
+    muonLr: 0.001,
+    minLr: 0.000005,
+    warmupPct: 10,
+    stablePct: 30,
+  },
+  grpo: {
+    label: "GRPO Reasoning",
+    optimizer: "adamw",
+    schedulerType: "wsd",
+    peakLr: 0.00002,
+    muonLr: 0.0005,
+    minLr: 0.000001,
+    warmupPct: 10,
+    stablePct: 40,
+  },
+  dpo: {
+    label: "DPO Alignment",
+    optimizer: "adamw",
+    schedulerType: "wsd",
+    peakLr: 0.00002,
+    muonLr: 0.0005,
+    minLr: 0.000002,
+    warmupPct: 10,
+    stablePct: 20,
+  },
+  classification: {
+    label: "Classification Head",
+    optimizer: "adamw",
+    schedulerType: "cosine",
+    peakLr: 0.0001,
+    muonLr: 0.002,
+    minLr: 0.00001,
+    warmupPct: 10,
+    stablePct: 40,
+  },
+  regression: {
+    label: "Regression Head",
+    optimizer: "adamw",
+    schedulerType: "cosine",
+    peakLr: 0.0001,
+    muonLr: 0.002,
+    minLr: 0.00001,
+    warmupPct: 10,
+    stablePct: 40,
+  },
+};
 
 const DEFAULT_TRAINING_CONFIG: TrainingFormConfig = {
   selectedNetwork: "rocanon_48m",
@@ -89,8 +200,10 @@ const DEFAULT_TRAINING_CONFIG: TrainingFormConfig = {
   gradAccumSteps: 8,
   seqLen: 256,
   totalSteps: 10000,
-  warmupSteps: 500,
-  stableSteps: 7500,
+  warmupSteps: 300,
+  stableSteps: 8200,
+  warmupPct: 3,
+  stablePct: 82,
   gradClip: 1.0,
   chkInterval: 500,
   valInterval: 250,
@@ -100,6 +213,11 @@ const DEFAULT_TRAINING_CONFIG: TrainingFormConfig = {
   useLora: false,
   loraR: 16,
   loraAlpha: 32,
+  deviceMode: "cuda:0",
+  clusterMasterAddr: "127.0.0.1",
+  clusterMasterPort: 29500,
+  clusterWorldSize: 2,
+  clusterRank: 0,
   useMultiGpu: false,
   selectedGpuIds: [0],
 };
@@ -110,7 +228,15 @@ const getSavedConfig = (): TrainingFormConfig => {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_TRAINING_CONFIG;
     const parsed = JSON.parse(raw);
-    return { ...DEFAULT_TRAINING_CONFIG, ...parsed };
+    const merged = { ...DEFAULT_TRAINING_CONFIG, ...parsed };
+    // Guard against corrupt/stale percentages from older versions
+    if (typeof merged.warmupPct !== "number" || merged.warmupPct < 1 || merged.warmupPct > 40) {
+      merged.warmupPct = 3;
+    }
+    if (typeof merged.stablePct !== "number" || merged.stablePct < 15 || merged.stablePct > 95) {
+      merged.stablePct = 82;
+    }
+    return merged;
   } catch (e) {
     console.warn("Failed to load training form config from localStorage:", e);
     return DEFAULT_TRAINING_CONFIG;
@@ -233,6 +359,60 @@ export const TrainingView: React.FC = () => {
   const estimatedEpochSteps = stepsPerEpoch > 0 ? stepsPerEpoch * form.targetEpochs : 0;
   const plannedSteps = form.durationMode === "epochs" && estimatedEpochSteps > 0 ? estimatedEpochSteps : form.totalSteps;
 
+  // Percentage-based warmup & stable calculation
+  const calcWarmupSteps = useMemo(() => {
+    return Math.max(1, Math.round((plannedSteps * (form.warmupPct || 3)) / 100));
+  }, [plannedSteps, form.warmupPct]);
+
+  const calcStableSteps = useMemo(() => {
+    return Math.max(1, Math.round((plannedSteps * (form.stablePct || 82)) / 100));
+  }, [plannedSteps, form.stablePct]);
+
+  const calcDecaySteps = useMemo(() => {
+    return Math.max(0, plannedSteps - calcWarmupSteps - calcStableSteps);
+  }, [plannedSteps, calcWarmupSteps, calcStableSteps]);
+
+  const decayPct = Math.max(0, 100 - (form.warmupPct || 3) - (form.stablePct || 82));
+
+  const handleSelectTask = useCallback(
+    (newTask: string) => {
+      const preset = TASK_PRESETS[newTask];
+      setForm((prev) => {
+        const next: TrainingFormConfig = {
+          ...prev,
+          selectedTask: newTask,
+          ...(preset
+            ? {
+                optimizer: preset.optimizer,
+                schedulerType: preset.schedulerType,
+                peakLr: preset.peakLr,
+                muonLr: preset.muonLr,
+                minLr: preset.minLr,
+                warmupPct: preset.warmupPct,
+                stablePct: preset.stablePct,
+              }
+            : {}),
+        };
+        if (typeof window !== "undefined") {
+          try {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+          } catch (e) {
+            console.warn("Failed to persist training config:", e);
+          }
+        }
+        return next;
+      });
+
+      if (preset) {
+        setFeedback(
+          `Applied ${preset.label} preset: Peak LR ${preset.peakLr}, Muon LR ${preset.muonLr}, Warmup ${preset.warmupPct}%, Stable ${preset.stablePct}%`
+        );
+        setTimeout(() => setFeedback(null), 4000);
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     let active = true;
     api
@@ -241,8 +421,8 @@ export const TrainingView: React.FC = () => {
         total_steps: plannedSteps,
         peak_lr: form.peakLr,
         min_lr: form.minLr,
-        warmup_steps: form.warmupSteps,
-        stable_steps: form.stableSteps,
+        warmup_steps: calcWarmupSteps,
+        stable_steps: calcStableSteps,
         decay_style: "cosine",
       })
       .then((res) => {
@@ -264,7 +444,7 @@ export const TrainingView: React.FC = () => {
     return () => {
       active = false;
     };
-  }, [form.schedulerType, plannedSteps, form.peakLr, form.minLr, form.warmupSteps, form.stableSteps]);
+  }, [form.schedulerType, plannedSteps, form.peakLr, form.minLr, calcWarmupSteps, calcStableSteps]);
 
   const handleStartTraining = async () => {
     setIsSubmitting(true);
@@ -282,10 +462,13 @@ export const TrainingView: React.FC = () => {
         grad_accum_steps: form.gradAccumSteps,
         seq_len: form.seqLen,
         learning_rate: form.peakLr,
+        peak_lr: form.peakLr,
         muon_lr: form.muonLr,
         min_lr: form.minLr,
-        warmup_steps: form.warmupSteps,
-        stable_steps: form.stableSteps,
+        warmup_steps: calcWarmupSteps,
+        stable_steps: calcStableSteps,
+        warmup_steps_pct: form.warmupPct,
+        stable_steps_pct: form.stablePct,
         precision: form.precision,
         grad_clip: form.gradClip,
         checkpoint_interval: form.chkInterval,
@@ -293,6 +476,14 @@ export const TrainingView: React.FC = () => {
         early_stopping: form.earlyStoppingEnabled,
         patience: form.patience,
         min_steps: form.minSteps,
+        device: form.deviceMode,
+        use_multi_gpu: form.deviceMode === "multi_gpu" || form.useMultiGpu,
+        device_ids: form.selectedGpuIds,
+        is_cluster: form.deviceMode === "cluster",
+        master_addr: form.clusterMasterAddr,
+        master_port: form.clusterMasterPort,
+        world_size: form.clusterWorldSize,
+        rank: form.clusterRank,
       };
 
       if (form.durationMode === "epochs") {
@@ -524,21 +715,21 @@ export const TrainingView: React.FC = () => {
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 select-none font-mono">
         {/* Train Loss */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>Train Loss</span>
             <TrendingDown className="w-3 h-3 text-[#A3A3A3]" />
           </div>
           <div className="text-base font-semibold font-mono-num text-[#F2F2F2] mt-1">
             {currentLoss > 0 ? formatNumber(currentLoss, 4) : "—"}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5">
             Step {currentStep.toLocaleString()}
           </div>
         </div>
 
         {/* Validation Loss */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>Val. Loss</span>
             <CheckCircle2 className="w-3 h-3 text-[#A3A3A3]" />
           </div>
@@ -551,7 +742,7 @@ export const TrainingView: React.FC = () => {
               "—"
             )}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5 flex justify-between">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5 flex justify-between">
             <span>{effectiveValStep ? `Step ${effectiveValStep}` : "Awaiting"}</span>
             <span>Next: Step {nextValStep}</span>
           </div>
@@ -559,7 +750,7 @@ export const TrainingView: React.FC = () => {
 
         {/* Dataset Progress */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>Dataset Progress</span>
             <Activity className="w-3 h-3 text-[#A3A3A3]" />
           </div>
@@ -570,7 +761,7 @@ export const TrainingView: React.FC = () => {
               <span>Step {currentStep.toLocaleString()} / {form.totalSteps.toLocaleString()}</span>
             )}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5 truncate">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5 truncate">
             {tokensPerEpoch > 0 ? (
               `${formatCompactNumber(tokensInEpoch)} / ${formatCompactNumber(tokensPerEpoch)} (${epochPercent}%)`
             ) : (
@@ -581,14 +772,14 @@ export const TrainingView: React.FC = () => {
 
         {/* Time & Latency */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>Time & Latency</span>
             <Clock className="w-3 h-3 text-[#A3A3A3]" />
           </div>
           <div className="text-base font-semibold font-mono-num text-[#F2F2F2] mt-1">
             {formatDuration(activeTrainingTime)}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5 flex justify-between">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5 flex justify-between">
             <span>{formatStepLatency(stepTimeMs)}</span>
             <span>{tokPerSec > 0 ? `${Math.round(tokPerSec)} tok/s` : ""}</span>
           </div>
@@ -596,7 +787,7 @@ export const TrainingView: React.FC = () => {
 
         {/* Muon LR */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>Muon LR (Matrix)</span>
             <Sparkles className="w-3 h-3 text-[#A3A3A3]" />
           </div>
@@ -608,21 +799,21 @@ export const TrainingView: React.FC = () => {
               </span>
             )}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5">
             Phase: {schedPhase} ({(schedFactor * 100).toFixed(0)}%)
           </div>
         </div>
 
         {/* AdamW LR */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>AdamW LR (Vectors)</span>
             <Gauge className="w-3 h-3 text-[#A3A3A3]" />
           </div>
           <div className="text-sm font-semibold font-mono-num text-[#A3A3A3] mt-1">
             {adamwEffLr > 0 ? adamwEffLr.toExponential(2) : "—"}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5">
             Floor: {form.minLr.toExponential(1)}
           </div>
         </div>
@@ -720,21 +911,21 @@ export const TrainingView: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   Training Task
                 </label>
                 <select
                   value={form.selectedTask}
-                  onChange={(e) => updateForm("selectedTask", e.target.value)}
+                  onChange={(e) => handleSelectTask(e.target.value)}
                   disabled={isRunning || isPaused}
-                  className="input"
+                  className="input font-semibold"
                 >
                   <optgroup label="Language Modeling">
-                    <option value="causal_lm">Causal LM (Autoregressive)</option>
+                    <option value="causal_lm">Causal LM (Autoregressive Pretraining)</option>
                     <option value="instruction_sft">Instruction Fine-Tuning (SFT)</option>
                     <option value="masked_lm">Masked LM (Bidirectional)</option>
                   </optgroup>
-                  <optgroup label="Post-Training Alignment & Reasoning">
+                  <optgroup label="Post-Training Alignment &amp; Reasoning">
                     <option value="simpo">SimPO (Simple Preference Optimization - Ref Free)</option>
                     <option value="orpo">ORPO (Odds Ratio Preference Optimization)</option>
                     <option value="grpo">GRPO (DeepSeek-R1 Style Reasoning RL)</option>
@@ -750,7 +941,7 @@ export const TrainingView: React.FC = () => {
 
             {/* Resume from checkpoint */}
             <div>
-              <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+              <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                 Resume From Checkpoint (Optional)
               </label>
               <select
@@ -776,18 +967,52 @@ export const TrainingView: React.FC = () => {
 
           {/* Section 2: Optimizer, Duration Mode & Learning Rates */}
           <div className="panel p-3.5 bg-[#202020] border-[#333333] space-y-2.5">
-            <h3 className="panel-title pb-1.5 border-b border-[#262626]">
-              <Sparkles className="w-3.5 h-3.5 text-[#737373]" /> Optimizer & Schedule
-            </h3>
+            <div className="flex items-center justify-between pb-1.5 border-b border-[#262626]">
+              <h3 className="panel-title">
+                <Sparkles className="w-3.5 h-3.5 text-[#A3A3A3]" /> Optimizer &amp; Schedule
+              </h3>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleSelectTask("causal_lm")}
+                  disabled={isRunning || isPaused}
+                  className={cn(
+                    "px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors flex items-center gap-1",
+                    form.selectedTask === "causal_lm"
+                      ? "bg-[#262626] text-[#4ade80] border-[#4ade80]/40"
+                      : "bg-[#1B1B1B] text-[#A3A3A3] border-[#333333] hover:text-[#F2F2F2]"
+                  )}
+                  title="Optimal Pretrain: AdamW 3e-3, Muon 0.02, Min 1e-4, 3% Warmup, 82% Stable, 15% Decay"
+                >
+                  <Sparkles className="w-2.5 h-2.5 text-[#4ade80]" />
+                  <span>⚡ Pretrain Preset</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSelectTask("instruction_sft")}
+                  disabled={isRunning || isPaused}
+                  className={cn(
+                    "px-2 py-0.5 rounded text-[10px] font-semibold border transition-colors flex items-center gap-1",
+                    form.selectedTask === "instruction_sft"
+                      ? "bg-[#262626] text-[#38bdf8] border-[#38bdf8]/40"
+                      : "bg-[#1B1B1B] text-[#A3A3A3] border-[#333333] hover:text-[#F2F2F2]"
+                  )}
+                  title="Optimal SFT: AdamW 3e-4, Muon 0.005, Min 1e-5, 5% Warmup, 45% Stable, 50% Decay"
+                >
+                  <Sliders className="w-2.5 h-2.5 text-[#38bdf8]" />
+                  <span>⚡ SFT Preset</span>
+                </button>
+              </div>
+            </div>
 
             {/* Duration Mode Selector */}
             <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626] space-y-2">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                 <div>
-                  <span className="text-xs text-[#F2F2F2] font-medium uppercase">
+                  <span className="text-xs text-[#F2F2F2] font-semibold uppercase">
                     Duration Mode
                   </span>
-                  <span className="text-[10px] text-[#737373] block mt-0.5">
+                  <span className="text-[10px] text-[#A3A3A3] block mt-0.5">
                     Train for dataset epochs or fixed optimization steps.
                   </span>
                 </div>
@@ -800,7 +1025,7 @@ export const TrainingView: React.FC = () => {
                       "px-3 py-1 rounded text-xs transition-colors",
                       form.durationMode === "steps"
                         ? "bg-[#D4D4D4] text-[#171717] font-semibold"
-                        : "text-[#737373] hover:text-[#F2F2F2]"
+                        : "text-[#A3A3A3] hover:text-[#F2F2F2]"
                     )}
                   >
                     Steps
@@ -813,7 +1038,7 @@ export const TrainingView: React.FC = () => {
                       "px-3 py-1 rounded text-xs transition-colors",
                       form.durationMode === "epochs"
                         ? "bg-[#D4D4D4] text-[#171717] font-semibold"
-                        : "text-[#737373] hover:text-[#F2F2F2]"
+                        : "text-[#A3A3A3] hover:text-[#F2F2F2]"
                     )}
                   >
                     Epochs
@@ -825,7 +1050,7 @@ export const TrainingView: React.FC = () => {
                 <div className="p-2 rounded bg-[#202020] border border-[#262626] space-y-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <label className="text-[10px] text-[#A3A3A3] uppercase">
+                      <label className="text-[10px] text-[#D4D4D4] font-semibold uppercase">
                         Epochs:
                       </label>
                       <input
@@ -835,7 +1060,7 @@ export const TrainingView: React.FC = () => {
                         value={form.targetEpochs}
                         onChange={(e) => updateForm("targetEpochs", Math.max(1, parseInt(e.target.value) || 1))}
                         disabled={isRunning || isPaused}
-                        className="input w-16 text-center"
+                        className="input w-16 text-center font-mono-num font-semibold"
                       />
                       <div className="flex items-center gap-1">
                         {[1, 2, 3, 5].map((preset) => (
@@ -848,7 +1073,7 @@ export const TrainingView: React.FC = () => {
                               "px-1.5 py-0.5 rounded text-[10px] border transition-colors",
                               form.targetEpochs === preset
                                 ? "bg-[#262626] text-[#F2F2F2] border-[#D4D4D4]"
-                                : "bg-[#1B1B1B] text-[#737373] border-[#262626]"
+                                : "bg-[#1B1B1B] text-[#A3A3A3] border-[#262626]"
                             )}
                           >
                             {preset}x
@@ -857,13 +1082,13 @@ export const TrainingView: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1 text-[11px] text-[#737373]">
-                      <Calculator className="w-3 h-3" />
+                    <div className="flex items-center gap-1 text-[11px] text-[#A3A3A3]">
+                      <Calculator className="w-3 h-3 text-[#A3A3A3]" />
                       <span>Tokens/Step: <strong className="text-[#F2F2F2]">{tokensPerStep.toLocaleString()}</strong></span>
                     </div>
                   </div>
 
-                  <div className="text-[10px] text-[#737373] pt-1 border-t border-[#262626] flex justify-between">
+                  <div className="text-[10px] text-[#A3A3A3] pt-1 border-t border-[#262626] flex justify-between">
                     <span>
                       Dataset: {datasetTokens > 0 ? `${datasetTokens.toLocaleString()} tokens (~${stepsPerEpoch.toLocaleString()} steps/epoch)` : "Tokenize dataset to calculate steps"}
                     </span>
@@ -876,7 +1101,7 @@ export const TrainingView: React.FC = () => {
                 <div className="p-2 rounded bg-[#202020] border border-[#262626] space-y-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
-                      <label className="text-[10px] text-[#A3A3A3] uppercase">
+                      <label className="text-[10px] text-[#D4D4D4] font-semibold uppercase">
                         Total Steps:
                       </label>
                       <input
@@ -886,7 +1111,7 @@ export const TrainingView: React.FC = () => {
                         value={form.totalSteps}
                         onChange={(e) => updateForm("totalSteps", Math.max(10, parseInt(e.target.value) || 1000))}
                         disabled={isRunning || isPaused}
-                        className="input w-24 text-center"
+                        className="input w-24 text-center font-mono-num font-semibold"
                       />
                       <div className="flex items-center gap-1">
                         {[2000, 5000, 10000, 25000].map((preset) => (
@@ -899,7 +1124,7 @@ export const TrainingView: React.FC = () => {
                               "px-1.5 py-0.5 rounded text-[10px] border transition-colors",
                               form.totalSteps === preset
                                 ? "bg-[#262626] text-[#F2F2F2] border-[#D4D4D4]"
-                                : "bg-[#1B1B1B] text-[#737373] border-[#262626]"
+                                : "bg-[#1B1B1B] text-[#A3A3A3] border-[#262626]"
                             )}
                           >
                             {(preset / 1000)}k
@@ -908,7 +1133,7 @@ export const TrainingView: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="text-[10px] text-[#737373]">
+                    <div className="text-[10px] text-[#A3A3A3]">
                       Tokens: <strong className="text-[#F2F2F2]">{((form.totalSteps * tokensPerStep) / 1_000_000).toFixed(2)}M</strong>
                     </div>
                   </div>
@@ -918,7 +1143,7 @@ export const TrainingView: React.FC = () => {
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   Optimizer
                 </label>
                 <select
@@ -934,7 +1159,7 @@ export const TrainingView: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   Schedule
                 </label>
                 <select
@@ -951,73 +1176,160 @@ export const TrainingView: React.FC = () => {
               </div>
 
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   AdamW LR
                 </label>
                 <input
                   type="number"
-                  step="0.0001"
+                  step="any"
                   value={form.peakLr}
-                  onChange={(e) => updateForm("peakLr", parseFloat(e.target.value) || 0.003)}
+                  onChange={(e) => updateForm("peakLr", isNaN(parseFloat(e.target.value)) ? 0 : parseFloat(e.target.value))}
                   disabled={isRunning || isPaused}
-                  className="input"
+                  className="input font-mono-num font-semibold"
                 />
               </div>
 
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   Muon LR
                 </label>
                 <input
                   type="number"
-                  step="0.001"
+                  step="any"
                   value={form.muonLr}
-                  onChange={(e) => updateForm("muonLr", parseFloat(e.target.value) || 0.02)}
+                  onChange={(e) => updateForm("muonLr", isNaN(parseFloat(e.target.value)) ? 0 : parseFloat(e.target.value))}
                   disabled={isRunning || isPaused}
-                  className="input"
+                  className="input font-mono-num font-semibold"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 pt-1">
-              <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
-                  Warmup Steps
-                </label>
-                <input
-                  type="number"
-                  value={form.warmupSteps}
-                  onChange={(e) => updateForm("warmupSteps", parseInt(e.target.value) || 500)}
-                  disabled={isRunning || isPaused}
-                  className="input"
-                />
+            {/* Percentage-based Warmup, Stable & Decay Schedule */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+              {/* Warmup % */}
+              <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626] space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold">
+                    Warmup Ratio
+                  </label>
+                  <span className="text-[10px] text-[#D4D4D4] font-mono-num font-semibold">
+                    ~{calcWarmupSteps.toLocaleString()} steps
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min="0"
+                    max="30"
+                    step="1"
+                    value={form.warmupPct}
+                    onChange={(e) => updateForm("warmupPct", Math.max(0, Math.min(30, parseInt(e.target.value) || 0)))}
+                    disabled={isRunning || isPaused}
+                    className="input w-20 text-center font-mono-num font-semibold"
+                  />
+                  <span className="text-xs text-[#A3A3A3] font-medium">%</span>
+                  <div className="flex items-center gap-1 ml-auto">
+                    {[2, 3, 5].map((pct) => (
+                      <button
+                        key={pct}
+                        type="button"
+                        onClick={() => updateForm("warmupPct", pct)}
+                        disabled={isRunning || isPaused}
+                        className={cn(
+                          "px-1.5 py-0.5 rounded text-[10px] border transition-colors",
+                          form.warmupPct === pct
+                            ? "bg-[#262626] text-[#F2F2F2] border-[#D4D4D4]"
+                            : "bg-[#1B1B1B] text-[#737373] border-[#262626]"
+                        )}
+                      >
+                        {pct}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <span className="text-[9px] text-[#737373] block">
+                  Pretrain: 3% | SFT: 5%
+                </span>
               </div>
 
-              <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
-                  Stable Steps
-                </label>
-                <input
-                  type="number"
-                  value={form.stableSteps}
-                  onChange={(e) => updateForm("stableSteps", parseInt(e.target.value) || 7500)}
-                  disabled={isRunning || isPaused}
-                  className="input"
-                />
+              {/* Stable % */}
+              <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626] space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold">
+                    Stable Ratio (Plateau)
+                  </label>
+                  <span className="text-[10px] text-[#D4D4D4] font-mono-num font-semibold">
+                    ~{calcStableSteps.toLocaleString()} steps
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min="10"
+                    max="95"
+                    step="1"
+                    value={form.stablePct}
+                    onChange={(e) => updateForm("stablePct", Math.max(10, Math.min(95, parseInt(e.target.value) || 10)))}
+                    disabled={isRunning || isPaused}
+                    className="input w-20 text-center font-mono-num font-semibold"
+                  />
+                  <span className="text-xs text-[#A3A3A3] font-medium">%</span>
+                  <div className="flex items-center gap-1 ml-auto">
+                    {[45, 75, 82].map((pct) => (
+                      <button
+                        key={pct}
+                        type="button"
+                        onClick={() => updateForm("stablePct", pct)}
+                        disabled={isRunning || isPaused}
+                        className={cn(
+                          "px-1.5 py-0.5 rounded text-[10px] border transition-colors",
+                          form.stablePct === pct
+                            ? "bg-[#262626] text-[#F2F2F2] border-[#D4D4D4]"
+                            : "bg-[#1B1B1B] text-[#737373] border-[#262626]"
+                        )}
+                      >
+                        {pct}%
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <span className="text-[9px] text-[#737373] block">
+                  Pretrain: 82% | SFT: 45%
+                </span>
               </div>
 
-              <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
-                  Min LR
-                </label>
-                <input
-                  type="number"
-                  step="0.00001"
-                  value={form.minLr}
-                  onChange={(e) => updateForm("minLr", parseFloat(e.target.value) || 0.0)}
-                  disabled={isRunning || isPaused}
-                  className="input"
-                />
+              {/* Decay (Auto-computed) & Min LR Floor */}
+              <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626] space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold">
+                    Decay Anneal (~{calcDecaySteps.toLocaleString()} st.)
+                  </label>
+                  <span className="text-[10px] text-[#4ade80] font-mono-num font-semibold">
+                    {decayPct}% remaining
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex-1">
+                    <label className="text-[9px] text-[#737373] uppercase block mb-0.5">
+                      Min LR Floor
+                    </label>
+                    <input
+                      type="number"
+                      step="any"
+                      value={form.minLr}
+                      onChange={(e) => updateForm("minLr", isNaN(parseFloat(e.target.value)) ? 0 : parseFloat(e.target.value))}
+                      disabled={isRunning || isPaused}
+                      className="input text-xs font-mono-num font-semibold"
+                    />
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[9px] text-[#737373] block mb-0.5">Style</span>
+                    <span className="text-[10px] text-[#D4D4D4] font-medium">Cosine</span>
+                  </div>
+                </div>
+                <span className="text-[9px] text-[#737373] block">
+                  Pretrain: 15% (1e-4) | SFT: 50% (1e-5)
+                </span>
               </div>
             </div>
           </div>
@@ -1026,22 +1338,173 @@ export const TrainingView: React.FC = () => {
           <div className="panel p-3.5 bg-[#202020] border-[#333333] space-y-2.5">
             <div className="flex justify-between items-center pb-1.5 border-b border-[#262626]">
               <h3 className="panel-title">
-                <Sliders className="w-3.5 h-3.5 text-[#737373]" /> Batch Geometry & Hardware
+                <Sliders className="w-3.5 h-3.5 text-[#A3A3A3]" /> Batch Geometry &amp; Hardware
               </h3>
-              <span className="text-[10px] text-[#A3A3A3]">
+              <span className="text-[10px] text-[#A3A3A3] font-medium">
                 Effective: {effectiveBatchSize} seqs ({tokensPerStep.toLocaleString()} tok/step)
               </span>
             </div>
 
-            {/* PEFT / LoRA & Multi-GPU Topology Controls */}
+            {/* Compute Target Selection */}
             <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626] space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <span className="text-xs text-[#F2F2F2] font-medium uppercase">
-                    Compute & PEFT Adaptation
+                  <span className="text-xs text-[#F2F2F2] font-semibold uppercase">
+                    Compute Target &amp; Device Topology
                   </span>
-                  <span className="text-[10px] text-[#737373] block mt-0.5">
-                    LoRA low-rank adapter injection (&gt;80% VRAM saving) &amp; multi-GPU distribution.
+                  <span className="text-[10px] text-[#A3A3A3] block mt-0.5">
+                    Select local GPU, CPU fallback, multi-GPU DataParallel, or remote network cluster (PyTorch DDP).
+                  </span>
+                </div>
+                {computeTopology?.cluster_detected && (
+                  <span className="px-2 py-0.5 rounded text-[10px] bg-[#14532d] text-[#86efac] border border-[#22c55e]/30 font-semibold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#4ade80] animate-pulse"></span>
+                    Cluster Detected ({computeTopology.cluster_nodes?.length || 1} Nodes)
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                <div>
+                  <label className="text-[10px] text-[#A3A3A3] uppercase font-medium block mb-1">
+                    Execution Device
+                  </label>
+                  <select
+                    value={form.deviceMode}
+                    onChange={(e) => {
+                      const mode = e.target.value;
+                      updateForm("deviceMode", mode);
+                      if (mode === "multi_gpu") {
+                        updateForm("useMultiGpu", true);
+                      } else {
+                        updateForm("useMultiGpu", false);
+                      }
+                    }}
+                    disabled={isRunning || isPaused}
+                    className="input font-mono text-xs"
+                  >
+                    <option value="auto">Auto (Detect Fastest Accelerator)</option>
+                    {computeTopology?.devices && computeTopology.devices.length > 0 ? (
+                      computeTopology.devices.map((d: any) => (
+                        <option key={d.index} value={`cuda:${d.index}`}>
+                          GPU {d.index}: {d.name} ({Math.round(d.total_vram_mb / 1024)}GB VRAM)
+                        </option>
+                      ))
+                    ) : (
+                      <option value="cuda:0">GPU 0 (CUDA Default)</option>
+                    )}
+                    <option value="cpu">CPU (Pure CPU Fallback)</option>
+                    <option value="multi_gpu">
+                      Multi-GPU Parallel ({computeTopology?.gpu_count || 2} GPUs)
+                    </option>
+                    <option value="cluster">
+                      Remote Node Cluster (PyTorch DDP)
+                    </option>
+                  </select>
+                </div>
+
+                <div className="flex flex-col justify-center text-[10px] text-[#A3A3A3]">
+                  <span className="font-semibold text-[#D4D4D4]">
+                    {form.deviceMode === "cluster"
+                      ? "Distributed Multi-Node PyTorch DDP"
+                      : form.deviceMode === "multi_gpu"
+                      ? `Local DataParallel across ${computeTopology?.gpu_count || 2} GPUs`
+                      : form.deviceMode === "cpu"
+                      ? "System RAM execution (slow, debugging only)"
+                      : `Dedicated Hardware: ${computeTopology?.devices?.[0]?.name || "NVIDIA GPU"}`}
+                  </span>
+                  <span className="text-[9px] text-[#737373]">
+                    {form.deviceMode === "cluster"
+                      ? "Synchronizes gradients across nodes via TCP/IP sockets"
+                      : "Zero-paging memory protection active"}
+                  </span>
+                </div>
+              </div>
+
+              {/* Cluster Parameters when "cluster" is selected */}
+              {form.deviceMode === "cluster" && (
+                <div className="p-2.5 rounded bg-[#202020] border border-[#333333] space-y-2 mt-2">
+                  <div className="flex items-center justify-between border-b border-[#262626] pb-1">
+                    <span className="text-[10px] font-semibold text-[#F2F2F2] uppercase">
+                      Cluster Network Configuration (PyTorch DDP)
+                    </span>
+                    <span className="text-[9px] text-[#A3A3A3] font-mono">
+                      TCP/IP Socket Sync
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div>
+                      <label className="text-[10px] text-[#A3A3A3] uppercase block mb-1">
+                        Master Node IP
+                      </label>
+                      <input
+                        type="text"
+                        value={form.clusterMasterAddr}
+                        onChange={(e) => updateForm("clusterMasterAddr", e.target.value)}
+                        disabled={isRunning || isPaused}
+                        placeholder="127.0.0.1 or 192.168.1.100"
+                        className="input text-xs font-mono"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] text-[#A3A3A3] uppercase block mb-1">
+                        Master Port
+                      </label>
+                      <input
+                        type="number"
+                        value={form.clusterMasterPort}
+                        onChange={(e) => updateForm("clusterMasterPort", parseInt(e.target.value) || 29500)}
+                        disabled={isRunning || isPaused}
+                        className="input text-xs font-mono text-center"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] text-[#A3A3A3] uppercase block mb-1">
+                        World Size (Nodes)
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={form.clusterWorldSize}
+                        onChange={(e) => updateForm("clusterWorldSize", Math.max(1, parseInt(e.target.value) || 1))}
+                        disabled={isRunning || isPaused}
+                        className="input text-xs font-mono text-center"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="text-[10px] text-[#A3A3A3] uppercase block mb-1">
+                        Node Rank
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={form.clusterRank}
+                        onChange={(e) => updateForm("clusterRank", Math.max(0, parseInt(e.target.value) || 0))}
+                        disabled={isRunning || isPaused}
+                        className="input text-xs font-mono text-center"
+                      />
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-[#737373]">
+                    Rank 0 is the coordinator/master node. Worker nodes should set Rank &ge; 1 pointing to the Master IP.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* PEFT / LoRA Controls */}
+            <div className="p-2.5 rounded bg-[#1B1B1B] border border-[#262626] space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="text-xs text-[#F2F2F2] font-semibold uppercase">
+                    PEFT Adaptation (LoRA)
+                  </span>
+                  <span className="text-[10px] text-[#A3A3A3] block mt-0.5">
+                    LoRA low-rank adapter injection (&gt;80% VRAM saving).
                   </span>
                 </div>
                 <div className="flex items-center gap-3">
@@ -1055,19 +1518,6 @@ export const TrainingView: React.FC = () => {
                     />
                     <span className="text-xs text-[#F2F2F2] font-mono">LoRA Adapter</span>
                   </label>
-
-                  {computeTopology?.gpu_count > 1 && (
-                    <label className="flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={form.useMultiGpu}
-                        onChange={(e) => updateForm("useMultiGpu", e.target.checked)}
-                        disabled={isRunning || isPaused}
-                        className="rounded border-[#333333] bg-[#202020] text-[#D4D4D4] focus:ring-0 w-3.5 h-3.5"
-                      />
-                      <span className="text-xs text-[#F2F2F2] font-mono">Multi-GPU ({computeTopology.gpu_count}x)</span>
-                    </label>
-                  )}
                 </div>
               </div>
 
@@ -1153,7 +1603,7 @@ export const TrainingView: React.FC = () => {
 
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   Micro-Batch Size
                 </label>
                 <input
@@ -1161,12 +1611,12 @@ export const TrainingView: React.FC = () => {
                   value={form.microBatchSize}
                   onChange={(e) => updateForm("microBatchSize", parseInt(e.target.value) || 4)}
                   disabled={isRunning || isPaused}
-                  className="input"
+                  className="input font-mono-num font-semibold"
                 />
               </div>
 
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   Grad Accum Steps
                 </label>
                 <input
@@ -1174,12 +1624,12 @@ export const TrainingView: React.FC = () => {
                   value={form.gradAccumSteps}
                   onChange={(e) => updateForm("gradAccumSteps", parseInt(e.target.value) || 8)}
                   disabled={isRunning || isPaused}
-                  className="input"
+                  className="input font-mono-num font-semibold"
                 />
               </div>
 
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   Seq Length
                 </label>
                 <input
@@ -1187,12 +1637,12 @@ export const TrainingView: React.FC = () => {
                   value={form.seqLen}
                   onChange={(e) => updateForm("seqLen", parseInt(e.target.value) || 256)}
                   disabled={isRunning || isPaused}
-                  className="input"
+                  className="input font-mono-num font-semibold"
                 />
               </div>
 
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   Grad Clip Norm
                 </label>
                 <input
@@ -1201,7 +1651,7 @@ export const TrainingView: React.FC = () => {
                   value={form.gradClip}
                   onChange={(e) => updateForm("gradClip", parseFloat(e.target.value) || 1.0)}
                   disabled={isRunning || isPaused}
-                  className="input"
+                  className="input font-mono-num font-semibold"
                 />
               </div>
             </div>
@@ -1209,7 +1659,7 @@ export const TrainingView: React.FC = () => {
             {/* Intervals & Early Stopping */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 pt-1">
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   Checkpoint Every
                 </label>
                 <input
@@ -1217,12 +1667,12 @@ export const TrainingView: React.FC = () => {
                   value={form.chkInterval}
                   onChange={(e) => updateForm("chkInterval", parseInt(e.target.value) || 500)}
                   disabled={isRunning || isPaused}
-                  className="input"
+                  className="input font-mono-num font-semibold"
                 />
               </div>
 
               <div>
-                <label className="text-[10px] text-[#737373] uppercase font-medium block mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
                   Validation Every
                 </label>
                 <input
@@ -1230,7 +1680,7 @@ export const TrainingView: React.FC = () => {
                   value={form.valInterval}
                   onChange={(e) => updateForm("valInterval", parseInt(e.target.value) || 250)}
                   disabled={isRunning || isPaused}
-                  className="input"
+                  className="input font-mono-num font-semibold"
                 />
               </div>
 
@@ -1247,7 +1697,7 @@ export const TrainingView: React.FC = () => {
                   >
                     Early Stopping: {form.earlyStoppingEnabled ? "Enabled" : "Disabled"}
                   </button>
-                  <span className="text-[10px] text-[#525252]">
+                  <span className="text-[10px] text-[#A3A3A3]">
                     Pre-training default: disabled.
                   </span>
                 </div>

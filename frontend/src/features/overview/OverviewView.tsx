@@ -351,21 +351,21 @@ export const OverviewView: React.FC = () => {
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 select-none font-mono">
         {/* Train Loss */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>Train Loss</span>
             <TrendingDown className="w-3 h-3 text-[#A3A3A3]" />
           </div>
           <div className="text-base font-semibold font-mono-num text-[#F2F2F2] mt-1">
             {currentLoss > 0 ? formatNumber(currentLoss, 4) : "—"}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5">
             Step {currentStep.toLocaleString()}
           </div>
         </div>
 
         {/* Validation Loss */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>Val. Loss</span>
             <CheckCircle2 className="w-3 h-3 text-[#A3A3A3]" />
           </div>
@@ -378,14 +378,14 @@ export const OverviewView: React.FC = () => {
               "—"
             )}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5">
             {effectiveValStep ? `Step ${effectiveValStep}` : `Next: Step ${nextValStep}`}
           </div>
         </div>
 
         {/* Dataset Progress */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>Dataset Progress</span>
             <Activity className="w-3 h-3 text-[#A3A3A3]" />
           </div>
@@ -396,7 +396,7 @@ export const OverviewView: React.FC = () => {
               <span>Step {currentStep.toLocaleString()}</span>
             )}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5 truncate">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5 truncate">
             {tokensPerEpoch > 0 ? (
               `${formatCompactNumber(tokensInEpoch)} / ${formatCompactNumber(tokensPerEpoch)} (${epochPercent}%)`
             ) : (
@@ -407,14 +407,14 @@ export const OverviewView: React.FC = () => {
 
         {/* Time & Latency */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>Time & Latency</span>
             <Clock className="w-3 h-3 text-[#A3A3A3]" />
           </div>
           <div className="text-base font-semibold font-mono-num text-[#F2F2F2] mt-1">
             {formatDuration(activeTrainingTime)}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5 flex justify-between">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5 flex justify-between">
             <span>{formatStepLatency(stepTimeMs)}</span>
             <span>{tokPerSec > 0 ? `${Math.round(tokPerSec)} tok/s` : ""}</span>
           </div>
@@ -422,28 +422,28 @@ export const OverviewView: React.FC = () => {
 
         {/* Muon LR */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>Muon LR (Matrix)</span>
             <Sparkles className="w-3 h-3 text-[#A3A3A3]" />
           </div>
           <div className="text-sm font-semibold font-mono-num text-[#F2F2F2] mt-1">
             {muonLr > 0 ? muonLr.toExponential(2) : "—"}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5">
             Phase: {schedPhase}
           </div>
         </div>
 
         {/* AdamW LR */}
         <div className="panel p-2.5 bg-[#202020] border-[#333333]">
-          <div className="text-[10px] text-[#737373] uppercase font-medium flex items-center justify-between">
+          <div className="text-[10px] text-[#D4D4D4] uppercase font-semibold flex items-center justify-between">
             <span>AdamW LR (Vectors)</span>
             <Gauge className="w-3 h-3 text-[#A3A3A3]" />
           </div>
           <div className="text-sm font-semibold font-mono-num text-[#A3A3A3] mt-1">
             {adamwLr > 0 ? adamwLr.toExponential(2) : "—"}
           </div>
-          <div className="text-[10px] text-[#525252] mt-0.5">
+          <div className="text-[10px] text-[#A3A3A3] font-medium mt-0.5">
             Next eval: Step {nextValStep}
           </div>
         </div>
