@@ -7,6 +7,11 @@ export const metadata: Metadata = {
   title: "LLM Maker — Neural Research Workstation",
   description:
     "Advanced Local Neural Network & LLM Training Platform, Architecture Studio & Telemetry Console",
+  icons: {
+    icon: "/logo.png",
+    shortcut: "/logo.png",
+    apple: "/logo.png",
+  },
 };
 
 export default function RootLayout({

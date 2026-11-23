@@ -115,6 +115,27 @@ class WebSocketClient {
 
   public connect(urlOverride?: string): void {
     if (typeof window === "undefined") return;
+
+    // In Tauri desktop environment, listen to native Tauri event bus
+    if (typeof (window as any).__TAURI_INTERNALS__ !== "undefined" || typeof (window as any).__TAURI__ !== "undefined") {
+      this.isConnected = true;
+      this.notifyStatus(true);
+      import("@tauri-apps/api/event").then(({ listen }) => {
+        listen<any>("tauri://training-metrics", (event) => {
+          this.handleIncoming(event.payload);
+        }).catch(() => {});
+
+        listen<any>("tauri://run-stopped", () => {
+          this.handleIncoming({
+            event_type: "STATE_CHANGED",
+            payload: { state: "IDLE" },
+            state: "IDLE",
+          });
+        }).catch(() => {});
+      }).catch(() => {});
+      return;
+    }
+
     if (this.socket && (this.socket.readyState === WebSocket.OPEN || this.socket.readyState === WebSocket.CONNECTING)) {
       return;
     }

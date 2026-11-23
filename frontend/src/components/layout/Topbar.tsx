@@ -23,6 +23,7 @@ import { SetupWizardModal } from "@/components/onboarding/SetupWizardModal";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useHardwareTelemetry } from "@/hooks/useHardwareTelemetry";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
+import { api } from "@/services/api";
 
 const TITLES: Record<string, { section: string; title: string }> = {
   "/": { section: "Workspace", title: "Overview" },
@@ -75,14 +76,12 @@ export const Topbar: React.FC = () => {
 
   // Fetch workspaces
   const fetchWorkspaces = () => {
-    fetch("/api/workspaces")
-      .then((res) => res.json())
+    api.listWorkspaces()
       .then((data) => {
         if (Array.isArray(data)) setWorkspaces(data);
       })
       .catch(() => {});
-    fetch("/api/workspaces/current")
-      .then((res) => res.json())
+    api.getActiveWorkspace()
       .then((data) => {
         if (data && data.id) setActiveWorkspace(data);
       })
@@ -95,11 +94,7 @@ export const Topbar: React.FC = () => {
 
   const handleSwitchWorkspace = async (id: string) => {
     try {
-      await fetch("/api/workspaces/current", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspace_id: id }),
-      });
+      await api.setActiveWorkspace(id);
       fetchWorkspaces();
       setShowWorkspaceDropdown(false);
       window.location.reload();
@@ -111,12 +106,7 @@ export const Topbar: React.FC = () => {
     if (!newWsName.trim() || isCreatingWs) return;
     setIsCreatingWs(true);
     try {
-      const res = await fetch("/api/workspaces", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newWsName.trim() }),
-      });
-      const data = await res.json();
+      const data = await api.createWorkspace(newWsName.trim());
       if (data && data.id) {
         await handleSwitchWorkspace(data.id);
         setShowCreateWsModal(false);
@@ -133,13 +123,7 @@ export const Topbar: React.FC = () => {
     if (!workspaceToDelete || isDeletingWs) return;
     setIsDeletingWs(true);
     try {
-      const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceToDelete.id)}`, {
-        method: "DELETE",
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to delete workspace");
-      }
+      await api.deleteWorkspace(workspaceToDelete.id);
       const wasActive = activeWorkspace?.id === workspaceToDelete.id;
       setWorkspaceToDelete(null);
       await fetchWorkspaces();

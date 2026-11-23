@@ -12,6 +12,7 @@ import {
   HardDrive,
   Sparkles,
 } from "lucide-react";
+import { api } from "@/services/api";
 
 interface SetupWizardModalProps {
   isOpen: boolean;
@@ -29,8 +30,7 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
 
   useEffect(() => {
     if (isOpen) {
-      fetch("/api/hardware")
-        .then((res) => res.json())
+      api.getHardwareTelemetry()
         .then((data) => setHardware(data))
         .catch(() => {});
     }
@@ -41,18 +41,8 @@ export const SetupWizardModal: React.FC<SetupWizardModalProps> = ({ isOpen, onCl
   const handleFinish = async () => {
     setLoading(true);
     try {
-      await fetch("/api/hardware/profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: selectedProfile }),
-      });
-
       if (workspaceName.trim() && workspaceName !== "Default Workspace") {
-        await fetch("/api/workspaces", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: workspaceName }),
-        });
+        await api.createWorkspace(workspaceName);
       }
 
       localStorage.setItem("llm_maker_onboarding_completed", "true");

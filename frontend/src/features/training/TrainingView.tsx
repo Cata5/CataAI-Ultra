@@ -246,10 +246,17 @@ export const TrainingView: React.FC = () => {
         decay_style: "cosine",
       })
       .then((res) => {
-        if (active && Array.isArray(res)) {
+        if (!active || !res) return;
+        let points: Array<{ step: number; lr: number }> = [];
+        if (Array.isArray(res)) {
+          points = res;
+        } else if (Array.isArray((res as any).curve)) {
+          points = (res as any).curve;
+        }
+        if (points.length > 0) {
           setSchedulerCurve({
-            steps: res.map((r: any) => r.step),
-            lrs: res.map((r: any) => r.lr),
+            steps: points.map((r: any) => r.step),
+            lrs: points.map((r: any) => r.lr),
           });
         }
       })
@@ -265,6 +272,7 @@ export const TrainingView: React.FC = () => {
       const payload: any = {
         network_id: form.selectedNetwork,
         dataset_id: form.selectedDataset,
+        dataset_source: form.selectedDataset,
         task: form.selectedTask,
         optimizer: form.optimizer,
         scheduler: form.schedulerType,
@@ -1252,11 +1260,11 @@ export const TrainingView: React.FC = () => {
         <div className="space-y-3">
           <ChartPanel
             title="Schedule curve"
-            labels={schedulerCurve.steps.filter((_, i) => i % 10 === 0)}
+            labels={(schedulerCurve?.steps || []).filter((_, i) => i % 10 === 0)}
             datasets={[
               {
                 label: "Planned LR",
-                data: schedulerCurve.lrs.filter((_, i) => i % 10 === 0),
+                data: (schedulerCurve?.lrs || []).filter((_, i) => i % 10 === 0),
                 borderColor: "#D4D4D4",
                 borderWidth: 1.4,
               },

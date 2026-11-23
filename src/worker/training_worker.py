@@ -172,10 +172,19 @@ class TrainingWorkerProcess:
         self.manual_chk_requested = False
         self.loss_ema = None
 
+        config_arch = payload.get("config_arch", {})
+        network_id = payload.get("network_id")
+        if network_id:
+            from ..networks.registry import NetworkRegistry
+            net_reg = NetworkRegistry()
+            net_cfg = net_reg.get_network(network_id)
+            if net_cfg:
+                config_arch = net_cfg
+
         task_name = (
             payload.get("task")
             or payload.get("task_type")
-            or config_arch.get("default_task")
+            or (config_arch.get("default_task") if isinstance(config_arch, dict) else None)
             or "causal_lm"
         )
         phase = payload.get("phase")
@@ -187,15 +196,12 @@ class TrainingWorkerProcess:
             else:
                 phase = "pretrain"
         self.current_phase = phase
-        dataset_source = payload.get("dataset_source", "tech_wiki_ro")
-        config_arch = payload.get("config_arch", {})
-        network_id = payload.get("network_id")
-        if network_id:
-            from ..networks.registry import NetworkRegistry
-            net_reg = NetworkRegistry()
-            net_cfg = net_reg.get_network(network_id)
-            if net_cfg:
-                config_arch = net_cfg
+        dataset_source = (
+            payload.get("dataset_id")
+            or payload.get("dataset_source")
+            or payload.get("dataset")
+            or "tech_wiki_ro"
+        )
         config_opt = payload.get("config_opt", {})
         config_es = payload.get("config_early_stopping", {})
         max_samples = payload.get("max_samples")
@@ -227,10 +233,21 @@ class TrainingWorkerProcess:
         es_patience = int(payload.get("early_stopping_patience", 20))
         es_min_delta = float(payload.get("early_stopping_min_delta", 0.001))
 
-        base_muon = float(payload.get("muon_lr") or config_opt.get("muon_lr", 3e-3))
-        base_adamw = float(payload.get("adamw_lr") or payload.get("peak_lr") or config_opt.get("adamw_lr", 6e-4))
+        self.sched_type = str(payload.get("scheduler") or payload.get("scheduler_type") or "wsd").lower()
+        self.user_warmup_steps = int(payload.get("warmup_steps") if payload.get("warmup_steps") is not None else 20)
+        self.user_stable_steps = int(payload.get("stable_steps") if payload.get("stable_steps") is not None else 50)
+        self.min_lr = float(payload.get("min_lr") if payload.get("min_lr") is not None else 0.0001)
+
+        base_muon = float(payload.get("muon_lr") or config_opt.get("muon_lr", 0.02))
+        base_adamw = float(
+            payload.get("adamw_lr")
+            or payload.get("learning_rate")
+            or payload.get("peak_lr")
+            or config_opt.get("adamw_lr", 0.003)
+        )
         config_opt["muon_lr"] = base_muon
         config_opt["adamw_lr"] = base_adamw
+        self.auto_lr_adjust = bool(payload.get("auto_lr_adjust", False))
         if "micro_batch_size" in payload:
             config_opt["micro_batch_size"] = int(payload["micro_batch_size"])
         if "grad_accum_steps" in payload:
@@ -242,6 +259,13 @@ class TrainingWorkerProcess:
         self.cumulative_active_time = 0.0
 
         self.workspace_id = str(payload.get("workspace_id") or "default")
+        if self.workspace_id and self.workspace_id != "default":
+            ws_chk_dir = Path(f"workspaces/{self.workspace_id}/checkpoints")
+            ws_chk_dir.mkdir(parents=True, exist_ok=True)
+            self.checkpoint_manager.checkpoint_dir = ws_chk_dir
+        else:
+            self.checkpoint_manager.checkpoint_dir = Path("checkpoints")
+
         self.state_machine.transition_to(RunState.STARTING)
         self.db.create_run(
             run_id=run_id,
@@ -565,32 +589,54 @@ class TrainingWorkerProcess:
                 session_total_steps = max(1, target_steps - start_step)
                 session_step = max(0, step - start_step)
 
-                # 1. Warmup & Cosine Annealing schedule relative to session steps
-                warmup_steps = max(10, min(150, int(session_total_steps * 0.05)))
-                if session_step < warmup_steps:
-                    sched_factor = 0.1 + 0.9 * (float(session_step) / float(max(1, warmup_steps)))
-                    sched_phase = "warmup"
-                elif session_step > int(session_total_steps * 0.85):
-                    decay_span = max(1, session_total_steps - int(session_total_steps * 0.85))
-                    decay_progress = (session_step - int(session_total_steps * 0.85)) / float(decay_span)
-                    sched_factor = 0.15 + 0.85 * 0.5 * (1.0 + math.cos(math.pi * min(1.0, decay_progress)))
-                    sched_phase = "decay"
-                else:
-                    sched_factor = 1.0
-                    sched_phase = "stable"
+                # 1. User-configured Learning Rate Schedule (WSD, Cosine, Linear, Constant)
+                warmup = min(self.user_warmup_steps, max(1, session_total_steps // 2))
+                stable = self.user_stable_steps
+                min_lr_ratio = max(0.0001, min(0.5, self.min_lr / max(1e-12, base_adamw)))
 
-                # 2. Dynamic Auto-Adjustment based on Gradient Stability
-                if self.auto_lr_adjust and step > (start_step + 3) and grad_norm is not None:
-                    if grad_norm < 1.0:
-                        # Gradients very clean: accelerate convergence
-                        self.adaptive_lr_factor = min(1.35, self.adaptive_lr_factor * 1.01)
-                    elif grad_norm > 4.0:
-                        # High gradient pressure: throttle down sharply to protect stability
-                        self.adaptive_lr_factor = max(0.65, self.adaptive_lr_factor * 0.85)
-                    elif grad_norm > 2.0:
-                        self.adaptive_lr_factor = max(0.85, self.adaptive_lr_factor * 0.96)
+                if self.sched_type == "wsd":
+                    if session_step < warmup:
+                        sched_factor = max(0.01, float(session_step) / float(max(1, warmup)))
+                        sched_phase = "warmup"
+                    elif session_step <= (warmup + stable):
+                        sched_factor = 1.0
+                        sched_phase = "stable"
                     else:
-                        self.adaptive_lr_factor = 0.98 * self.adaptive_lr_factor + 0.02 * 1.0
+                        decay_start = warmup + stable
+                        decay_span = max(1, session_total_steps - decay_start)
+                        progress = min(1.0, max(0.0, (session_step - decay_start) / float(decay_span)))
+                        cosine_mult = 0.5 * (1.0 + math.cos(math.pi * progress))
+                        sched_factor = min_lr_ratio + (1.0 - min_lr_ratio) * cosine_mult
+                        sched_phase = "decay"
+                elif self.sched_type in ("cosine", "cos"):
+                    if session_step < warmup:
+                        sched_factor = max(0.01, float(session_step) / float(max(1, warmup)))
+                        sched_phase = "warmup"
+                    else:
+                        decay_span = max(1, session_total_steps - warmup)
+                        progress = min(1.0, max(0.0, (session_step - warmup) / float(decay_span)))
+                        cosine_mult = 0.5 * (1.0 + math.cos(math.pi * progress))
+                        sched_factor = min_lr_ratio + (1.0 - min_lr_ratio) * cosine_mult
+                        sched_phase = "decay"
+                elif self.sched_type == "linear":
+                    if session_step < warmup:
+                        sched_factor = max(0.01, float(session_step) / float(max(1, warmup)))
+                        sched_phase = "warmup"
+                    else:
+                        decay_span = max(1, session_total_steps - warmup)
+                        progress = min(1.0, max(0.0, (session_step - warmup) / float(decay_span)))
+                        sched_factor = min_lr_ratio + (1.0 - min_lr_ratio) * (1.0 - progress)
+                        sched_phase = "decay"
+                else:  # constant
+                    sched_factor = 1.0
+                    sched_phase = "constant"
+
+                # 2. Gradient stability protection (intervenes only if exploding gradient > 15.0)
+                if self.auto_lr_adjust and step > (start_step + 3) and grad_norm is not None:
+                    if grad_norm > 15.0:
+                        self.adaptive_lr_factor = max(0.5, self.adaptive_lr_factor * 0.90)
+                    elif grad_norm < 5.0 and self.adaptive_lr_factor < 1.0:
+                        self.adaptive_lr_factor = min(1.0, self.adaptive_lr_factor * 1.02)
                 else:
                     self.adaptive_lr_factor = 1.0
 
@@ -619,6 +665,7 @@ class TrainingWorkerProcess:
                         phase=phase,
                         run_id=run_id,
                         filename_prefix="manual_snapshot",
+                        workspace_id=self.workspace_id,
                     )
                     self._send_event(WorkerEvent(
                         event_type=EventType.CHECKPOINT_SAVED,
@@ -808,6 +855,7 @@ class TrainingWorkerProcess:
                             train_loss=train_loss,
                             run_id=run_id,
                             is_best=True,
+                            workspace_id=self.workspace_id,
                         )
                         try:
                             from ..notifications.webhook import get_notifier
@@ -819,19 +867,6 @@ class TrainingWorkerProcess:
                             )
                         except Exception as n_err:
                             logger.debug("Webhook notification error: %s", n_err)
-                    elif save_freq > 0 and step % save_freq == 0:
-                        self.checkpoint_manager.save_checkpoint(
-                            model=model,
-                            step=step,
-                            tokens_seen=total_tokens,
-                            optimizers=(muon_opt, adamw_opt),
-                            scheduler=scheduler,
-                            phase=phase,
-                            val_loss=val_loss,
-                            train_loss=train_loss,
-                            run_id=run_id,
-                            filename_prefix="snapshot",
-                        )
 
                     self._send_event(WorkerEvent(
                         event_type=EventType.VALIDATION_COMPLETED,
@@ -859,6 +894,7 @@ class TrainingWorkerProcess:
                             train_loss=train_loss,
                             run_id=run_id,
                             filename_prefix="early_stopped_best",
+                            workspace_id=self.workspace_id,
                         )
                         logger.info(
                             "Early stopping triggered at step %d (patience=%d, best_val_loss=%.4f at step %d)",
@@ -866,6 +902,28 @@ class TrainingWorkerProcess:
                         )
                         self.stop_requested = True
                         break
+
+                # Periodic checkpoint independent of validation
+                if save_freq > 0 and step % save_freq == 0 and detector.best_step != step:
+                    chk_p = self.checkpoint_manager.save_checkpoint(
+                        model=model,
+                        step=step,
+                        tokens_seen=total_tokens,
+                        optimizers=(muon_opt, adamw_opt),
+                        scheduler=scheduler,
+                        phase=phase,
+                        val_loss=self.latest_val_loss,
+                        train_loss=train_loss,
+                        run_id=run_id,
+                        filename_prefix="checkpoint",
+                        workspace_id=self.workspace_id,
+                    )
+                    self._send_event(WorkerEvent(
+                        event_type=EventType.CHECKPOINT_SAVED,
+                        run_id=run_id,
+                        step=step,
+                        payload={"path": str(chk_p), "reason": "interval", "step": step},
+                    ))
 
                 # Telemetry & Memory
                 vram_gb = trainer.memory_tracker.get_peak_allocated_gb() if torch.cuda.is_available() else 0.0
@@ -904,6 +962,7 @@ class TrainingWorkerProcess:
                                 train_loss=train_loss,
                                 run_id=run_id,
                                 filename_prefix="emergency_vram",
+                                workspace_id=self.workspace_id,
                             )
                             if self.state_machine.can_transition_to(RunState.PAUSING):
                                 self.state_machine.transition_to(RunState.PAUSING)
@@ -1067,6 +1126,7 @@ class TrainingWorkerProcess:
                                 train_loss=train_loss,
                                 run_id=run_id,
                                 is_best=True,
+                                workspace_id=self.workspace_id,
                             )
 
                     # Generate training and validation charts in checkpoint folder
@@ -1094,6 +1154,7 @@ class TrainingWorkerProcess:
                         train_loss=train_loss,
                         run_id=run_id,
                         filename_prefix="final_phase_completed",
+                        workspace_id=self.workspace_id,
                     )
                     try:
                         from ..notifications.webhook import get_notifier
@@ -1154,6 +1215,7 @@ class TrainingWorkerProcess:
                         phase=phase,
                         run_id=run_id,
                         filename_prefix="stopped_snapshot",
+                        workspace_id=self.workspace_id,
                     )
                     try:
                         from ..checkpoints.charts import generate_training_charts

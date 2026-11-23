@@ -9,7 +9,7 @@ venv/
 ENV/
 env/
 
-# Testing and linting caches
+# Testing, linting, and temporary caches
 .pytest_cache/
 .ruff_cache/
 .coverage
@@ -24,15 +24,26 @@ htmlcov/
 *.sqlite
 *.sqlite3
 
+# Large Model Weights & Binary Checkpoints (preserves Modelfiles, configs, and source code)
+*.pt
+*.bin
+*.safetensors
+*.gguf
+*.onnx
+*.pth
+
 # Workspaces user data (keep structure, ignore large local data)
 workspaces/*
 !workspaces/.gitkeep
 
-# Logs and debug artifacts
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# Rust / Tauri build artifacts
+target/
+src-tauri/target/
+/llm-maker.exe
+*.exe
+WebView2Loader.dll
+tauri_debug.log
+**/*.rs.bk
 
 # Node / Next.js
 frontend/node_modules/
@@ -40,11 +51,22 @@ frontend/.next/
 frontend/out/
 frontend/build/
 .next/
+*.tsbuildinfo
+
+# Logs and debug artifacts
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Operating System Files
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# IDE & Editor caches
+.vscode/
+.idea/
 
 # Environment variables & secrets
 .env
@@ -52,4 +74,3 @@ desktop.ini
 .env.development.local
 .env.test.local
 .env.production.local
-models/

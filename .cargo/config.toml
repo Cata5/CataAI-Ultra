@@ -1,0 +1,6 @@
+[build]
+target = "x86_64-pc-windows-gnu"
+target-dir = "C:/Users/Cata/.cargo/target_llm_maker"
+
+[env]
+PATH = "C:\\Users\\Cata\\AppData\\Local\\Microsoft\\WinGet\\Packages\\BrechtSanders.WinLibs.POSIX.UCRT.LLVM_Microsoft.Winget.Source_8wekyb3d8bbwe\\mingw64\\bin;C:\\Users\\Cata\\.cargo\\bin;${PATH}"

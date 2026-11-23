@@ -328,6 +328,9 @@ class StudioDatabase:
                 )
             return [dict(r) for r in cur.fetchall()]
 
+    def get_metrics_history(self, run_id: str, limit: int = 3000) -> List[Dict[str, Any]]:
+        return self.get_metrics(run_id=run_id, start_step=0, max_points=limit)
+
     def get_latest_metric(self, run_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         with self._lock, self._get_connection() as conn:
             if run_id:
@@ -480,6 +483,9 @@ class StudioDatabase:
             else:
                 cur = conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT ?", (limit,))
             return [dict(r) for r in cur.fetchall()]
+
+    def get_metrics_history(self, run_id: str, limit: int = 3000) -> List[Dict[str, Any]]:
+        return self.get_metrics(run_id=run_id, start_step=0, max_points=limit)
 
     def get_latest_metric(self, run_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         with self._lock, self._get_connection() as conn:

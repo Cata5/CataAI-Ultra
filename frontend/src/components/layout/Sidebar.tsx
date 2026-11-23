@@ -95,9 +95,11 @@ export const Sidebar: React.FC = () => {
         )}
       >
         <Link href="/" className="flex items-center gap-2.5 overflow-hidden group">
-          <div className="w-6 h-6 rounded bg-[#262626] border border-[#333333] flex items-center justify-center shrink-0 text-[#F2F2F2] font-mono text-xs font-semibold">
-            L
-          </div>
+          <img
+            src="/logo.png"
+            alt="LLM Maker"
+            className="w-6 h-6 rounded object-contain shrink-0"
+          />
           {!collapsed && (
             <div className="flex flex-col min-w-0">
               <span className="font-sans text-xs font-semibold text-[#F2F2F2] tracking-tight truncate">

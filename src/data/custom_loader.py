@@ -85,12 +85,12 @@ class CustomDatasetEngine:
         elif self.db is not None:
             try:
                 ds_record = self.db.get_dataset(dataset_source)
-                if ds_record and "file_path" in ds_record:
+                if ds_record and ds_record.get("file_path") and ds_record["file_path"].strip():
                     cand = Path(ds_record["file_path"])
-                    if cand.exists():
+                    if cand.exists() and cand.is_file():
                         file_path = cand
                     else:
-                        raise FileNotFoundError(f"Registered dataset '{dataset_source}' file missing at: {cand}")
+                        logger.warning("Registered dataset '%s' file missing at: %s", dataset_source, cand)
             except Exception as dbe:
                 logger.warning("Error checking DB for dataset '%s': %s", dataset_source, dbe)
 
@@ -100,7 +100,43 @@ class CustomDatasetEngine:
             if cand.exists() and cand.is_file():
                 file_path = cand
 
-        # 4. Strict error handling: Never silently fall back to synthetic data
+        # 4. Search in workspaces, data/uploads, and data directories
+        if file_path is None:
+            search_dirs = [
+                Path("workspaces/cataai/datasets"),
+                Path("data/uploads"),
+                Path("data"),
+                Path("."),
+            ]
+            for ws_dir in Path("workspaces").glob("*/datasets"):
+                if ws_dir.is_dir() and ws_dir not in search_dirs:
+                    search_dirs.append(ws_dir)
+
+            for d in search_dirs:
+                if not d.exists():
+                    continue
+                cand = d / dataset_source
+                if cand.exists() and cand.is_file():
+                    file_path = cand
+                    break
+                for ext in (".txt", ".jsonl", ".parquet", ".arrow", ".csv"):
+                    cand = d / f"{dataset_source}{ext}"
+                    if cand.exists() and cand.is_file():
+                        file_path = cand
+                        break
+                if file_path:
+                    break
+                try:
+                    for f in d.iterdir():
+                        if f.is_file() and (f.stem == dataset_source or f.name == dataset_source):
+                            file_path = f
+                            break
+                except Exception:
+                    pass
+                if file_path:
+                    break
+
+        # 5. Strict error handling: Never silently fall back to synthetic data
         if file_path is None or not file_path.exists():
             msg = (
                 f"Unknown or missing dataset source: '{dataset_source}'. "
@@ -127,9 +163,8 @@ class CustomDatasetEngine:
             )
 
         is_chat = (
-            phase == "chat_sft"
-            or "chat" in file_path.name.lower()
-            or "alpaca" in file_path.name.lower()
+            phase in ("chat_sft", "instruction_sft", "sft")
+            or (phase != "pretrain" and ("alpaca" in file_path.name.lower() or "chat" in file_path.name.lower()))
         )
 
         if is_chat:
@@ -184,24 +219,40 @@ class CustomDatasetEngine:
         cache_bin = self.cache_dir / f"{file_path.stem}{sub_tag}_tokens.bin"
         cache_file = self.cache_dir / f"{file_path.stem}{sub_tag}_tokens.pt"
 
-        # 1. Zero-copy binary memmap check (< 50ms load time, zero RAM consumption)
-        if cache_bin.exists():
-            print(f"[DatasetEngine] Zero-copy loading binary memmap shard: {cache_bin.name}")
-            if progress_callback:
-                progress_callback(f"Zero-copy loading memmap shard: {cache_bin.name}...", 50.0)
-            mmap_arr = np.memmap(cache_bin, dtype=np.int64, mode="r")
-            return torch.from_numpy(mmap_arr).to(device=device), None
+        # 1. Zero-copy binary memmap check across all cache candidates (< 50ms load time, zero RAM consumption)
+        candidate_bins = [
+            cache_bin,
+            self.cache_dir / f"{file_path.stem}_full_tokens.bin",
+            self.cache_dir / f"{file_path.stem}_tokens.bin",
+            file_path.with_suffix(".bin"),
+            file_path.parent / f"{file_path.stem}_full_tokens.bin",
+        ]
+        for c_bin in candidate_bins:
+            if c_bin.exists() and c_bin.is_file() and c_bin.stat().st_size > 0:
+                print(f"[DatasetEngine] Zero-copy loading binary memmap shard: {c_bin.name}")
+                if progress_callback:
+                    progress_callback(f"Zero-copy loading memmap shard: {c_bin.name}...", 50.0)
+                mmap_arr = np.memmap(c_bin, dtype=np.int64, mode="r")
+                return torch.from_numpy(mmap_arr).to(device=device), None
 
-        # 2. PyTorch .pt cache fallback (using mmap where supported)
-        if cache_file.exists():
-            print(f"[DatasetEngine] Loading pre-tokenized cache: {cache_file.name}")
-            if progress_callback:
-                progress_callback(f"Loading cached token array: {cache_file.name}...", 50.0)
-            try:
-                data = torch.load(cache_file, map_location=device, mmap=True, weights_only=True)
-            except Exception:
-                data = torch.load(cache_file, map_location=device)
-            return data["input_ids"], None
+        # 2. PyTorch .pt cache fallback across all candidates (using mmap where supported)
+        candidate_pts = [
+            cache_file,
+            self.cache_dir / f"{file_path.stem}_full_tokens.pt",
+            self.cache_dir / f"{file_path.stem}_tokens.pt",
+            file_path.with_suffix(".pt"),
+            file_path.parent / f"{file_path.stem}_full_tokens.pt",
+        ]
+        for c_pt in candidate_pts:
+            if c_pt.exists() and c_pt.is_file() and c_pt.stat().st_size > 0:
+                print(f"[DatasetEngine] Loading pre-tokenized cache: {c_pt.name}")
+                if progress_callback:
+                    progress_callback(f"Loading cached token array: {c_pt.name}...", 50.0)
+                try:
+                    data = torch.load(c_pt, map_location=device, mmap=True, weights_only=True)
+                except Exception:
+                    data = torch.load(c_pt, map_location=device)
+                return data["input_ids"], None
 
         # Read text file
         if progress_callback:
@@ -315,25 +366,40 @@ class CustomDatasetEngine:
         cache_bin_lbl = self.cache_dir / f"{file_path.stem}{sub_tag}_sft_lbl.bin"
         cache_file = self.cache_dir / f"{file_path.stem}{sub_tag}_sft.pt"
 
-        # 1. Zero-copy binary memmap check
-        if cache_bin_in.exists() and cache_bin_lbl.exists():
-            print(f"[DatasetEngine] Zero-copy loading binary SFT memmap shards: {cache_bin_in.name}")
-            if progress_callback:
-                progress_callback(f"Zero-copy loading SFT memmap shards...", 50.0)
-            in_arr = np.memmap(cache_bin_in, dtype=np.int64, mode="r")
-            lbl_arr = np.memmap(cache_bin_lbl, dtype=np.int64, mode="r")
-            return torch.from_numpy(in_arr).to(device=device), torch.from_numpy(lbl_arr).to(device=device)
+        # 1. Zero-copy binary memmap check across candidate shards
+        candidate_sft_in = [
+            cache_bin_in,
+            self.cache_dir / f"{file_path.stem}_full_sft_in.bin",
+            self.cache_dir / f"{file_path.stem}_sft_in.bin",
+            file_path.parent / f"{file_path.stem}_full_sft_in.bin",
+        ]
+        for c_in in candidate_sft_in:
+            c_lbl = c_in.parent / c_in.name.replace("_sft_in.bin", "_sft_lbl.bin")
+            if c_in.exists() and c_lbl.exists() and c_in.stat().st_size > 0:
+                print(f"[DatasetEngine] Zero-copy loading binary SFT memmap shards: {c_in.name}")
+                if progress_callback:
+                    progress_callback(f"Zero-copy loading SFT memmap shards...", 50.0)
+                in_arr = np.memmap(c_in, dtype=np.int64, mode="r")
+                lbl_arr = np.memmap(c_lbl, dtype=np.int64, mode="r")
+                return torch.from_numpy(in_arr).to(device=device), torch.from_numpy(lbl_arr).to(device=device)
 
         # 2. PyTorch .pt cache fallback (with mmap)
-        if cache_file.exists():
-            print(f"[DatasetEngine] Loading pre-tokenized chat cache: {cache_file.name}")
-            if progress_callback:
-                progress_callback(f"Loading cached chat SFT array: {cache_file.name}...", 50.0)
-            try:
-                data = torch.load(cache_file, map_location=device, mmap=True, weights_only=True)
-            except Exception:
-                data = torch.load(cache_file, map_location=device)
-            return data["input_ids"], data["labels"]
+        candidate_sft_pt = [
+            cache_file,
+            self.cache_dir / f"{file_path.stem}_full_sft.pt",
+            self.cache_dir / f"{file_path.stem}_sft.pt",
+            file_path.parent / f"{file_path.stem}_full_sft.pt",
+        ]
+        for c_pt in candidate_sft_pt:
+            if c_pt.exists() and c_pt.stat().st_size > 0:
+                print(f"[DatasetEngine] Loading pre-tokenized chat cache: {c_pt.name}")
+                if progress_callback:
+                    progress_callback(f"Loading cached chat SFT array: {c_pt.name}...", 50.0)
+                try:
+                    data = torch.load(c_pt, map_location=device, mmap=True, weights_only=True)
+                except Exception:
+                    data = torch.load(c_pt, map_location=device)
+                return data["input_ids"], data["labels"]
 
         if progress_callback:
             progress_callback(f"Reading {file_path.name} from disk...", 5.0)
