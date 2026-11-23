@@ -68,3 +68,34 @@ export function formatParamCount(params: number | undefined | null): string {
   if (params >= 1_000) return `${(params / 1_000).toFixed(1)}K`;
   return params.toLocaleString();
 }
+
+/**
+ * Robust date/time formatter supporting Unix seconds, milliseconds, numeric strings, and ISO strings.
+ * Never outputs "Invalid Date".
+ */
+export function formatDateTime(val: string | number | undefined | null): string {
+  if (val === undefined || val === null || val === "" || val === "—") return "—";
+  const num = typeof val === "number" ? val : Number(val);
+  if (!isNaN(num) && num > 0) {
+    const ms = num < 1e11 ? num * 1000 : num;
+    const d = new Date(ms);
+    return isNaN(d.getTime()) ? "—" : d.toLocaleString();
+  }
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? "—" : d.toLocaleString();
+}
+
+/**
+ * Robust time formatter supporting Unix seconds, milliseconds, numeric strings, and ISO strings.
+ */
+export function formatTime(val: string | number | undefined | null): string {
+  if (val === undefined || val === null || val === "" || val === "—") return "--:--:--";
+  const num = typeof val === "number" ? val : Number(val);
+  if (!isNaN(num) && num > 0) {
+    const ms = num < 1e11 ? num * 1000 : num;
+    const d = new Date(ms);
+    return isNaN(d.getTime()) ? "--:--:--" : d.toLocaleTimeString();
+  }
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? "--:--:--" : d.toLocaleTimeString();
+}

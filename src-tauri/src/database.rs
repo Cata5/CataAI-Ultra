@@ -646,7 +646,7 @@ impl DatabaseManager {
                     "message": message,
                     "step": step,
                     "timestamp": timestamp,
-                    "created_at": format!("{}", timestamp as i64),
+                    "created_at": timestamp,
                 }))
             })?;
             Ok(rows.filter_map(|r| r.ok()).collect())
@@ -668,7 +668,7 @@ impl DatabaseManager {
                     "message": message,
                     "step": step,
                     "timestamp": timestamp,
-                    "created_at": format!("{}", timestamp as i64),
+                    "created_at": timestamp,
                 }))
             })?;
             Ok(rows.filter_map(|r| r.ok()).collect())
@@ -701,7 +701,7 @@ impl DatabaseManager {
                     "metric_name": "overall_score",
                     "step": step,
                     "details": details,
-                    "created_at": format!("{}", created_at as i64),
+                    "created_at": created_at,
                 }))
             })?;
             Ok(rows.filter_map(|r| r.ok()).collect())
@@ -729,7 +729,7 @@ impl DatabaseManager {
                     "metric_name": "overall_score",
                     "step": step,
                     "details": details,
-                    "created_at": format!("{}", created_at as i64),
+                    "created_at": created_at,
                 }))
             })?;
             Ok(rows.filter_map(|r| r.ok()).collect())

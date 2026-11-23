@@ -916,10 +916,53 @@ pub fn estimate_network(
     let vocab_size = cfg.get("vocab_size").and_then(|v| v.as_i64()).unwrap_or(12288);
     let max_seq_len = cfg.get("max_seq_len").and_then(|v| v.as_i64()).unwrap_or(2048);
     let batch_size = cfg.get("batch_size").or_else(|| raw.get("micro_batch_size")).and_then(|v| v.as_i64()).unwrap_or(4);
+    let n_q = cfg.get("n_q").and_then(|v| v.as_i64()).unwrap_or(8).max(1);
+    let n_kv = cfg.get("n_kv").and_then(|v| v.as_i64()).unwrap_or(2).max(1);
+    let d_ff = cfg.get("d_ff").and_then(|v| v.as_i64()).unwrap_or(d_model * 2).max(1);
+    let tied_embeddings = cfg.get("tied_embeddings")
+        .or_else(|| cfg.get("tie_word_embeddings"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
-    let embed_params = vocab_size * d_model;
-    let layer_params = 12 * d_model * d_model;
-    let total_params = embed_params + (n_layers * layer_params);
+    // If explicit verified total_parameters was already computed and saved, use it directly
+    let explicit_params = cfg.get("parameters")
+        .and_then(|p| p.get("total_parameters").or_else(|| p.get("total_params")))
+        .or_else(|| cfg.get("total_parameters"))
+        .or_else(|| cfg.get("total_params"))
+        .and_then(|v| v.as_i64());
+
+    let total_params = if let Some(ep) = explicit_params {
+        if ep > 0 {
+            ep
+        } else {
+            let d_h = (d_model / n_q).max(1);
+            let embed_params = vocab_size * d_model;
+            let head_params = if tied_embeddings { 0 } else { vocab_size * d_model };
+            let q_p = d_model * (n_q * d_h);
+            let k_p = d_model * (n_kv * d_h);
+            let v_p = d_model * (n_kv * d_h);
+            let out_p = (n_q * d_h) * d_model;
+            let attn_p = q_p + k_p + v_p + out_p;
+            let ffn_p = 3 * d_model * d_ff; // SwiGLU: gate + up + down
+            let norm_p = 2 * d_model;
+            let layer_params = attn_p + ffn_p + norm_p;
+            embed_params + (n_layers * layer_params) + head_params + d_model
+        }
+    } else {
+        let d_h = (d_model / n_q).max(1);
+        let embed_params = vocab_size * d_model;
+        let head_params = if tied_embeddings { 0 } else { vocab_size * d_model };
+        let q_p = d_model * (n_q * d_h);
+        let k_p = d_model * (n_kv * d_h);
+        let v_p = d_model * (n_kv * d_h);
+        let out_p = (n_q * d_h) * d_model;
+        let attn_p = q_p + k_p + v_p + out_p;
+        let ffn_p = 3 * d_model * d_ff; // SwiGLU: gate + up + down
+        let norm_p = 2 * d_model;
+        let layer_params = attn_p + ffn_p + norm_p;
+        embed_params + (n_layers * layer_params) + head_params + d_model
+    };
+
     let params_m = (total_params as f64 / 1_000_000.0 * 100.0).round() / 100.0;
 
     let weights_mb = (total_params as f64 * 2.0) / (1024.0 * 1024.0);

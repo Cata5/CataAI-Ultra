@@ -15,7 +15,7 @@ import {
   Bell,
   RefreshCw,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 
 export const SettingsView: React.FC = () => {
   const [settings, setSettings] = useState<Record<string, any>>({
@@ -106,7 +106,7 @@ export const SettingsView: React.FC = () => {
       accessorKey: "created_at",
       cell: (item) => (
         <span className="text-[#737373] text-[10px]">
-          {item.created_at ? new Date(item.created_at).toLocaleString() : "—"}
+          {formatDateTime(item.created_at)}
         </span>
       ),
     },

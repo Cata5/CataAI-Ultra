@@ -257,7 +257,7 @@ export interface BenchmarkResult {
   score: number;
   metric_name: string;
   details?: Record<string, any>;
-  created_at: string;
+  created_at: string | number;
 }
 
 export interface WebSocketEvent {

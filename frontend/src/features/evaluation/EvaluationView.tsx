@@ -22,7 +22,7 @@ import {
   CheckCircle2,
   Package,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 
 interface SamplingConfig {
   maxTokens: number;
@@ -248,7 +248,7 @@ export const EvaluationView: React.FC = () => {
       accessorKey: "created_at",
       cell: (b) => (
         <span className="text-[#525252] text-[10px] font-mono">
-          {b.created_at ? new Date(b.created_at).toLocaleString() : "—"}
+          {formatDateTime(b.created_at)}
         </span>
       ),
     },

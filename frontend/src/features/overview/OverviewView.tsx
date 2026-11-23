@@ -13,7 +13,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SaveModelModal } from "@/components/ui/SaveModelModal";
 import { Button, buttonClasses } from "@/components/ui/Button";
 import { InlineAlert, AlertTone } from "@/components/ui/InlineAlert";
-import { formatCompactNumber, formatNumber, formatDuration, formatStepLatency } from "@/lib/utils";
+import { formatCompactNumber, formatNumber, formatDuration, formatStepLatency, formatTime } from "@/lib/utils";
 import {
   Activity,
   Play,
@@ -679,7 +679,7 @@ export const OverviewView: React.FC = () => {
                     </span>
                   </div>
                   <span className="shrink-0 text-[10px] text-[#525252]">
-                    {e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : "--:--:--"}
+                    {formatTime(e.timestamp)}
                   </span>
                 </div>
               ))}
