@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..db.database import StudioDatabase
+from ..utils.paths import data_dir, workspaces_dir
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,9 @@ logger = logging.getLogger(__name__)
 class WorkspaceManager:
     """Manages workspace lifecycle, directory structure, and resource isolation."""
 
-    def __init__(self, db: Optional[StudioDatabase] = None, base_dir: Path | str = "workspaces") -> None:
+    def __init__(self, db: Optional[StudioDatabase] = None, base_dir: Optional[Path | str] = None) -> None:
         self.db = db or StudioDatabase()
-        self.base_dir = Path(base_dir)
+        self.base_dir = Path(base_dir) if base_dir else workspaces_dir()
         self.base_dir.mkdir(parents=True, exist_ok=True)
 
     def _sanitize_id(self, ws_id: str) -> str:
@@ -36,10 +37,10 @@ class WorkspaceManager:
         """Returns directory paths for checkpoints, datasets, models, and artifacts for a workspace."""
         if workspace_id == "default":
             # Backward compatibility: use repository root directories
-            chk = Path("checkpoints")
-            data = Path("data")
-            models = Path("networks/registry")
-            artifacts = Path("data/runs")
+            chk = data_dir() / "checkpoints"
+            data = data_dir() / "data"
+            models = data_dir() / "networks" / "registry"
+            artifacts = data_dir() / "data" / "runs"
         else:
             ws_root = self.base_dir / workspace_id
             chk = ws_root / "checkpoints"
@@ -53,7 +54,7 @@ class WorkspaceManager:
         artifacts.mkdir(parents=True, exist_ok=True)
 
         return {
-            "root": Path(".") if workspace_id == "default" else (self.base_dir / workspace_id),
+            "root": data_dir() if workspace_id == "default" else (self.base_dir / workspace_id),
             "checkpoints": chk,
             "datasets": data,
             "models": models,
@@ -145,7 +146,7 @@ class WorkspaceManager:
                 shutil.rmtree(ws_root, ignore_errors=True)
             # Remove custom network configs associated with this workspace
             try:
-                reg_dir = Path("networks/registry")
+                reg_dir = data_dir() / "networks" / "registry"
                 if reg_dir.exists():
                     for p in reg_dir.glob("*.json"):
                         try:

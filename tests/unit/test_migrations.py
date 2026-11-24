@@ -109,7 +109,7 @@ def test_fresh_database_needs_no_backup(tmp_path: Path) -> None:
 
 def test_default_database_path_is_absolute() -> None:
     assert DEFAULT_DB_PATH.is_absolute()
-    assert DEFAULT_DB_PATH.parent.name == "data"
+    assert DEFAULT_DB_PATH.name == "studio.db"
 
 
 def test_migration_refuses_without_a_backup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

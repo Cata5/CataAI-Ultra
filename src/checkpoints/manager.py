@@ -7,6 +7,7 @@ Ensures backward compatibility with existing legacy checkpoints.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -21,10 +22,63 @@ import torch
 import torch.nn as nn
 
 from ..db.database import StudioDatabase
+from ..utils.paths import data_dir, models_dir, workspaces_dir
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CHECKPOINT_DIR = Path("checkpoints")
+DEFAULT_CHECKPOINT_DIR = data_dir() / "checkpoints"
+
+
+def is_main_process() -> bool:
+    """True for rank 0 or when no torch.distributed group is active."""
+    try:
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            return torch.distributed.get_rank() == 0
+    except Exception:
+        pass
+    return True
+
+
+def unwrap_model(model: nn.Module) -> nn.Module:
+    """Returns the underlying module for DDP/DataParallel/compile wrappers."""
+    return getattr(model, "module", model)
+
+
+def file_sha256(path: Union[str, Path]) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def checksum_path(path: Union[str, Path]) -> Path:
+    return Path(path).with_suffix(Path(path).suffix + ".sha256")
+
+
+def verify_checksum(path: Union[str, Path]) -> Optional[str]:
+    """Verifies a sidecar checksum when present; returns the digest or None."""
+    sidecar = checksum_path(path)
+    if not sidecar.is_file():
+        logger.warning("No SHA-256 sidecar for checkpoint %s; integrity not verified", path)
+        return None
+    expected = sidecar.read_text(encoding="ascii").strip().split()[0]
+    actual = file_sha256(path)
+    if actual.lower() != expected.lower():
+        raise RuntimeError(
+            f"Checkpoint '{Path(path).name}' failed SHA-256 verification "
+            f"(expected {expected[:12]}..., got {actual[:12]}...). Restore a backup."
+        )
+    return actual
+
+
+def write_checksum(path: Union[str, Path]) -> str:
+    digest = file_sha256(path)
+    sidecar = checksum_path(path)
+    temporary = sidecar.with_suffix(sidecar.suffix + ".tmp")
+    temporary.write_text(digest + "\n", encoding="ascii")
+    os.replace(temporary, sidecar)
+    return digest
 
 
 def safe_torch_load(path: Union[str, Path], map_location: str = "cpu") -> Any:
@@ -86,6 +140,10 @@ class CheckpointManager:
         target_name = f"{chk_id}.pt"
         target_path = self.checkpoint_dir / target_name
         temp_path = self.checkpoint_dir / f".tmp_{uuid.uuid4().hex}_{target_name}"
+        if not is_main_process():
+            # DDP replicas all call save_checkpoint at the same step; only rank 0
+            # owns the artefact and the database row.
+            return target_path
 
         # Collect RNG states for exact reproducibility using safe primitives/tensors
         safe_rng_states: Dict[str, Any] = {
@@ -123,7 +181,7 @@ class CheckpointManager:
             "tokenizer_version": tokenizer_ver,
             "val_loss": val_loss,
             "train_loss": train_loss,
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": unwrap_model(model).state_dict(),
             "muon_state_dict": muon_sd,
             "adamw_state_dict": adamw_sd,
             "scheduler_state_dict": scheduler_sd,
@@ -155,7 +213,8 @@ class CheckpointManager:
                 ) from last_err
 
             file_size = target_path.stat().st_size
-            logger.info("Saved atomic checkpoint to %s (%d bytes)", target_path, file_size)
+            digest = write_checksum(target_path)
+            logger.info("Saved atomic checkpoint to %s (%d bytes, sha256 %s)", target_path, file_size, digest[:12])
 
             # Save companion metadata JSON for instant zero-deserialization inspection
             meta_json = {
@@ -174,6 +233,7 @@ class CheckpointManager:
                 "timestamp": timestamp,
                 "is_best": is_best,
                 "file_size_bytes": file_size,
+                "sha256": digest,
                 "total_params": sum(p.numel() for p in model.parameters()),
                 "network_id": (training_config or {}).get("network_id"),
                 "config_arch": (training_config or {}).get("arch") or (training_config or {}).get("config_arch"),
@@ -239,7 +299,7 @@ class CheckpointManager:
             return cand.resolve()
 
         # Check models directory and subdirectories
-        models_root = Path("models")
+        models_root = models_dir()
         if models_root.exists():
             cand_m = models_root / p
             if cand_m.is_file():
@@ -259,7 +319,7 @@ class CheckpointManager:
         # Bounded fallback: only known artefact directories. A repository-wide search
         # could silently resolve to an unrelated file with the same name (e.g. a
         # downloaded copy) and is unbounded in time on large trees.
-        for artefact_root in (Path("checkpoints_v2"), Path("workspaces")):
+        for artefact_root in (Path("checkpoints_v2"), workspaces_dir()):
             if not artefact_root.is_dir():
                 continue
             for found in artefact_root.glob(f"**/{p.name}"):
@@ -282,6 +342,7 @@ class CheckpointManager:
         Preserves backward compatibility with legacy checkpoints (v1, LLM from Scratch, safetensors).
         """
         path = self.resolve_checkpoint_path(checkpoint_path)
+        verify_checksum(path)
 
         target_device = device or (torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         logger.info("Loading checkpoint from %s onto %s", path, target_device)
@@ -548,7 +609,7 @@ class CheckpointManager:
                 info = self.inspect_checkpoint(p)
                 files.append(info)
         # Scan models directory for saved local packages
-        models_root = Path("models")
+        models_root = models_dir()
         if models_root.exists():
             for ext in ("*.pt", "*.bin", "*.safetensors"):
                 for p in models_root.glob(f"**/{ext}"):
@@ -571,7 +632,7 @@ class CheckpointManager:
         active_scheduler: Optional[Any] = None,
         training_config: Optional[Dict[str, Any]] = None,
         metrics_history: Optional[List[Dict[str, Any]]] = None,
-        output_base_dir: Union[str, Path] = "models",
+        output_base_dir: Optional[Union[str, Path]] = None,
         workspace_id: str = "default",
     ) -> Dict[str, Any]:
         """
@@ -583,7 +644,7 @@ class CheckpointManager:
         """
         raw_name = (custom_name.strip() if custom_name and custom_name.strip() else model_id).strip()
         target_name = re.sub(r"[^\w\-_.]", "_", raw_name)
-        out_folder = Path(output_base_dir) / target_name
+        out_folder = (Path(output_base_dir) if output_base_dir else models_dir()) / target_name
         out_folder.mkdir(parents=True, exist_ok=True)
 
         logger.info("Saving local model package '%s' into %s (mode=%s)", target_name, out_folder, save_mode)
@@ -613,7 +674,7 @@ class CheckpointManager:
                 "version": "2.0",
                 "step": int(getattr(active_scheduler, "current_step", 0) or 0),
                 "tokens_seen": int(getattr(active_scheduler, "current_tokens", 0) or 0),
-                "model_state_dict": {k: v.cpu() for k, v in active_model.state_dict().items()},
+                "model_state_dict": {k: v.cpu() for k, v in unwrap_model(active_model).state_dict().items()},
                 "muon_state_dict": muon_sd,
                 "adamw_state_dict": adamw_sd,
                 "scheduler_state_dict": sched_sd,
@@ -658,6 +719,7 @@ class CheckpointManager:
         }
         torch.save(full_payload, full_pt_path)
         full_size_bytes = full_pt_path.stat().st_size
+        full_sha256 = write_checksum(full_pt_path)
 
         # 3. Save Stripped Smaller Weights for Inference ({target_name}_stripped.pt)
         # Cast floating tensors to float16 or keep as-is, exclude all optimizer states
@@ -682,6 +744,7 @@ class CheckpointManager:
         }
         torch.save(stripped_payload, stripped_pt_path)
         stripped_size_bytes = stripped_pt_path.stat().st_size
+        stripped_sha256 = write_checksum(stripped_pt_path)
 
         # 4. Generate validation loss and training dynamics charts in model folder
         chart_paths: Dict[str, str] = {}
@@ -734,6 +797,7 @@ class CheckpointManager:
                     "path": str(full_pt_path.resolve()),
                     "size_bytes": full_size_bytes,
                     "size_mb": round(full_size_bytes / (1024 * 1024), 2),
+                    "sha256": full_sha256,
                     "description": "Full weights with Muon & AdamW optimizer states for continuing training",
                 },
                 "stripped_weights": {
@@ -741,6 +805,7 @@ class CheckpointManager:
                     "path": str(stripped_pt_path.resolve()),
                     "size_bytes": stripped_size_bytes,
                     "size_mb": round(stripped_size_bytes / (1024 * 1024), 2),
+                    "sha256": stripped_sha256,
                     "reduction_pct": round((1.0 - stripped_size_bytes / max(1, full_size_bytes)) * 100, 1),
                     "description": "Compact stripped weights for high-efficiency inference",
                 },
@@ -754,7 +819,7 @@ class CheckpointManager:
 
         # 6. Auto-register network config in registry so it appears in LLM Builder & Training selectors
         try:
-            reg_dir = Path("networks/registry")
+            reg_dir = data_dir() / "networks" / "registry"
             reg_dir.mkdir(parents=True, exist_ok=True)
             net_path = reg_dir / f"{target_name}.json"
             if not net_path.exists():
@@ -794,6 +859,9 @@ class CheckpointManager:
         if path.exists():
             try:
                 path.unlink()
+                sidecar = checksum_path(path)
+                if sidecar.exists():
+                    sidecar.unlink()
                 removed = True
             except Exception as e:
                 logger.warning("Could not unlink %s: %s", path, e)

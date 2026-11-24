@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ..security.secrets import SECRET_KEYS, REDACTED, SecretStore, SecretsKeyError
+from ..utils.paths import default_db_path
 from .migrations import apply_migrations
 
 logger = logging.getLogger(__name__)
@@ -23,9 +24,9 @@ class DatabaseIntegrityError(RuntimeError):
     """Raised when SQLite reports a corrupt or unreadable database."""
 
 
-# Resolved against the repository root rather than the process CWD so the browser
-# server and direct StudioDatabase() calls always share one database.
-DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "rocanon_studio.db"
+# One writable database per installation. LLMMAKER_DB_PATH / LLMMAKER_DATA_DIR
+# override it; source checkouts keep their historical project-root location.
+DEFAULT_DB_PATH = default_db_path()
 
 
 class StudioDatabase:

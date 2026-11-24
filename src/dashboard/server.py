@@ -49,6 +49,7 @@ from ..telemetry.hardware import HardwareMonitor
 from ..telemetry.profiles import HardwareProfile
 from ..training.factory import calculate_analytical_parameters, list_checkpoints
 from ..training.tasks.registry import TaskRegistry
+from ..utils.paths import models_dir
 from ..worker.protocol import CommandType, EventType, RunState, WorkerCommand, WorkerEvent
 from ..worker.worker_manager import WorkerManager
 from ..workspace.manager import WorkspaceManager
@@ -165,8 +166,9 @@ async def handle_system_status(request: web.Request) -> web.Response:
                 pass
 
     active_net = getattr(STATE, "active_model_name", None)
-    if not active_net and Path("models").exists():
-        saved_dirs = [d for d in Path("models").iterdir() if d.is_dir() and not d.name.startswith(".")]
+    model_root = models_dir()
+    if not active_net and model_root.exists():
+        saved_dirs = [d for d in model_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
         if saved_dirs:
             saved_dirs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
             active_net = saved_dirs[0].name
@@ -471,7 +473,8 @@ async def handle_upload_dataset(request: web.Request) -> web.Response:
         return web.json_response({"error": "No file field found"}, status=400)
 
     filename = Path(field.filename).name
-    temp_dir = Path("data/uploads/temp")
+    from ..utils.paths import uploads_dir
+    temp_dir = uploads_dir() / "temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
     temp_path = temp_dir / filename
 
@@ -545,6 +548,51 @@ async def handle_tokenize_dataset(request: web.Request) -> web.Response:
         return web.json_response({"error": f"Tokenization error: {e}"}, status=500)
 
 
+async def handle_format_sft_dataset(request: web.Request) -> web.Response:
+    """Converts Alpaca/ShareGPT/ChatML records into canonical masked-SFT JSONL."""
+    ds_id = request.match_info.get("id")
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not ds_id:
+        ds_id = data.get("dataset_id") or data.get("id")
+    if not ds_id:
+        return web.json_response({"error": "No dataset_id provided"}, status=400)
+
+    info = DATASET_MGR.get_dataset_details(str(ds_id))
+    source = info.get("file_path") if info else None
+    if not source or not Path(source).is_file():
+        return web.json_response({"error": f"Dataset file not found for {ds_id}"}, status=404)
+
+    template = str(data.get("template") or data.get("chat_template") or "chatml")
+    max_records = data.get("max_records")
+    try:
+        max_records = int(max_records) if max_records not in (None, "") else None
+    except (TypeError, ValueError):
+        return web.json_response({"error": "max_records must be an integer"}, status=400)
+
+    from ..data.sft_formatter import SFTFormatError, format_dataset
+    from ..utils.paths import uploads_dir
+
+    safe_stem = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in Path(source).stem)[:80]
+    output = uploads_dir() / "formatted" / f"{safe_stem}_{template}.jsonl"
+    try:
+        result = format_dataset(source, output, template=template, max_records=max_records)
+        if bool(data.get("register", True)):
+            registered = DATASET_MGR.register_uploaded_file(
+                output,
+                name=f"{safe_stem}_{template}_sft",
+                workspace_id=get_request_workspace_id(request),
+            )
+            result["dataset"] = registered
+        return web.json_response(result)
+    except SFTFormatError as exc:
+        return web.json_response({"error": str(exc)}, status=422)
+    except Exception as exc:
+        logger.exception("SFT formatting failed for %s: %s", ds_id, exc)
+        return web.json_response({"error": f"SFT formatting failed: {exc}"}, status=500)
+
 async def handle_curate_dataset(request: web.Request) -> web.Response:
     ds_id = request.match_info.get("id")
     try:
@@ -597,6 +645,37 @@ async def handle_test_notification(request: web.Request) -> web.Response:
 
 
 # ---------------- Evaluation Lab ----------------
+
+async def handle_attention_map(request: web.Request) -> web.Response:
+    """Real attention heatmap for one layer/head of a checkpoint."""
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    prompt = str(data.get("prompt") or "").strip()
+    if not prompt:
+        return web.json_response({"error": "prompt is required"}, status=400)
+    layer = int(data.get("layer", 0))
+    head = int(data.get("head", 0))
+    max_tokens = max(2, min(512, int(data.get("max_tokens", 128))))
+    checkpoint_req = data.get("checkpoint") or data.get("checkpoint_path")
+    is_training_active = getattr(WORKER_MGR, "current_state", RunState.IDLE) in (RunState.RUNNING, RunState.STARTING)
+    engine = get_inference_engine(force_cpu=is_training_active)
+    if checkpoint_req:
+        try:
+            engine.load_checkpoint_weights(CHECKPOINT_MGR.resolve_checkpoint_path(checkpoint_req))
+        except Exception as exc:
+            logger.error("Failed to load checkpoint %s for attention map: %s", checkpoint_req, exc)
+            return web.json_response({"error": f"Failed to load checkpoint: {exc}"}, status=400)
+    try:
+        result = engine.attention_map(prompt, layer=layer, head=head, max_tokens=max_tokens)
+    except Exception as exc:
+        logger.error("Attention map failed: %s", exc)
+        return web.json_response({"error": str(exc)}, status=400)
+    result["checkpoint"] = str(checkpoint_req) if checkpoint_req else None
+    result["device"] = str(engine.device)
+    result["gpu_arbitrated"] = is_training_active
+    return web.json_response(result)
 
 async def handle_eval_generate(request: web.Request) -> web.Response:
     try:
@@ -920,8 +999,9 @@ async def handle_delete_dataset(request: web.Request) -> web.Response:
                 )
 
     # 2. Safely remove physical files inside managed data/uploads and data/cache
-    uploads_dir = Path("data/uploads").resolve()
-    cache_dir = Path("data/cache").resolve()
+    from ..utils.paths import cache_dir as app_cache_dir, uploads_dir as app_uploads_dir
+    uploads_dir = app_uploads_dir().resolve()
+    cache_dir = app_cache_dir().resolve()
     deleted_files = []
 
     for p in uploads_dir.glob(f"*{dataset_id}*"):
@@ -1254,7 +1334,8 @@ async def _receive_upload(request: web.Request, destination: Path) -> None:
 async def handle_import_workspace(request: web.Request) -> web.Response:
     from ..workspace.archive import WorkspaceArchive, WorkspaceArchiveError
 
-    upload_dir = Path("data/uploads")
+    from ..utils.paths import uploads_dir as app_uploads_dir
+    upload_dir = app_uploads_dir()
     upload_dir.mkdir(parents=True, exist_ok=True)
     temp = tempfile.NamedTemporaryFile(prefix="workspace_import_", suffix=".zip", dir=upload_dir, delete=False)
     temp_path = Path(temp.name)
@@ -1453,14 +1534,90 @@ async def handle_v1_chat_completions(request: web.Request) -> web.Response:
         return web.json_response(full_res)
 
 
-async def handle_export_ollama(request: web.Request) -> web.Response:
-    model_id = request.match_info.get("id") or "model"
+async def handle_list_models(request: web.Request) -> web.Response:
+    """Lists saved local model packages (metadata.json + weight files)."""
+    items: List[Dict[str, Any]] = []
     try:
-        from ..infer.serving import export_ollama_modelfile
-        modelfile_path = export_ollama_modelfile(model_path=f"models/{model_id}/{model_id}_stripped.pt", model_name=model_id)
-        return web.json_response({"success": True, "modelfile_path": modelfile_path})
-    except Exception as e:
-        return web.json_response({"error": str(e)}, status=500)
+        for folder in models_dir().iterdir():
+            if not folder.is_dir() or folder.name.startswith("."):
+                continue
+            metadata: Dict[str, Any] = {}
+            meta_path = folder / "metadata.json"
+            if meta_path.is_file():
+                try:
+                    metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+                except Exception:
+                    metadata = {}
+            files = []
+            for path in sorted(folder.iterdir()):
+                if path.is_file() and path.suffix in (".pt", ".gguf", ".safetensors"):
+                    files.append({
+                        "name": path.name,
+                        "bytes": path.stat().st_size,
+                        "has_sha256": path.with_suffix(path.suffix + ".sha256").is_file(),
+                    })
+            items.append({
+                "id": folder.name,
+                "name": metadata.get("custom_name") or metadata.get("name") or folder.name,
+                "saved_at": metadata.get("saved_at"),
+                "step": metadata.get("step"),
+                "val_loss": metadata.get("val_loss"),
+                "total_parameters": metadata.get("total_parameters"),
+                "files": files,
+                "metadata": metadata,
+            })
+    except OSError as exc:
+        return web.json_response({"error": str(exc)}, status=500)
+    items.sort(key=lambda item: item.get("saved_at") or 0, reverse=True)
+    return web.json_response({"models": items, "total": len(items)})
+
+
+async def handle_export_ollama(request: web.Request) -> web.Response:
+    return web.json_response(
+        {
+            "error": (
+                "Ollama cannot load a RoCanon checkpoint: the Canon depthwise convolutions "
+                "are not representable in stock llama.cpp. Use /export_gguf for a lossless "
+                "custom-architecture GGUF, or export safetensors for PyTorch inference."
+            )
+        },
+        status=400,
+    )
+
+
+async def handle_export_gguf(request: web.Request) -> web.Response:
+    """Writes a lossless custom-architecture GGUF plus a JSON manifest."""
+    from ..infer.gguf_export import GGUFUnsupportedError, export_gguf
+    from ..utils.paths import models_dir
+
+    model_id = request.match_info.get("id") or "model"
+    safe_id = re.sub(r"[^\w\-_.]", "_", model_id).strip(".")
+    if not safe_id:
+        return web.json_response({"error": "Invalid model id"}, status=400)
+    quant = str(request.query.get("quant", "Q8_0")).upper()
+    folder = models_dir() / safe_id
+    candidates = [folder / f"{safe_id}_stripped.pt", folder / f"{safe_id}_full.pt"]
+    checkpoint = next((path for path in candidates if path.is_file()), None)
+    if checkpoint is None:
+        return web.json_response({"error": f"No saved model package found for {model_id}"}, status=404)
+    try:
+        payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
+        metadata = {
+            "general.name": safe_id,
+            "rocanon.source_checkpoint": str(checkpoint),
+        }
+        manifest = export_gguf(
+            payload,
+            folder / f"{safe_id}-{quant}.gguf",
+            quant=quant,
+            metadata=metadata,
+        )
+        return web.json_response({"success": True, **manifest})
+    except GGUFUnsupportedError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("GGUF export failed for %s", model_id)
+        return web.json_response({"error": str(exc)}, status=500)
 
 
 # ---------------- WebSocket ----------------
@@ -1694,6 +1851,7 @@ def create_app() -> web.Application:
 
     app.router.add_get("/api/checkpoints", handle_get_checkpoints)
     app.router.add_delete("/api/checkpoints/{id}", handle_delete_checkpoint)
+    app.router.add_get("/api/models", handle_list_models)
     app.router.add_post("/api/models/save-local", handle_save_local_model)
 
     app.router.add_get("/api/pipelines", handle_get_pipelines)
@@ -1710,12 +1868,15 @@ def create_app() -> web.Application:
     app.router.add_get("/api/datasets/{id}/stats", handle_get_dataset_stats)
     app.router.add_post("/api/datasets/{id}/tokenize", handle_tokenize_dataset)
     app.router.add_post("/api/datasets/tokenize", handle_tokenize_dataset)
+    app.router.add_post("/api/datasets/{id}/format", handle_format_sft_dataset)
+    app.router.add_post("/api/datasets/format", handle_format_sft_dataset)
     app.router.add_post("/api/datasets/{id}/curate", handle_curate_dataset)
     app.router.add_post("/api/datasets/curate", handle_curate_dataset)
     app.router.add_delete("/api/datasets/{id}", handle_delete_dataset)
     app.router.add_post("/api/tokenizer/inspect", handle_tokenizer_inspect)
     app.router.add_post("/api/notifications/test", handle_test_notification)
 
+    app.router.add_post("/api/evaluation/attention", handle_attention_map)
     app.router.add_post("/api/evaluation/generate", handle_eval_generate)
     app.router.add_post("/api/evaluation/stream", handle_eval_stream)
     app.router.add_post("/api/evaluation/compare", handle_eval_compare)
@@ -1741,6 +1902,8 @@ def create_app() -> web.Application:
     app.router.add_post("/api/models/import_hf", handle_import_hf_model)
     app.router.add_get("/api/compute/topology", handle_get_compute_topology)
     app.router.add_post("/api/models/{id}/export_ollama", handle_export_ollama)
+    app.router.add_get("/api/models/{id}/export_gguf", handle_export_gguf)
+    app.router.add_post("/api/models/{id}/export_gguf", handle_export_gguf)
 
     # OpenAI-Compatible v1 Endpoints (for Cursor, LangChain, OpenAI Python SDK)
     app.router.add_get("/v1/models", handle_v1_models)

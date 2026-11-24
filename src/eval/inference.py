@@ -149,6 +149,46 @@ class InferenceEngine:
         )
 
     @torch.inference_mode()
+    def attention_map(self, prompt: str, layer: int = 0, head: int = 0, max_tokens: int = 256) -> Dict[str, Any]:
+        """Returns a real causal attention matrix for one layer/head.
+
+        Only the selected block materialises scores; every other block keeps the
+        normal fused SDPA path. The matrix is [prompt_tokens, prompt_tokens].
+        """
+        if not prompt.strip():
+            raise ValueError("Prompt must not be empty")
+        ids = self.tokenizer.encode(prompt, add_special_tokens=False)[-max_tokens:]
+        if len(ids) < 1:
+            raise ValueError("Prompt produced no tokens")
+        blocks = getattr(self.model, "layers", None)
+        if blocks is None or not (0 <= layer < len(blocks)):
+            raise ValueError(f"Layer {layer} is out of range")
+        attn = blocks[layer].attn
+        n_heads = int(getattr(attn, "n_q", 1))
+        if not (0 <= head < n_heads):
+            raise ValueError(f"Head {head} is out of range (0..{n_heads - 1})")
+
+        input_ids = torch.tensor([ids], device=self.device, dtype=torch.long)
+        attn.capture_attention = True
+        try:
+            with torch.no_grad():
+                self.model(input_ids)
+            tensor = getattr(attn, "last_attention", None)
+        finally:
+            attn.capture_attention = False
+            attn.last_attention = None
+        if tensor is None:
+            raise RuntimeError("Attention was not captured")
+        matrix = tensor[0, head].float().cpu()
+        tokens = [self.tokenizer.id_to_token(int(token_id)) or str(token_id) for token_id in ids]
+        return {
+            "layer": layer,
+            "head": head,
+            "n_heads": n_heads,
+            "tokens": tokens,
+            "matrix": [[round(float(value), 6) for value in row] for row in matrix],
+        }
+
     def generate(
         self,
         prompt: str,

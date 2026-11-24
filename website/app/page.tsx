@@ -7,7 +7,7 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const ledger = [
   { severity: "Critical", found: 4, fixed: 4, open: 0, accepted: 0 },
   { severity: "High", found: 12, fixed: 12, open: 0, accepted: 0 },
-  { severity: "Medium", found: 11, fixed: 9, open: 2, accepted: 0 },
+  { severity: "Medium", found: 11, fixed: 10, open: 1, accepted: 0 },
   { severity: "Low", found: 7, fixed: 7, open: 0, accepted: 0 },
 ];
 
@@ -16,28 +16,28 @@ const phases = [
     name: "Adoptable",
     status: "In progress",
     body: "A clean Windows laptop, an NVIDIA driver, a download, a training run — no terminal.",
-    shipped: "Bootstrap script, CI, one shared schema.",
-    open: "Signed installer, bundled Python/CUDA runtime, auto-update with rollback.",
+    shipped: "Bootstrap script, CI, one shared schema, portable data root, setup wizard, bundled-Python staging.",
+    open: "Signed installer, auto-update with rollback, clean-machine install proof.",
   },
   {
     name: "Trustworthy",
     status: "Done",
     body: "Losing power mid-run costs at most the current step, and the app explains what happened.",
     shipped: "Pre-migration backups, safe mode, newer-schema refusal, validated checkpoints, encrypted secrets, integrity checks and versioned workspace archives.",
-    open: "Offsite backup and a portable release data directory.",
+    open: "Offsite backup.",
   },
   {
     name: "Capable",
     status: "Next",
     body: "Scale past a single consumer GPU without pretending the plumbing is the product.",
-    shipped: "Single-GPU training, validation, checkpoint resume, evaluation hooks.",
-    open: "Multi-GPU, larger dataset pipelines, reproducible evaluation harness, plugin API.",
+    shipped: "Single-GPU and DataParallel training, real DDP, checkpoint resume, evaluation hooks, plugin API, GGUF export.",
+    open: "Larger dataset pipelines, reproducible evaluation harness, hardware-validated cluster runs.",
   },
   {
     name: "Standard",
     status: "Ongoing",
     body: "Third parties ship plugins and run it in production without asking the maintainer.",
-    shipped: "Audit artifacts, versioned schema, documented failure modes.",
+    shipped: "Audit artifacts, versioned schema, documented failure modes, plugin manifests.",
     open: "Release cadence, governance, compatibility policy, community support.",
   },
 ];
@@ -62,18 +62,18 @@ export default function Home() {
             <p className="kicker">Desktop training workstation</p>
             <h1>Training software you can inspect.</h1>
             <p className="lede">
-              LLM Maker builds small language models on one GPU: a visual architecture
-              editor, a real training loop with validation and checkpoints, and telemetry
-              you can trace back to the code that produced it.
+              LLM Maker builds small language models on your own hardware — one GPU or a
+              cluster: a visual architecture editor, a real training loop with validation
+              and checkpoints, and telemetry you can trace back to the code.
             </p>
             <div className="actions">
               <a className="button" href={REPO}>View repository</a>
               <a className="text-link" href="#audit">Read the audit</a>
             </div>
             <dl className="hero-facts">
-              <div><b>54</b>desktop commands</div>
-              <div><b>79</b>HTTP routes</div>
-              <div><b>265</b>Python tests</div>
+              <div><b>58</b>desktop commands</div>
+              <div><b>86</b>HTTP routes</div>
+              <div><b>354</b>Python tests</div>
             </dl>
           </div>
 
@@ -105,17 +105,17 @@ export default function Home() {
             <li>
               <span className="step">01</span>
               <h3>Interface</h3>
-              <p>Next.js 16 and React 19. 13 pages, 54 typed API methods, Tauri webview or browser.</p>
+              <p>Next.js 16 and React 19. 13 pages, 66 typed API methods, Tauri webview or browser.</p>
             </li>
             <li>
               <span className="step">02</span>
               <h3>Shell</h3>
-              <p>Rust and Tauri 2 supervise the worker: 54 commands, JSON-lines IPC, process-tree kill.</p>
+              <p>Rust and Tauri 2 supervise the worker: 58 commands, JSON-lines IPC, process-tree kill.</p>
             </li>
             <li>
               <span className="step">03</span>
               <h3>Engine</h3>
-              <p>Python and PyTorch. 79 HTTP routes, 9 worker commands, 13 events, real Muon and AdamW.</p>
+              <p>Python and PyTorch. 86 HTTP routes, 9 worker commands, 13 events, real Muon and AdamW.</p>
             </li>
             <li>
               <span className="step">04</span>
@@ -154,7 +154,7 @@ export default function Home() {
               ))}
             </tbody>
             <tfoot>
-              <tr><td>Total</td><td className="num">34</td><td className="num">32</td><td className="num open">2</td><td className="num">0</td></tr>
+              <tr><td>Total</td><td className="num">34</td><td className="num">33</td><td className="num open">1</td><td className="num">0</td></tr>
             </tfoot>
           </table>
 
@@ -166,19 +166,21 @@ export default function Home() {
             </div>
             <div className="note">
               <strong>What stays open</strong>
-              Two medium items: the machine-specific Cargo target configuration and the
-              missing frontend component test runner. Everything else in the audit is fixed.
+              One medium item: the missing frontend component test runner. The Cargo target
+              configuration is now portable; everything else in the audit is fixed.
             </div>
             <div className="note">
               <strong>How it was checked</strong>
-              265 Python tests, 18/18 worker lifecycle checks, a 120-step benchmark, a
-              compiled desktop startup, and HTTP smoke runs. No unexecuted test is claimed.
+              354 Python tests, a 16-page static frontend build, a production website build,
+              Rust <code>cargo check</code>, and a GGUF smoke export. No unexecuted test is claimed.
             </div>
             <div className="note">
               <strong>Since the audit</strong>
               One versioned schema shared by Rust and Python, pre-migration backups with
               retention, safe mode, encrypted notification secrets, startup integrity checks,
               versioned workspace archives, downgrade refusal, a bootstrap script and CI.
+              Portable data paths, real DDP, the setup wizard, GGUF export and the plugin API
+              landed after the audit was written.
             </div>
           </div>
         </section>
@@ -250,8 +252,8 @@ export default function Home() {
         <footer className="footer wrap">
           <div>
             <p>
-              LLM Maker is experimental software. It trains real models on one GPU and
-              keeps its failures visible. The repository contains the audit, the known
+              LLM Maker is experimental software. It trains real models on consumer hardware
+              and keeps its failures visible. The repository contains the audit, the known
               issues and the verification evidence.
             </p>
             <p className="mono">

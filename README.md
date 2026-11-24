@@ -8,7 +8,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat&logo=rust)](https://rust-lang.org)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black.svg?style=flat&logo=next.js)](https://nextjs.org)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Tests](<https://img.shields.io/badge/Tests-272%20Passed-brightgreen.svg>)]()
+[![Tests](<https://img.shields.io/badge/Tests-354%20Passed-brightgreen.svg>)]()
 
 **LLM Maker** is an end-to-end, local-first research platform designed to democratize pretraining, post-training alignment, and architectural experimentation for Large Language Models. Built for consumer hardware (from 6GB VRAM laptop GPUs up to multi-node distributed clusters), it combines a **native desktop workstation** (Rust + Tauri 2.0), **visual node-based neural architecture studio**, **WDDM-aware zero-paging VRAM protection**, **hybrid Muon + AdamW optimizers**, **percentage-based WSD scheduling**, and **Hugging Face Hub foundation imports**.
 
@@ -63,10 +63,12 @@ LLM Maker dynamically inspects your hardware topology via NVML and provides 1-cl
 
 - **Single GPU (`cuda:0` / `cuda:1`)**: Hardware-accelerated training with active WDDM paging cliff protection (restricting peak allocations beneath Windows OS limits to prevent throughput collapse).
 - **CPU Fallback (`cpu`)**: Pure CPU execution utilizing host RAM for smoke testing and debugging without a dedicated GPU.
-- **Multi-GPU Parallel (`multi_gpu`)**: Automatically wraps models across all local GPUs on the machine via PyTorch DataParallel with balanced tensor distribution.
-- **Distributed Node Cluster (`cluster` / PyTorch DDP)**:
-  - Automatically detects cluster topology from environment variables (`MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE`, `RANK`) or explicit UI input.
-  - Coordinates multi-node training across networked machines via TCP/IP sockets with NCCL (CUDA) or Gloo (CPU) backends.
+- **Multi-GPU Parallel (`multi_gpu`)**: Wraps one process across all local GPUs with PyTorch DataParallel. This is the one-click local option; it replicates the batch, not the process.
+- **Distributed Node Cluster (`cluster` / real PyTorch DDP)**:
+  - Uses `DistributedDataParallel` with per-rank processes, gradient all-reduce, rank-sharded batch windows, and rank-0-only SQLite/checkpoint writes.
+  - Accepts `MASTER_ADDR`, `MASTER_PORT`, `WORLD_SIZE`, `RANK`, `LOCAL_RANK` from `torchrun` or explicit UI input, with NCCL (CUDA) or Gloo (CPU) backends.
+  - Headless launch: `torchrun --standalone --nproc_per_node=2 -m src.worker.ddp_runner --payload-file run.json`.
+  - CPU/Gloo two-process gradient-equality test: `tests/unit/test_ddp.py`.
 
 ### 3. Task-Specific Optimal Hyperparameter Presets
 
@@ -123,6 +125,10 @@ Unlike rigid step-count schedulers, LLM Maker schedules training by percentage r
 
 ## ⚡ Quickstart
 
+> **Platform scope:** the packaged desktop app is Windows 10/11 x64 only. The
+> Python backend and web studio run on Linux/macOS, but those desktop bundles
+> are untested and not released. See `docs/INSTALL.md`.
+
 ### Launch Desktop Application (Windows Native)
 
 ```cmd
@@ -150,9 +156,23 @@ Open **[http://localhost:8080](http://localhost:8080)** in your browser. All req
 
 ---
 
+## 📦 Model Export
+
+- **Safetensors**: `src/infer/export.py` writes portable PyTorch weights.
+- **GGUF (Q8_0 / F16 / F32)**: `GET /api/models/{id}/export_gguf?quant=Q8_0`
+  writes a GGUF v3 container with the real RoCanon tensors and a SHA-256
+  manifest next to it. Q8_0 falls back to F16 for tensors whose last dimension
+  is not divisible by 32; the manifest reports the exact tensor-type counts.
+
+> **Honest limit:** the produced GGUF uses the custom `rocanon` architecture.
+> Stock llama.cpp/Ollama cannot execute its Canon depthwise convolutions, so
+> Ollama export returns HTTP 400 instead of generating a Modelfile that points
+> at an unloadable `.pt`. Q4_K_M is also rejected rather than silently shipping
+> a different quantization.
+
 ## 🧪 Running the Test Suite
 
-LLM Maker includes 270+ automated tests verifying neural layer arithmetic, tokenizer parity, dataset pipelines, VRAM estimators, checkpoint resumption, and IPC commands:
+LLM Maker includes 354 automated tests verifying neural layer arithmetic, tokenizer parity, dataset pipelines, VRAM estimators, checkpoint resumption, and IPC commands:
 
 ```bash
 # Run the complete test suite
@@ -234,7 +254,7 @@ llm-maker/
 │
 ├── networks/registry/         # Exported model architecture configs (JSON)
 ├── datasets/                  # Datasets & pre-tokenized memmap binaries (.bin/.meta.json)
-└── tests/                     # 270+ unit and end-to-end tests
+└── tests/                     # 354 unit and end-to-end tests
 ```
 
 ---

@@ -246,6 +246,25 @@ class RoCanonAttention(nn.Module):
         k = k.repeat_interleave(self.num_key_value_groups, dim=1)
         v = v.repeat_interleave(self.num_key_value_groups, dim=1)
 
+        # Optional diagnostic attention map. Off by default: training never pays
+        # for materialising the [B, H, S, S] scores.
+        if getattr(self, "capture_attention", False):
+            scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.d_h)
+            causal = torch.triu(
+                torch.full((seq_len, seq_len), float("-inf"), device=x.device, dtype=x.dtype),
+                diagonal=1,
+            )
+            if cu_seqlens is not None:
+                block_mask = torch.full((seq_len, seq_len), float("-inf"), device=x.device, dtype=x.dtype)
+                for i in range(len(cu_seqlens) - 1):
+                    start = cu_seqlens[i].item()
+                    end = cu_seqlens[i + 1].item()
+                    block_mask[start:end, start:end] = causal[start:end, start:end]
+                scores = scores + block_mask
+            else:
+                scores = scores + causal
+            self.last_attention = torch.softmax(scores, dim=-1).detach()
+
         # Compute scaled dot-product attention
         if cu_seqlens is not None:
             mask = torch.full((seq_len, seq_len), float("-inf"), device=x.device, dtype=x.dtype)

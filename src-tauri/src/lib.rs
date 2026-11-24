@@ -12,7 +12,7 @@ use database::DatabaseManager;
 use hardware::HardwareMonitor;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use worker::WorkerSupervisor;
 
@@ -20,9 +20,76 @@ use tauri::Manager;
 
 const ICON_RGBA_128: &[u8] = include_bytes!("../icons/icon_128.rgba");
 
+/// Writable per-user data root. Packaged builds never write into Program Files.
+pub fn data_dir() -> PathBuf {
+    if let Ok(explicit) = std::env::var("LLMMAKER_DATA_DIR") {
+        if !explicit.trim().is_empty() {
+            let path = PathBuf::from(explicit);
+            let _ = std::fs::create_dir_all(&path);
+            return path;
+        }
+    }
+    if cfg!(debug_assertions) {
+        return worker::project_root();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(base) = std::env::var("LOCALAPPDATA") {
+            if !base.trim().is_empty() {
+                let path = PathBuf::from(base).join("LLMMaker");
+                let _ = std::fs::create_dir_all(&path);
+                return path;
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(home) = std::env::var_os("HOME") {
+            let path = PathBuf::from(home).join("Library/Application Support/LLMMaker");
+            let _ = std::fs::create_dir_all(&path);
+            return path;
+        }
+    }
+    let path = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share"))
+        .join("llm-maker");
+    let _ = std::fs::create_dir_all(&path);
+    path
+}
+
 fn log_path() -> &'static PathBuf {
     static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
-    LOG_PATH.get_or_init(|| worker::project_root().join("tauri_debug.log"))
+    LOG_PATH.get_or_init(|| {
+        let dir = data_dir().join("logs");
+        let _ = std::fs::create_dir_all(&dir);
+        dir.join("tauri_debug.log")
+    })
+}
+
+fn migrate_legacy_database(target: &Path) {
+    if target.exists() {
+        return;
+    }
+    let root = worker::project_root();
+    for candidate in [root.join("studio.db"), root.join("data").join("rocanon_studio.db")] {
+        if candidate.exists() && candidate != target {
+            if let Some(parent) = target.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match std::fs::copy(&candidate, target) {
+                Ok(_) => {
+                    let _ = std::fs::write(
+                        target.with_extension("migrated-from.txt"),
+                        candidate.to_string_lossy().as_bytes(),
+                    );
+                    log_trace(&format!("Migrated legacy database {:?} -> {:?}", candidate, target));
+                }
+                Err(err) => log_trace(&format!("Legacy database migration failed: {}", err)),
+            }
+            return;
+        }
+    }
 }
 
 pub fn log_trace(msg: &str) {
@@ -34,9 +101,11 @@ pub fn log_trace(msg: &str) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let root = worker::project_root();
-    let debug_log = root.join("tauri_debug.log");
+    let run_data_dir = data_dir();
+    let _ = std::fs::create_dir_all(run_data_dir.join("logs"));
+    let debug_log = log_path().clone();
     if debug_log.exists() {
-        let _ = std::fs::rename(&debug_log, root.join("tauri_debug.prev.log"));
+        let _ = std::fs::rename(&debug_log, debug_log.with_extension("prev.log"));
     }
     std::panic::set_hook(Box::new(|info| {
         if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log_path()) {
@@ -46,11 +115,17 @@ pub fn run() {
 
     log_trace("Application starting...");
     log_trace(&format!("Resolved project root: {:?}", root));
+    log_trace(&format!("Resolved data root: {:?}", run_data_dir));
     let _ = env_logger::try_init();
 
     // Absolute database path: a relative one silently created a fresh database
     // (losing every run) whenever the process working directory changed.
-    let db_path = root.join("studio.db");
+    let db_path = std::env::var("LLMMAKER_DB_PATH")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| run_data_dir.join("studio.db"));
+    migrate_legacy_database(&db_path);
     log_trace(&format!("Initializing DatabaseManager at {:?}...", db_path));
     let db = DatabaseManager::new(&db_path.to_string_lossy()).unwrap_or_else(|err| {
         log_trace(&format!("FATAL: database initialization failed: {}", err));
@@ -67,7 +142,7 @@ pub fn run() {
     let hw = Mutex::new(HardwareMonitor::new());
 
     log_trace("Initializing WorkerSupervisor...");
-    let sup = WorkerSupervisor::new(db_path);
+    let sup = WorkerSupervisor::new(db_path, run_data_dir.clone());
 
     let state = AppState {
         db,
@@ -87,6 +162,10 @@ pub fn run() {
         .manage(state)
         .invoke_handler(tauri::generate_handler![
             get_hardware_telemetry,
+            get_runtime_status,
+            verify_runtime,
+            run_setup,
+            cancel_setup,
             list_workspaces,
             get_active_workspace,
             set_active_workspace,

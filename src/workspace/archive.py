@@ -18,7 +18,7 @@ import tempfile
 import time
 import zipfile
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ..db.database import StudioDatabase
 
@@ -50,9 +50,10 @@ def _rows(conn: sqlite3.Connection, sql: str, params: Iterable[Any] = ()) -> Lis
 
 
 class WorkspaceArchive:
-    def __init__(self, db: StudioDatabase, base_dir: Path | str = "workspaces") -> None:
+    def __init__(self, db: StudioDatabase, base_dir: Optional[Path | str] = None) -> None:
+        from ..utils.paths import workspaces_dir
         self.db = db
-        self.base_dir = Path(base_dir)
+        self.base_dir = Path(base_dir) if base_dir else workspaces_dir()
 
     def _safe_id(self, value: str) -> str:
         cleaned = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(value).strip().lower())
@@ -106,7 +107,8 @@ class WorkspaceArchive:
         if not candidates and not run_rows and not checkpoint_rows and not dataset_rows:
             logger.info("Exporting empty workspace %s", workspace_id)
 
-        exports_dir = Path("data/exports")
+        from ..utils.paths import exports_dir as app_exports_dir
+        exports_dir = app_exports_dir()
         exports_dir.mkdir(parents=True, exist_ok=True)
         handle = tempfile.NamedTemporaryFile(prefix=f"workspace_{self._safe_id(workspace_id)}_", suffix=".zip", dir=exports_dir, delete=False)
         archive_path = Path(handle.name)

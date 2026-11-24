@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { QueryProvider } from "@/components/providers/QueryProvider";
 import { AppShell } from "@/components/layout/AppShell";
+import { RuntimeSetupGate } from "@/components/onboarding/RuntimeSetupGate";
 
 export const metadata: Metadata = {
   title: "LLM Maker — Neural Research Workstation",
@@ -23,7 +24,9 @@ export default function RootLayout({
     <html lang="en" className="dark h-full antialiased">
       <body className="h-full bg-[var(--bg-base)] text-[var(--text-primary)] overflow-hidden">
         <QueryProvider>
-          <AppShell>{children}</AppShell>
+          <RuntimeSetupGate>
+            <AppShell>{children}</AppShell>
+          </RuntimeSetupGate>
         </QueryProvider>
       </body>
     </html>

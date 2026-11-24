@@ -82,6 +82,51 @@ def wrap_model_for_multi_gpu(
     return model, []
 
 
+
+def wrap_model_for_ddp(
+    model: nn.Module,
+    device: Union[str, torch.device],
+    local_rank: int = 0,
+) -> nn.Module:
+    """Wraps a model in DistributedDataParallel when a process group is active.
+
+    Unlike DataParallel, DDP replicates the model per process and all-reduces
+    gradients. Callers must shard their batch stream by rank.
+    """
+    if not torch.distributed.is_available() or not torch.distributed.is_initialized():
+        return model
+    if torch.distributed.get_world_size() <= 1:
+        return model
+
+    dev = torch.device(device)
+    if dev.type == "cuda":
+        torch.cuda.set_device(dev)
+        model = model.to(dev)
+        device_ids = [dev.index if dev.index is not None else local_rank]
+        output_device = device_ids[0]
+    else:
+        device_ids = None
+        output_device = None
+
+    from torch.nn.parallel import DistributedDataParallel as DDP
+
+    wrapped = DDP(
+        model,
+        device_ids=device_ids,
+        output_device=output_device,
+        broadcast_buffers=False,
+        find_unused_parameters=False,
+        gradient_as_bucket_view=True,
+    )
+    logger.info(
+        "DDP active: rank %d/%d on %s",
+        torch.distributed.get_rank(),
+        torch.distributed.get_world_size(),
+        dev,
+    )
+    return wrapped
+
+
 def get_effective_batch_size(
     micro_batch_size: int,
     grad_accum_steps: int,

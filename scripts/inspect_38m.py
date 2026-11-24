@@ -3,7 +3,9 @@ import torch
 from pathlib import Path
 
 def inspect_38m():
-    base = Path("D:/proiecte/LLM from Scratch")
+    base = Path(os.environ.get("LEGACY_38M_DIR", "")).expanduser()
+    if not base.is_dir():
+        raise SystemExit("Set LEGACY_38M_DIR to the legacy 38M project directory")
     print("=== Checking 38M model checkpoints ===")
     ckpt_dir = base / "checkpoints"
     if ckpt_dir.exists():

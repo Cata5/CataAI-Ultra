@@ -16,6 +16,8 @@ import {
   RefreshCw,
   Trash2,
   Filter,
+  Wand2,
+  AlertTriangle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -27,6 +29,11 @@ export const DatasetsView: React.FC = () => {
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
   const [selectedDataset, setSelectedDataset] = useState<any | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<DatasetItem | null>(null);
+  const [sftSource, setSftSource] = useState<string>("");
+  const [sftTemplate, setSftTemplate] = useState<string>("chatml");
+  const [sftMaxRecords, setSftMaxRecords] = useState<string>("");
+  const [sftResult, setSftResult] = useState<any | null>(null);
+  const [sftBusy, setSftBusy] = useState(false);
 
   // Tokenizer Inspector State
   const [tokenizerText, setTokenizerText] = useState(
@@ -318,6 +325,96 @@ export const DatasetsView: React.FC = () => {
           <CheckCircle2 className="w-3.5 h-3.5 text-[#4ade80]" /> {uploadFeedback}
         </div>
       )}
+
+      {/* SFT Formatter */}
+      <div className="panel p-3 bg-[#202020] border-[#333333] space-y-2">
+        <div className="flex items-center justify-between pb-1.5 border-b border-[#262626]">
+          <h3 className="panel-title">
+            <Wand2 className="w-3.5 h-3.5 text-[#737373]" /> SFT Formatter
+          </h3>
+          <span className="text-[10px] font-mono text-[#525252]">Alpaca / ShareGPT / ChatML → masked JSONL</span>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_160px_120px_auto] gap-2 items-end">
+          <label className="flex flex-col gap-1 text-[10px] font-mono text-[#737373]">
+            SOURCE DATASET
+            <select
+              value={sftSource}
+              onChange={(e) => setSftSource(e.target.value)}
+              className="bg-[#1B1B1B] border border-[#333333] rounded px-2 py-1.5 text-xs font-mono text-[#F2F2F2] outline-none focus:border-[#737373]"
+            >
+              <option value="">Select a dataset…</option>
+              {datasets.filter((d) => d.is_uploaded).map((d) => (
+                <option key={d.id} value={d.id}>{d.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-[10px] font-mono text-[#737373]">
+            TEMPLATE
+            <select
+              value={sftTemplate}
+              onChange={(e) => setSftTemplate(e.target.value)}
+              className="bg-[#1B1B1B] border border-[#333333] rounded px-2 py-1.5 text-xs font-mono text-[#F2F2F2] outline-none focus:border-[#737373]"
+            >
+              <option value="chatml">ChatML</option>
+              <option value="llama3">Llama 3</option>
+              <option value="deepseek_r1">DeepSeek R1</option>
+              <option value="alpaca">Alpaca</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-[10px] font-mono text-[#737373]">
+            MAX RECORDS
+            <input
+              value={sftMaxRecords}
+              onChange={(e) => setSftMaxRecords(e.target.value.replace(/[^0-9]/g, ""))}
+              placeholder="all"
+              className="bg-[#1B1B1B] border border-[#333333] rounded px-2 py-1.5 text-xs font-mono text-[#F2F2F2] outline-none focus:border-[#737373]"
+            />
+          </label>
+          <button
+            disabled={!sftSource || sftBusy}
+            onClick={async () => {
+              setSftBusy(true);
+              setSftResult(null);
+              try {
+                const res = await api.formatSftDataset(sftSource, {
+                  template: sftTemplate,
+                  max_records: sftMaxRecords ? Number(sftMaxRecords) : undefined,
+                  register: true,
+                });
+                setSftResult(res);
+                await fetchDatasets();
+              } catch (e: any) {
+                setSftResult({ error: e.message });
+              } finally {
+                setSftBusy(false);
+              }
+            }}
+            className="btn btn-primary btn-sm h-[30px] flex items-center gap-1"
+          >
+            {sftBusy ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+            Format
+          </button>
+        </div>
+        {sftResult && (
+          <div className="p-2 rounded bg-[#1B1B1B] border border-[#262626] text-[11px] font-mono space-y-1">
+            {sftResult.error ? (
+              <div className="flex items-center gap-2 text-rose-400"><AlertTriangle className="w-3.5 h-3.5" /> {sftResult.error}</div>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-[#A3A3A3]">
+                  <span>valid <strong className="text-[#4ade80]">{sftResult.valid_records}</strong></span>
+                  <span>invalid <strong className={sftResult.invalid_records ? "text-amber-400" : "text-[#737373]"}>{sftResult.invalid_records}</strong></span>
+                  <span>sha256 <strong className="text-[#737373]">{String(sftResult.sha256 || "").slice(0, 12)}…</strong></span>
+                  <span className="truncate max-w-[420px] text-[#525252]">{sftResult.output_path}</span>
+                </div>
+                {sftResult.errors?.slice(0, 3).map((err: any, i: number) => (
+                  <div key={i} className="text-amber-400 truncate">line {err.line}: {err.error}</div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Dataset Table */}
       <div className="space-y-1.5">

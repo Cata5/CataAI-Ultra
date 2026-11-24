@@ -13,6 +13,8 @@ import os
 import sys
 from pathlib import Path
 
+from ..utils.paths import cache_dir as app_cache_dir, data_dir, workspaces_dir
+
 logging.basicConfig(level=logging.ERROR, stream=sys.stderr)
 
 
@@ -20,9 +22,9 @@ def find_dataset_file(dataset_id: str, workspace_id: str | None = None) -> Path 
     """Finds dataset file on disk across known locations."""
     search_dirs: list[Path] = []
     if workspace_id and workspace_id != "default":
-        search_dirs.append(Path(f"workspaces/{workspace_id}/datasets"))
-    search_dirs.append(Path("data/uploads"))
-    search_dirs.append(Path("data"))
+        search_dirs.append(workspaces_dir() / workspace_id / "datasets")
+    search_dirs.append(data_dir() / "data" / "uploads")
+    search_dirs.append(data_dir() / "data")
     search_dirs.append(Path("."))
 
     # Check if direct path
@@ -55,7 +57,7 @@ def run_tokenize(dataset_id: str, workspace_id: str | None = None) -> dict:
         import numpy as np
         import torch
 
-        cache_dir = Path("data/cache")
+        cache_dir = app_cache_dir()
         cache_dir.mkdir(parents=True, exist_ok=True)
         stem = file_path.stem
 
@@ -128,7 +130,7 @@ def run_tokenize(dataset_id: str, workspace_id: str | None = None) -> dict:
 
         # If in workspace, sync to workspace datasets folder as well
         if workspace_id and workspace_id != "default":
-            ws_dir = Path(f"workspaces/{workspace_id}/datasets")
+            ws_dir = workspaces_dir() / workspace_id / "datasets"
             if ws_dir.exists():
                 ws_bin = ws_dir / f"{stem}_full_tokens.bin"
                 try:

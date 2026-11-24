@@ -15,6 +15,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 
+from ..utils.paths import data_dir
+
 logger = logging.getLogger(__name__)
 
 FOUNDATION_PRESETS: List[Dict[str, Any]] = [
@@ -96,8 +98,8 @@ FOUNDATION_PRESETS: List[Dict[str, Any]] = [
 class FoundationModelManager:
     """Manages discovery, inspection, and registry registration of Open-Weights Foundation Models."""
 
-    def __init__(self, registry_dir: Union[str, Path] = "networks/registry") -> None:
-        self.registry_dir = Path(registry_dir)
+    def __init__(self, registry_dir: Optional[Union[str, Path]] = None) -> None:
+        self.registry_dir = Path(registry_dir) if registry_dir else data_dir() / "networks" / "registry"
         self.registry_dir.mkdir(parents=True, exist_ok=True)
 
     def list_presets(self) -> List[Dict[str, Any]]:

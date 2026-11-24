@@ -83,6 +83,13 @@ export const EvaluationView: React.FC = () => {
   // Benchmark suite
   const [isRunningBenchmarks, setIsRunningBenchmarks] = useState<boolean>(false);
 
+  // Real attention heatmap
+  const [attention, setAttention] = useState<any | null>(null);
+  const [attentionBusy, setAttentionBusy] = useState(false);
+  const [attnLayer, setAttnLayer] = useState(0);
+  const [attnHead, setAttnHead] = useState(0);
+  const [attnError, setAttnError] = useState<string | null>(null);
+
   const fetchCheckpoints = useCallback(async () => {
     setIsLoadingCheckpoints(true);
     try {
@@ -157,6 +164,26 @@ export const EvaluationView: React.FC = () => {
       setEvalError(e?.message || "Inference execution failed.");
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleAttentionMap = async () => {
+    if (!prompt.trim() || attentionBusy) return;
+    setAttentionBusy(true);
+    setAttnError(null);
+    try {
+      const res = await api.attentionMap({
+        prompt: formatFinalPrompt(prompt),
+        checkpoint: selectedCheckpoint || undefined,
+        layer: attnLayer,
+        head: attnHead,
+        max_tokens: 128,
+      });
+      setAttention(res);
+    } catch (e: any) {
+      setAttnError(e?.message || "Attention map failed");
+    } finally {
+      setAttentionBusy(false);
     }
   };
 
@@ -838,6 +865,61 @@ export const EvaluationView: React.FC = () => {
                   ) : (
                     <span>Configure parameters and click Generate to evaluate output.</span>
                   )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Attention Heatmap */}
+          {!isCompareMode && (
+            <div className="panel p-3 bg-[#202020] border-[#333333] space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-[#262626]">
+                <span className="text-xs font-semibold text-[#F2F2F2] uppercase tracking-wide flex items-center gap-1.5">
+                  <FlaskConical className="w-3 h-3 text-[#737373]" /> Attention Heatmap
+                </span>
+                <div className="flex items-center gap-2 text-[10px] text-[#737373]">
+                  <label className="flex items-center gap-1">
+                    LAYER
+                    <input type="number" min={0} max={63} value={attnLayer}
+                      onChange={(e) => setAttnLayer(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="input w-14 h-6 px-1 text-center font-mono-num" />
+                  </label>
+                  <label className="flex items-center gap-1">
+                    HEAD
+                    <input type="number" min={0} max={63} value={attnHead}
+                      onChange={(e) => setAttnHead(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="input w-14 h-6 px-1 text-center font-mono-num" />
+                  </label>
+                  <button onClick={handleAttentionMap} disabled={attentionBusy || !prompt.trim()}
+                    className="btn btn-secondary btn-sm flex items-center gap-1">
+                    {attentionBusy ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                    Compute
+                  </button>
+                </div>
+              </div>
+              {attnError && <div className="text-[11px] text-rose-400">{attnError}</div>}
+              {attention?.matrix?.length ? (
+                <div className="overflow-auto max-h-[420px] border border-[#262626] rounded bg-[#111111] p-1">
+                  <div className="inline-grid gap-[1px]" style={{ gridTemplateColumns: `repeat(${attention.matrix[0].length}, minmax(8px, 14px))` }}>
+                    {attention.matrix.flatMap((row: number[], i: number) =>
+                      row.map((value: number, j: number) => (
+                        <div key={`${i}-${j}`}
+                          title={`q=${i} k=${j} weight=${value.toFixed(4)}`}
+                          style={{ backgroundColor: `rgba(212, 212, 212, ${Math.min(1, Math.max(0.03, value * 2.2))})` }}
+                          className="aspect-square" />
+                      ))
+                    )}
+                  </div>
+                  <div className="mt-2 space-y-0.5 text-[9px] text-[#737373] font-mono">
+                    {attention.tokens.slice(0, 16).map((token: string, i: number) => (
+                      <div key={i} className="truncate"><span className="text-[#525252]">{i}:</span> {JSON.stringify(token)}</div>
+                    ))}
+                    {attention.tokens.length > 16 && <div className="text-[#525252]">… {attention.tokens.length - 16} more tokens</div>}
+                  </div>
+                </div>
+              ) : (
+                <div className="h-16 flex items-center justify-center text-[#525252] text-[11px]">
+                  Select a checkpoint, then compute a real causal attention matrix for one layer and head.
                 </div>
               )}
             </div>

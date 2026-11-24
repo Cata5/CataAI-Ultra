@@ -27,7 +27,7 @@ export function SiteRail({ page }: { page: Page }) {
       <div className="rail-foot">
         <ThemeToggle />
         <div className="live"><span className="dot" aria-hidden="true" />v0.1.0 · experimental</div>
-        <div>Windows · RTX 3060 Laptop</div>
+        <div>Windows 10/11 · x64</div>
         <div>Local-first. No telemetry.</div>
       </div>
     </aside>

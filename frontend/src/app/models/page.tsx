@@ -1,7 +1,7 @@
 "use client";
 
-import { RunsView } from "@/features/runs/RunsView";
+import { ModelsView } from "@/features/models/ModelsView";
 
 export default function ModelsPage() {
-  return <RunsView initialTab="models" />;
+  return <ModelsView />;
 }

@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -23,6 +23,10 @@ pub fn project_root() -> PathBuf {
         if candidate.join("src").join("worker").join("standalone_runner.py").is_file() {
             return candidate.canonicalize().unwrap_or(candidate);
         }
+        let packaged = candidate.join("resources").join("app");
+        if packaged.join("src").join("worker").join("standalone_runner.py").is_file() {
+            return packaged.canonicalize().unwrap_or(packaged);
+        }
     }
     let mut starts: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
@@ -34,6 +38,13 @@ pub fn project_root() -> PathBuf {
         starts.push(cwd);
     }
     for start in starts {
+        // Installed builds keep the staged Python app under resources/app next
+        // to the executable. Check that layout before walking parents.
+        for packaged in [start.join("resources").join("app"), start.join("app")] {
+            if packaged.join("src").join("worker").join("standalone_runner.py").is_file() {
+                return packaged.canonicalize().unwrap_or(packaged);
+            }
+        }
         let mut cursor = Some(start);
         for _ in 0..8 {
             let Some(dir) = cursor else { break };
@@ -62,6 +73,41 @@ pub struct WorkerSupervisor {
     python_path: PathBuf,
     project_root: PathBuf,
     db_path: PathBuf,
+    data_dir: PathBuf,
+    runtime_manifest: Option<PathBuf>,
+}
+
+fn read_runtime_python(data_dir: &Path) -> (Option<PathBuf>, Option<PathBuf>) {
+    let manifest = data_dir.join("runtime").join("runtime.json");
+    let Ok(raw) = std::fs::read_to_string(&manifest) else {
+        return (None, None);
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return (None, Some(manifest));
+    };
+    if value.get("schema").and_then(|v| v.as_i64()) != Some(1) {
+        return (None, Some(manifest));
+    }
+    let python = value
+        .get("python")
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+        .filter(|path| path.is_file());
+    (python, Some(manifest))
+}
+
+fn preflight_script() -> &'static str {
+    r#"
+import json, sys
+result = {"python": sys.version.split()[0], "executable": sys.executable, "torch": None, "cuda": False, "error": None}
+try:
+    import torch
+    result["torch"] = torch.__version__
+    result["cuda"] = bool(torch.cuda.is_available())
+except Exception as exc:
+    result["error"] = f"{type(exc).__name__}: {exc}"
+print("LLMMAKER_PREFLIGHT=" + json.dumps(result))
+"#
 }
 
 /// Kills a worker and any grandchildren it may have spawned.
@@ -81,7 +127,7 @@ fn kill_process_tree(child: &mut Child) {
 }
 
 impl WorkerSupervisor {
-    pub fn new(db_path: PathBuf) -> Self {
+    pub fn new(db_path: PathBuf, data_dir: PathBuf) -> Self {
         let project_root = project_root();
         let mut candidates: Vec<PathBuf> = Vec::new();
 
@@ -92,7 +138,13 @@ impl WorkerSupervisor {
             }
         }
 
-        // 1. Project-local virtual environments
+        // 1. First-run wizard manifest.
+        let (runtime_python, runtime_manifest) = read_runtime_python(&data_dir);
+        if let Some(ref python) = runtime_python {
+            candidates.push(python.clone());
+        }
+
+        // 2. Project-local virtual environments
         if cfg!(target_os = "windows") {
             candidates.push(project_root.join(".venv/Scripts/python.exe"));
             candidates.push(project_root.join("venv/Scripts/python.exe"));
@@ -101,9 +153,9 @@ impl WorkerSupervisor {
             candidates.push(project_root.join("venv/bin/python"));
         }
 
-        // 2. PATH fallback is a developer convenience only. A release build must
-        // use a venv or LLMMAKER_PYTHON, otherwise a poisoned PATH can select a
-        // different interpreter (AUD-034).
+        // 3. PATH fallback is a developer convenience only. A release build must
+        // use a venv, runtime.json or LLMMAKER_PYTHON, otherwise a poisoned PATH
+        // can select a different interpreter (AUD-034).
         #[cfg(debug_assertions)]
         candidates.push(PathBuf::from(if cfg!(target_os = "windows") { "python" } else { "python3" }));
 
@@ -116,8 +168,8 @@ impl WorkerSupervisor {
             });
 
         crate::log_trace(&format!(
-            "WorkerSupervisor initialized: project_root={:?}, python_path={:?}, db_path={:?}",
-            project_root, python_path, db_path
+            "WorkerSupervisor initialized: project_root={:?}, data_dir={:?}, python_path={:?}, db_path={:?}, runtime_manifest={:?}",
+            project_root, data_dir, python_path, db_path, runtime_manifest
         ));
 
         Self {
@@ -133,11 +185,77 @@ impl WorkerSupervisor {
             python_path,
             project_root,
             db_path,
+            data_dir,
+            runtime_manifest,
         }
+    }
+
+    /// Checks the selected interpreter before spawning a worker. A missing torch
+    /// used to surface only as a dead child process and a stderr trace.
+    pub fn preflight(&self) -> Result<String, String> {
+        let python = self.resolve_python();
+        if !python.is_file() {
+            return Err(format!(
+                "No Python runtime found at {:?}. Run the setup wizard or set LLMMAKER_PYTHON.",
+                python
+            ));
+        }
+        let output = Command::new(&python)
+            .args(["-c", preflight_script()])
+            .env("PYTHONNOUSERSITE", "1")
+            .output()
+            .map_err(|err| format!("Cannot start {:?}: {err}", self.python_path))?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("Python preflight failed: {}", stderr.trim()));
+        }
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout
+            .lines()
+            .find(|line| line.starts_with("LLMMAKER_PREFLIGHT="))
+            .ok_or_else(|| "Python preflight returned no result".to_string())?;
+        let value: serde_json::Value = serde_json::from_str(line.trim_start_matches("LLMMAKER_PREFLIGHT="))
+            .map_err(|err| format!("Invalid preflight output: {err}"))?;
+        let version = value.get("python").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let major = version.split('.').next().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        let minor = version.split('.').nth(1).and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+        if (major, minor) < (3, 11) {
+            return Err(format!("Python {version} is too old; 3.11+ is required. Run the setup wizard."));
+        }
+        if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+            return Err(format!(
+                "PyTorch is not usable in {:?}: {error}. Run the setup wizard or `python -m installer install`.",
+                self.python_path
+            ));
+        }
+        let torch = value.get("torch").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let cuda = value.get("cuda").and_then(|v| v.as_bool()).unwrap_or(false);
+        Ok(format!("Python {version}, torch {torch}, CUDA {}", if cuda { "available" } else { "CPU" }))
     }
 
     pub fn get_status(&self) -> WorkerStatus {
         self.status.lock().unwrap().clone()
+    }
+
+    /// Resolves the runtime manifest again so a just-completed setup is used
+    /// without restarting the desktop shell. Falls back to startup resolution.
+    pub fn resolve_python(&self) -> PathBuf {
+        read_runtime_python(&self.data_dir)
+            .0
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| self.python_path.clone())
+    }
+
+    pub fn python_path(&self) -> PathBuf {
+        self.resolve_python()
+    }
+
+    pub fn data_dir(&self) -> PathBuf {
+        self.data_dir.clone()
+    }
+
+    pub fn runtime_manifest(&self) -> Option<PathBuf> {
+        self.runtime_manifest.clone()
     }
 
     pub fn send_command(&self, cmd: &serde_json::Value) -> Result<(), String> {
@@ -160,6 +278,7 @@ impl WorkerSupervisor {
         payload_json: String,
     ) -> Result<String, String> {
         crate::log_trace("start_training command invoked in WorkerSupervisor");
+        self.preflight()?;
 
         let mut child_guard = self.child.lock().unwrap();
         if let Some(ref mut c) = *child_guard {
@@ -189,8 +308,13 @@ impl WorkerSupervisor {
 
         crate::log_trace(&format!("Project root directory resolved to: {:?}", project_dir));
 
-        // Write payload to a temporary file to prevent Windows CLI argument escaping issues
-        let payload_file = project_dir.join(format!(".tmp_run_{}.json", run_id));
+        // Write payload to a temporary file to prevent Windows CLI argument escaping issues.
+        // The install directory may be read-only, so use the writable data root.
+        let tmp_dir = self.data_dir.join("tmp");
+        if let Err(e) = std::fs::create_dir_all(&tmp_dir) {
+            return Err(format!("Failed to create worker temp directory: {e}"));
+        }
+        let payload_file = tmp_dir.join(format!("run_{}.json", run_id));
         if let Err(e) = std::fs::write(&payload_file, &payload_json) {
             crate::log_trace(&format!("Failed to write payload file: {}", e));
             return Err(format!("Failed to write run payload file: {}", e));
@@ -198,7 +322,7 @@ impl WorkerSupervisor {
 
         let payload_file_str = payload_file.to_string_lossy().to_string();
 
-        let mut cmd = Command::new(&self.python_path);
+        let mut cmd = Command::new(self.resolve_python());
         cmd.current_dir(&project_dir);
         let db_path_str = self.db_path.to_string_lossy().to_string();
         cmd.args(&[
@@ -213,6 +337,12 @@ impl WorkerSupervisor {
         // Keep the worker importable from the resolved project root regardless of CWD.
         cmd.env("PYTHONPATH", &project_dir);
         cmd.env("PYTHONUNBUFFERED", "1");
+        cmd.env("PYTHONNOUSERSITE", "1");
+        cmd.env("LLMMAKER_DATA_DIR", &self.data_dir);
+        cmd.env("LLMMAKER_DB_PATH", &self.db_path);
+        if let Some(ref manifest) = self.runtime_manifest {
+            cmd.env("LLMMAKER_RUNTIME_MANIFEST", manifest);
+        }
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());

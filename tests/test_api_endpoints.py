@@ -93,6 +93,19 @@ class TestStudioAPI(AioHTTPTestCase):
         data = await resp.json()
         assert isinstance(data, list)
 
+    async def test_get_saved_models(self):
+        resp = await self.client.request("GET", "/api/models")
+        assert resp.status == 200
+        data = await resp.json()
+        assert isinstance(data["models"], list)
+        assert data["total"] == len(data["models"])
+
+    async def test_ollama_export_is_explicitly_unsupported(self):
+        resp = await self.client.request("POST", "/api/models/rocanon/export_ollama")
+        assert resp.status == 400
+        data = await resp.json()
+        assert "Canon" in data["error"]
+
     async def test_get_pipelines(self):
         resp = await self.client.request("GET", "/api/pipelines")
         assert resp.status == 200

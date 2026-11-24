@@ -11,7 +11,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -61,9 +61,9 @@ fn resolve_dataset_dir(db: &DatabaseManager, workspace_id: Option<&str>) -> Path
     };
 
     if ws_id == "default" {
-        PathBuf::from("data/uploads")
+        crate::data_dir().join("data").join("uploads")
     } else {
-        PathBuf::from(format!("workspaces/{}/datasets", ws_id))
+        crate::data_dir().join("workspaces").join(ws_id).join("datasets")
     }
 }
 
@@ -74,9 +74,9 @@ fn resolve_checkpoint_dir(db: &DatabaseManager, workspace_id: Option<&str>) -> P
     };
 
     if ws_id == "default" {
-        PathBuf::from("checkpoints")
+        crate::data_dir().join("checkpoints")
     } else {
-        PathBuf::from(format!("workspaces/{}/checkpoints", ws_id))
+        crate::data_dir().join("workspaces").join(ws_id).join("checkpoints")
     }
 }
 
@@ -1484,18 +1484,11 @@ pub fn import_foundation_model(hf_repo_id: String, model_name: Option<String>, d
 }
 
 #[tauri::command]
-pub fn export_ollama(model_id: String, options: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
-    let modelfile = format!("FROM models/export/{}\nPARAMETER temperature 0.7\nPARAMETER stop <|im_end|>", model_id);
-    let out_dir = Path::new("models/export");
-    let _ = fs::create_dir_all(out_dir);
-    let path = out_dir.join(format!("{}.Modelfile", model_id));
-    let _ = fs::write(&path, modelfile);
-    Ok(serde_json::json!({
-        "success": true,
-        "model_id": model_id,
-        "modelfile_path": path.to_string_lossy(),
-        "options": options.unwrap_or(serde_json::json!({}))
-    }))
+pub fn export_ollama(model_id: String, _options: Option<serde_json::Value>) -> Result<serde_json::Value, String> {
+    Err(format!(
+        "Ollama cannot load RoCanon model {}: its Canon convolutions are not representable in stock llama.cpp. Export a custom GGUF from the dashboard or use safetensors for PyTorch inference.",
+        model_id
+    ))
 }
 
 #[tauri::command]
@@ -1619,7 +1612,8 @@ fn parse_log_line(line: &str) -> (String, String, String, String) {
 #[tauri::command]
 pub fn get_system_logs(limit: Option<usize>) -> Vec<SystemLogEntry> {
     let mut raw_lines = Vec::new();
-    let log_files = ["tauri_debug.prev.log", "tauri_debug.log"];
+    let log_dir = crate::data_dir().join("logs");
+    let log_files = [log_dir.join("tauri_debug.prev.log"), log_dir.join("tauri_debug.log")];
 
     for file_path in &log_files {
         if let Ok(content) = fs::read_to_string(file_path) {
@@ -1657,7 +1651,195 @@ pub fn get_system_logs(limit: Option<usize>) -> Vec<SystemLogEntry> {
 
 #[tauri::command]
 pub fn clear_system_logs() -> Result<(), String> {
-    let _ = fs::remove_file("tauri_debug.prev.log");
-    let _ = fs::write("tauri_debug.log", "[TRACE] Logs cleared by user\n");
+    let log_dir = crate::data_dir().join("logs");
+    let _ = fs::remove_file(log_dir.join("tauri_debug.prev.log"));
+    let _ = fs::write(log_dir.join("tauri_debug.log"), "[TRACE] Logs cleared by user\n");
     Ok(())
 }
+
+#[derive(Debug, Serialize)]
+pub struct RuntimeStatus {
+    pub ready: bool,
+    pub python: String,
+    pub manifest: Option<String>,
+    pub data_dir: String,
+    pub message: String,
+}
+
+#[tauri::command]
+pub fn get_runtime_status(state: State<AppState>) -> RuntimeStatus {
+    let python = state.supervisor.python_path();
+    let manifest = state
+        .supervisor
+        .runtime_manifest()
+        .map(|path| path.to_string_lossy().to_string());
+    let exists = python.is_file();
+    RuntimeStatus {
+        ready: exists,
+        python: python.to_string_lossy().to_string(),
+        manifest,
+        data_dir: state.supervisor.data_dir().to_string_lossy().to_string(),
+        message: if exists {
+            "Python runtime found. Run verification before training.".to_string()
+        } else {
+            "Python runtime is missing. Run the setup wizard or set LLMMAKER_PYTHON.".to_string()
+        },
+    }
+}
+
+#[tauri::command]
+pub fn verify_runtime(state: State<AppState>) -> Result<String, String> {
+    state.supervisor.preflight()
+}
+
+static SETUP_CHILD: std::sync::OnceLock<Mutex<Option<std::process::Child>>> = std::sync::OnceLock::new();
+static SETUP_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn setup_slot() -> &'static Mutex<Option<std::process::Child>> {
+    SETUP_CHILD.get_or_init(|| Mutex::new(None))
+}
+
+fn setup_base_python() -> Result<PathBuf, String> {
+    if let Ok(explicit) = std::env::var("LLMMAKER_BASE_PYTHON") {
+        let path = PathBuf::from(explicit);
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+    let root = crate::worker::project_root();
+    let exe_name = if cfg!(windows) { "python.exe" } else { "bin/python3" };
+    let bundled_candidates = [
+        root.parent().unwrap_or(&root).join("python").join(exe_name),
+        root.join("resources").join("python").join(exe_name),
+        root.join("python").join(exe_name),
+    ];
+    for bundled in bundled_candidates {
+        if bundled.is_file() {
+            return Ok(bundled);
+        }
+    }
+    let venv_python = root.join(".venv").join(if cfg!(windows) { "Scripts/python.exe" } else { "bin/python" });
+    if venv_python.is_file() {
+        return Ok(venv_python);
+    }
+    #[cfg(windows)]
+    {
+        Ok(PathBuf::from("python.exe"))
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(PathBuf::from("python3"))
+    }
+}
+
+/// Starts `python -m installer install` and streams its output as setup-log events.
+#[tauri::command]
+pub fn run_setup(app: AppHandle, cpu_only: bool, cuda: Option<String>) -> Result<u32, String> {
+    use std::sync::atomic::Ordering;
+    if SETUP_RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("Runtime setup is already running".to_string());
+    }
+    let base_python = match setup_base_python() {
+        Ok(path) => path,
+        Err(err) => {
+            SETUP_RUNNING.store(false, Ordering::SeqCst);
+            return Err(err);
+        }
+    };
+    let root = crate::worker::project_root();
+    let requirements = root.join("requirements.txt");
+    if !requirements.is_file() {
+        SETUP_RUNNING.store(false, Ordering::SeqCst);
+        return Err(format!("requirements.txt not found at {:?}", requirements));
+    }
+    let runtime = crate::data_dir().join("runtime");
+    let venv = runtime.join("venv");
+    let manifest = runtime.join("runtime.json");
+    if let Err(err) = fs::create_dir_all(&runtime) {
+        SETUP_RUNNING.store(false, Ordering::SeqCst);
+        return Err(err.to_string());
+    }
+
+    let mut command = Command::new(&base_python);
+    command
+        .current_dir(&root)
+        .arg("-m")
+        .arg("installer")
+        .arg("install")
+        .arg("--venv")
+        .arg(&venv)
+        .arg("--manifest")
+        .arg(&manifest)
+        .arg("--requirements")
+        .arg(&requirements)
+        .arg("--python")
+        .arg(&base_python)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if cpu_only {
+        command.arg("--cpu");
+    } else if let Some(tag) = cuda.filter(|value| !value.trim().is_empty()) {
+        command.arg("--cuda").arg(tag);
+    }
+    #[cfg(windows)]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            SETUP_RUNNING.store(false, Ordering::SeqCst);
+            return Err(format!("Could not start {:?}: {}", base_python, err));
+        }
+    };
+    let pid = child.id();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    *setup_slot().lock().unwrap() = Some(child);
+
+    let stream = |pipe: Option<Box<dyn std::io::Read + Send>>, channel: &'static str, app: AppHandle| {
+        if let Some(pipe) = pipe {
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let reader = std::io::BufReader::new(pipe);
+                for line in reader.lines().map_while(Result::ok) {
+                    let _ = app.emit("setup-log", serde_json::json!({ "stream": channel, "line": line }));
+                }
+            });
+        }
+    };
+    stream(stdout.map(|p| Box::new(p) as Box<dyn std::io::Read + Send>), "stdout", app.clone());
+    stream(stderr.map(|p| Box::new(p) as Box<dyn std::io::Read + Send>), "stderr", app.clone());
+
+    std::thread::spawn(move || {
+        let status = loop {
+            let mut slot = setup_slot().lock().unwrap();
+            let Some(child) = slot.as_mut() else { break None };
+            match child.try_wait() {
+                Ok(Some(status)) => break Some(status),
+                Ok(None) => {}
+                Err(err) => {
+                    let _ = app.emit("setup-log", serde_json::json!({ "stream": "stderr", "line": err.to_string() }));
+                    break None;
+                }
+            }
+            drop(slot);
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        };
+        *setup_slot().lock().unwrap() = None;
+        SETUP_RUNNING.store(false, Ordering::SeqCst);
+        let code = status.and_then(|s| s.code()).unwrap_or(-1);
+        let _ = app.emit("setup-done", serde_json::json!({ "code": code }));
+    });
+
+    Ok(pid)
+}
+
+#[tauri::command]
+pub fn cancel_setup() -> Result<(), String> {
+    if let Some(child) = setup_slot().lock().unwrap().as_mut() {
+        child.kill().map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+

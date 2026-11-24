@@ -18,6 +18,7 @@ import numpy as np
 import torch
 
 from ..tokenizer.tokenizer import RoCanonTokenizer
+from ..utils.paths import cache_dir as app_cache_dir, data_dir, workspaces_dir
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +39,8 @@ class CustomDatasetEngine:
         "chat_persona_ro": "phase2_chat_ro.txt",
         "alpaca_ro": "alpaca_ro.txt",
     }
-    # Read-only fallback for installations created before datasets moved into the project.
-    LEGACY_DATASETS_DIR = Path("d:/proiecte/LLM from Scratch/data")
     KNOWN_DATASETS = {
-        key: str(Path("data") / name) for key, name in KNOWN_DATASET_FILES.items()
+        key: str(data_dir() / "data" / name) for key, name in KNOWN_DATASET_FILES.items()
     }
 
     @classmethod
@@ -53,9 +52,9 @@ class CustomDatasetEngine:
         env_dir = os.environ.get("LLMMAKER_DATASETS_DIR")
         if env_dir:
             candidates.append(Path(env_dir) / filename)
+        candidates.append(data_dir() / "data" / filename)
         candidates.append(project_root / "data" / filename)
         candidates.append(Path.cwd() / "data" / filename)
-        candidates.append(cls.LEGACY_DATASETS_DIR / filename)
         return candidates
 
     @classmethod
@@ -68,9 +67,9 @@ class CustomDatasetEngine:
                 return candidate
         return None
 
-    def __init__(self, tokenizer: Optional[RoCanonTokenizer] = None, cache_dir: str = "data/cache", db: Optional[Any] = None):
+    def __init__(self, tokenizer: Optional[RoCanonTokenizer] = None, cache_dir: Optional[str] = None, db: Optional[Any] = None):
         self.tokenizer = tokenizer or RoCanonTokenizer()
-        self.cache_dir = Path(cache_dir)
+        self.cache_dir = Path(cache_dir) if cache_dir else app_cache_dir()
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.db = db
 
@@ -138,12 +137,12 @@ class CustomDatasetEngine:
         # 4. Search in workspaces, data/uploads, and data directories
         if file_path is None:
             search_dirs = [
-                Path("workspaces/cataai/datasets"),
-                Path("data/uploads"),
-                Path("data"),
+                workspaces_dir() / "cataai" / "datasets",
+                data_dir() / "data" / "uploads",
+                data_dir() / "data",
                 Path("."),
             ]
-            for ws_dir in Path("workspaces").glob("*/datasets"):
+            for ws_dir in workspaces_dir().glob("*/datasets"):
                 if ws_dir.is_dir() and ws_dir not in search_dirs:
                     search_dirs.append(ws_dir)
 

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { api } from "@/services/api";
-import { Alert } from "@/types/api";
+import { Alert, PluginItem } from "@/types/api";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { Button } from "@/components/ui/Button";
 import { InlineAlert } from "@/components/ui/InlineAlert";
@@ -20,6 +20,7 @@ import {
   AlertCircle,
   Download,
   Upload,
+  Puzzle,
 } from "lucide-react";
 import { cn, formatDateTime } from "@/lib/utils";
 
@@ -45,6 +46,8 @@ export const SettingsView: React.FC = () => {
     telegram_bot_token: false,
   });
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("default");
+  const [plugins, setPlugins] = useState<PluginItem[]>([]);
+  const [pluginBusy, setPluginBusy] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -59,11 +62,13 @@ export const SettingsView: React.FC = () => {
 
   const fetchSettingsAndAlerts = async () => {
     try {
-      const [s, a, ws] = await Promise.all([
+      const [s, a, ws, p] = await Promise.all([
         api.getSettings(),
         api.getAlerts(undefined, 50),
         api.getActiveWorkspace().catch(() => null),
+        api.listPlugins().catch(() => [] as PluginItem[]),
       ]);
+      setPlugins(p);
       if (ws?.id) setActiveWorkspaceId(ws.id);
       if (s && Object.keys(s).length > 0) {
         setSecretsConfigured({
@@ -104,6 +109,19 @@ export const SettingsView: React.FC = () => {
       setFeedback("Stored credential removed.");
     } catch (e: any) {
       alert(`Could not clear credential: ${e.message}`);
+    }
+  };
+
+  const handleTogglePlugin = async (plugin: PluginItem, enabled: boolean) => {
+    setPluginBusy(plugin.id);
+    try {
+      const result = await api.togglePlugin(plugin.id, enabled);
+      setPlugins(result.plugins || []);
+      setFeedback(result.message || `Plugin ${plugin.name} ${enabled ? "enabled" : "disabled"}.`);
+    } catch (e: any) {
+      alert(`Plugin error: ${e.message}`);
+    } finally {
+      setPluginBusy(null);
     }
   };
 
@@ -445,6 +463,49 @@ export const SettingsView: React.FC = () => {
             <span className="text-[10px] text-[#737373]">Active: {activeWorkspaceId}</span>
           </div>
         </div>
+      </div>
+
+      {/* Plugin Management */}
+      <div className="panel p-4 bg-[#202020] border-[#333333] space-y-3">
+        <div className="flex items-center justify-between pb-2 border-b border-[#333333]">
+          <h4 className="text-xs font-semibold text-[#F2F2F2] uppercase tracking-wider flex items-center gap-1.5">
+            <Puzzle className="w-3.5 h-3.5 text-[#A3A3A3]" /> LOCAL PLUGINS
+          </h4>
+          <span className="text-[10px] text-[#737373]">{plugins.filter((p) => p.enabled).length} enabled / {plugins.length}</span>
+        </div>
+        {plugins.length === 0 ? (
+          <p className="text-[11px] text-[#525252]">No plugins discovered. Drop a manifest folder into the user data plugins directory.</p>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {plugins.map((plugin) => (
+              <div key={plugin.id} className={cn(
+                "p-2.5 rounded border space-y-1.5",
+                plugin.enabled && plugin.is_valid ? "bg-[#1F1F1F] border-[#404040]" : "bg-[#1B1B1B] border-[#2B2B2B]"
+              )}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-[11px] text-[#F2F2F2] font-semibold truncate">{plugin.name}</div>
+                    <div className="text-[9px] text-[#737373] font-mono">{plugin.id} · v{plugin.version} · {plugin.category}</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={plugin.enabled}
+                    disabled={!plugin.is_valid || pluginBusy === plugin.id}
+                    onChange={(e) => handleTogglePlugin(plugin, e.target.checked)}
+                    className="accent-[#D4D4D4] mt-0.5"
+                  />
+                </div>
+                <p className="text-[10px] text-[#A3A3A3] leading-snug">{plugin.description}</p>
+                {!plugin.is_valid && (
+                  <div className="text-[10px] text-rose-400 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3 shrink-0" /> {plugin.validation_error || "Invalid manifest"}
+                  </div>
+                )}
+                {plugin.author && <div className="text-[9px] text-[#525252] font-mono">by {plugin.author}</div>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Real-Time Webhook Notifications (Discord & Telegram) */}

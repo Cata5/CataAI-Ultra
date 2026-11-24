@@ -45,6 +45,18 @@ the empty base path used by `<owner>.github.io` user sites and custom domains.
 
 No analytics, no cookies, no external requests at runtime.
 
+## Keeping content in sync
+
+Every app-facing change updates this site in the same change set:
+
+- Re-count `page.tsx` facts from source: `#[tauri::command]`, `app.router.add_*`,
+  `frontend/src/app/**/page.tsx`, API methods in `services/api.ts`.
+- Move roadmap items between `shipped` and `open`; do not leave a landed feature
+  advertised as future work.
+- Update `components/SiteRail.tsx` platform scope when packaging changes.
+- Add a changelog entry only for a real commit SHA; never invent one.
+- Replace screenshots when the visible workstation UI changes.
+
 ## Changelog
 
 `lib/changelog.ts` is the single source for the `/changelog/` page. The release

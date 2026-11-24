@@ -8,8 +8,11 @@ import {
   MetricPoint,
   NetworkConfig,
   PipelineItem,
+  PluginItem,
   RunItem,
   RunState,
+  RuntimeStatus,
+  SFTFormatResult,
   SystemStatus,
 } from "@/types/api";
 
@@ -351,6 +354,43 @@ export const api = {
     });
   },
 
+  listPlugins: async (): Promise<PluginItem[]> => {
+    const res = await fetch(`${BASE_URL}/api/plugins`);
+    if (!res.ok) throw new Error("Failed to load plugins");
+    return res.json();
+  },
+  togglePlugin: async (id: string, enabled: boolean): Promise<{ success: boolean; message: string; plugins: PluginItem[] }> => {
+    const res = await fetch(`${BASE_URL}/api/plugins/${encodeURIComponent(id)}/toggle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || data.message || "Failed to toggle plugin");
+    return data;
+  },
+  // Runtime setup
+  getRuntimeStatus: async (): Promise<RuntimeStatus> => {
+    const inv = await getTauriInvoke();
+    if (!inv) {
+      return { ready: true, python: "", manifest: null, data_dir: "", message: "Browser mode" };
+    }
+    return await inv("get_runtime_status");
+  },
+  verifyRuntime: async (): Promise<string> => {
+    const inv = await getTauriInvoke();
+    if (!inv) return "Browser mode";
+    return await inv("verify_runtime");
+  },
+  runSetup: async (options: { cpuOnly: boolean; cuda?: string }): Promise<number> => {
+    const inv = await getTauriInvoke();
+    if (!inv) throw new Error("Setup is only available in the desktop app");
+    return await inv("run_setup", { cpuOnly: options.cpuOnly, cuda: options.cuda || null });
+  },
+  cancelSetup: async (): Promise<void> => {
+    const inv = await getTauriInvoke();
+    if (inv) await inv("cancel_setup");
+  },
   // Datasets
   listDatasets: async (): Promise<DatasetItem[]> => {
     const inv = await getTauriInvoke();
@@ -459,6 +499,15 @@ export const api = {
       body: JSON.stringify(options || {}),
     });
   },
+  formatSftDataset: async (
+    id: string,
+    options?: { template?: string; max_records?: number; register?: boolean }
+  ): Promise<SFTFormatResult> => {
+    return request<SFTFormatResult>(`/api/datasets/${encodeURIComponent(id)}/format`, {
+      method: "POST",
+      body: JSON.stringify(options || {}),
+    });
+  },
   deleteDataset: async (id: string): Promise<{ success: boolean; id: string; deleted_files?: string[] }> => {
     const inv = await getTauriInvoke();
     if (inv) {
@@ -490,6 +539,22 @@ export const api = {
   },
 
   // Evaluation
+  attentionMap: async (payload: {
+    prompt: string;
+    checkpoint?: string;
+    layer?: number;
+    head?: number;
+    max_tokens?: number;
+  }): Promise<any> => {
+    const res = await fetch(`${BASE_URL}/api/evaluation/attention`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Attention map failed");
+    return data;
+  },
   generateEvaluation: async (params: {
     prompt: string;
     max_new_tokens?: number;
@@ -836,6 +901,14 @@ export const api = {
       }
     }
     return request<any>("/api/compute/topology");
+  },
+  listModels: async (): Promise<any> => {
+    return request<any>("/api/models");
+  },
+  exportGguf: async (modelId: string, quant: "Q8_0" | "F16" = "Q8_0"): Promise<any> => {
+    return request<any>(`/api/models/${encodeURIComponent(modelId)}/export_gguf?quant=${quant}`, {
+      method: "GET",
+    });
   },
   exportOllama: async (modelId: string, options?: any): Promise<any> => {
     const inv = await getTauriInvoke();

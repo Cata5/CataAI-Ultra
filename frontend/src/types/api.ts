@@ -201,6 +201,28 @@ export interface DatasetItem {
   is_uploaded?: boolean;
 }
 
+export interface RuntimeStatus {
+  ready: boolean;
+  python: string;
+  manifest: string | null;
+  data_dir: string;
+  message: string;
+}
+
+export interface SFTFormatResult {
+  success: boolean;
+  input_path: string;
+  output_path: string;
+  format: string;
+  valid_records: number;
+  invalid_records: number;
+  total_records: number;
+  token_count?: number | null;
+  sha256: string;
+  errors: { line: number; error: string }[];
+  dataset?: any;
+}
+
 export interface NetworkConfig {
   id: string;
   name: string;

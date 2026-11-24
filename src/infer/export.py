@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -64,6 +65,17 @@ def export_to_safetensors(
     # 3. Save safetensors
     weights_path = out_path / "model.safetensors"
     save_file(state_dict, str(weights_path))
+
+    # 4. Copy tokenizer assets when provided, so the export directory is usable
+    # without a separate lookup of the training-time tokenizer.
+    if tokenizer_path is not None:
+        source = Path(tokenizer_path)
+        if source.is_dir():
+            for candidate in source.iterdir():
+                if candidate.is_file() and candidate.name.startswith(("tokenizer", "vocab", "merges", "special_tokens")):
+                    shutil.copy2(candidate, out_path / candidate.name)
+        elif source.is_file():
+            shutil.copy2(source, out_path / source.name)
 
     return out_path
 

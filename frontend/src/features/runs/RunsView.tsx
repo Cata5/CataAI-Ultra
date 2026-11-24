@@ -53,6 +53,12 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
   // Delete checkpoint state
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
+  // Multi-run comparison
+  const [showRunCompare, setShowRunCompare] = useState(false);
+  const [compareRunIds, setCompareRunIds] = useState<string[]>([]);
+  const [compareRunMetrics, setCompareRunMetrics] = useState<Record<string, MetricPoint[]>>({});
+  const [isComparingRuns, setIsComparingRuns] = useState(false);
+
   // Sync tab if prop changes (e.g. navigation across sidebar routes)
   useEffect(() => {
     if (initialTab && (initialTab === "checkpoints" || initialTab === "analytics" || initialTab === "logs" || initialTab === "all" || initialTab === "experiments")) {
@@ -101,6 +107,45 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
       alert(`Delete error: ${e.message}`);
     }
   };
+
+  const handleCompareRuns = async () => {
+    if (compareRunIds.length === 0) return;
+    setIsComparingRuns(true);
+    try {
+      const entries = await Promise.all(
+        compareRunIds.map(async (id) => {
+          const metrics = await api.getRunMetrics(id, 0, 3000);
+          return [id, metrics] as const;
+        })
+      );
+      setCompareRunMetrics(Object.fromEntries(entries));
+    } catch (e: any) {
+      alert(`Run comparison failed: ${e.message}`);
+    } finally {
+      setIsComparingRuns(false);
+    }
+  };
+
+  const compareSteps = useMemo(() => {
+    const steps = new Set<number>();
+    Object.values(compareRunMetrics).forEach((points) => points.forEach((point) => steps.add(point.step)));
+    return Array.from(steps).sort((a, b) => a - b);
+  }, [compareRunMetrics]);
+
+  const compareSeries = useMemo(() => {
+    const palette = ["#F2F2F2", "#4ade80", "#60a5fa", "#facc15", "#f472b6", "#a78bfa"];
+    return compareRunIds.map((id, index) => {
+      const points = compareRunMetrics[id] || [];
+      const byStep = new Map(points.map((point) => [point.step, point.train_loss ?? point.loss]));
+      return {
+        label: runs.find((run) => run.id === id)?.name || id,
+        data: compareSteps.map((step) => byStep.get(step) ?? null),
+        borderColor: palette[index % palette.length],
+        backgroundColor: "transparent",
+        spanGaps: true,
+      };
+    });
+  }, [compareRunIds, compareRunMetrics, compareSteps, runs]);
 
   // Metrics summary calculations
   const totalTokensProcessed = useMemo(() => {
@@ -551,6 +596,18 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
               </select>
             </div>
 
+            <button
+              onClick={() => setShowRunCompare((value) => !value)}
+              className={cn(
+                "px-2.5 py-1 rounded border text-[10px] flex items-center gap-1.5 transition-colors",
+                showRunCompare
+                  ? "bg-[#262626] border-[#D4D4D4] text-[#F2F2F2]"
+                  : "bg-[#1B1B1B] border-[#333333] text-[#A3A3A3] hover:text-[#F2F2F2]"
+              )}
+            >
+              <BarChart2 className="w-3 h-3" /> Compare runs
+            </button>
+
             {selectedRun && (
               <div className="flex items-center gap-3 text-[11px] text-[#A3A3A3]">
                 <div className="flex items-center gap-1.5">
@@ -626,6 +683,77 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
           ) : (
             <div className="panel p-8 text-center text-[#737373]">
               No runs recorded yet. Start training to generate real-time metrics telemetry.
+            </div>
+          )}
+
+          {/* Multi-run comparison */}
+          {showRunCompare && (
+            <div className="panel p-3 bg-[#1C1C1C] border-[#333333] space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold text-[#F2F2F2] uppercase tracking-wider flex items-center gap-1.5">
+                  <BarChart2 className="w-3.5 h-3.5 text-[#A3A3A3]" /> Multi-run comparison
+                </h3>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setCompareRunIds(runs.map((run) => run.id))} className="text-[10px] text-[#A3A3A3] hover:underline">All</button>
+                  <button onClick={() => setCompareRunIds([])} className="text-[10px] text-[#A3A3A3] hover:underline">Clear</button>
+                  <button
+                    onClick={handleCompareRuns}
+                    disabled={compareRunIds.length === 0 || isComparingRuns}
+                    className="btn btn-primary btn-sm flex items-center gap-1"
+                  >
+                    {isComparingRuns ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                    Compare ({compareRunIds.length})
+                  </button>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-1.5 max-h-36 overflow-y-auto pr-1">
+                {runs.map((run) => {
+                  const checked = compareRunIds.includes(run.id);
+                  return (
+                    <label key={run.id} className={cn(
+                      "flex items-center gap-1.5 px-2 py-1 rounded border text-[10px] cursor-pointer truncate",
+                      checked ? "bg-[#262626] border-[#D4D4D4] text-[#F2F2F2]" : "bg-[#171717] border-[#262626] text-[#737373]"
+                    )}>
+                      <input type="checkbox" checked={checked} onChange={(e) => {
+                        setCompareRunIds(e.target.checked ? [...compareRunIds, run.id] : compareRunIds.filter((id) => id !== run.id));
+                      }} className="accent-[#D4D4D4]" />
+                      <span className="truncate">{run.name || run.id}</span>
+                    </label>
+                  );
+                })}
+              </div>
+              {compareSteps.length > 0 && (
+                <>
+                  <ChartPanel
+                    title="TRAIN LOSS ACROSS RUNS"
+                    labels={compareSteps}
+                    datasets={compareSeries}
+                    yAxisLabel="Loss"
+                    height={260}
+                  />
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[10px] font-mono">
+                      <thead className="text-[#737373] uppercase">
+                        <tr><th className="text-left py-1">Run</th><th className="text-right">Points</th><th className="text-right">Last train</th><th className="text-right">Best val</th></tr>
+                      </thead>
+                      <tbody>
+                        {compareRunIds.map((id) => {
+                          const points = compareRunMetrics[id] || [];
+                          const validVals = points.map((p) => p.val_loss ?? p.latest_val_loss).filter((v): v is number => typeof v === "number");
+                          return (
+                            <tr key={id} className="border-t border-[#262626]">
+                              <td className="py-1 text-[#F2F2F2]">{runs.find((run) => run.id === id)?.name || id}</td>
+                              <td className="text-right text-[#A3A3A3]">{points.length}</td>
+                              <td className="text-right text-[#A3A3A3]">{points.length ? Number(points[points.length - 1].train_loss ?? points[points.length - 1].loss).toFixed(4) : "—"}</td>
+                              <td className="text-right text-[#4ade80]">{validVals.length ? Math.min(...validVals).toFixed(4) : "—"}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </div>
           )}
         </div>

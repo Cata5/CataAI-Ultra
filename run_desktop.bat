@@ -11,8 +11,8 @@ echo  * Embedded Static Frontend (No continuous localhost server)
 echo  * Isolated On-Demand ML Worker Process
 echo ===========================================================================
 
-set PATH=C:\Users\Cata\AppData\Local\Microsoft\WinGet\Packages\BrechtSanders.WinLibs.POSIX.UCRT.LLVM_Microsoft.Winget.Source_8wekyb3d8bbwe\mingw64\bin;C:\Users\Cata\.cargo\bin;%PATH%
-set "CARGO_TARGET_DIR=C:\Users\Cata\.cargo\target_llm_maker"
+if exist "%USERPROFILE%\.cargo\bin" set "PATH=%USERPROFILE%\.cargo\bin;%PATH%"
+if not defined CARGO_TARGET_DIR set "CARGO_TARGET_DIR=%LOCALAPPDATA%\LLMMaker\cargo-target"
 
 echo [0/4] Freeing any previous running llm-maker instances...
 powershell -NoProfile -Command "Stop-Process -Name 'llm-maker' -Force -ErrorAction SilentlyContinue"
@@ -25,7 +25,7 @@ if "%1"=="quick" (
 
 if "%1"=="dev" (
     echo Starting Tauri dev mode...
-    cd frontend && npx tauri dev
+    call "frontend\node_modules\.bin\tauri.cmd" dev
     exit /b %ERRORLEVEL%
 )
 
@@ -52,8 +52,16 @@ if %ERRORLEVEL% neq 0 (
 cd ..
 
 echo [3/4] Updating root llm-maker.exe executable...
-copy /Y "C:\Users\Cata\.cargo\target_llm_maker\x86_64-pc-windows-gnu\debug\llm-maker.exe" "%~dp0llm-maker.exe" >nul
-copy /Y "C:\Users\Cata\.cargo\target_llm_maker\x86_64-pc-windows-gnu\debug\llm-maker.exe" "%~dp0src-tauri\target\release\llm-maker.exe" >nul
+set "BUILT=%CARGO_TARGET_DIR%\debug\llm-maker.exe"
+if not exist "%BUILT%" set "BUILT=%CARGO_TARGET_DIR%\x86_64-pc-windows-msvc\debug\llm-maker.exe"
+if not exist "%BUILT%" set "BUILT=%CARGO_TARGET_DIR%\x86_64-pc-windows-gnu\debug\llm-maker.exe"
+if not exist "%BUILT%" (
+    echo [ERROR] Built llm-maker.exe not found under "%CARGO_TARGET_DIR%".
+    pause
+    exit /b 1
+)
+copy /Y "%BUILT%" "%~dp0llm-maker.exe" >nul
+copy /Y "%BUILT%" "%~dp0src-tauri\target\release\llm-maker.exe" >nul
 
 :launch
 echo [4/4] Launching LLM Maker Native Desktop...

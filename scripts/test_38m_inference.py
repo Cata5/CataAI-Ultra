@@ -3,13 +3,16 @@ import os
 from pathlib import Path
 import torch
 
-sys.path.insert(0, r"D:\proiecte\LLM from Scratch")
+LEGACY_ROOT = Path(os.environ.get("LEGACY_38M_DIR", ""))
+if not LEGACY_ROOT.is_dir():
+    raise SystemExit("Set LEGACY_38M_DIR to the legacy 38M project directory")
+sys.path.insert(0, str(LEGACY_ROOT))
 from src.data.tokenizer import BytePairEncoding
 from src.models.model import BigramLanguageModel
 
 def test_38m_chat():
-    tokenizer_path = r"D:\proiecte\LLM from Scratch\data\bpe_4096_special.pkl"
-    ckpt_path = r"D:\proiecte\LLM from Scratch\checkpoints\model_phase2_chat_ro.pt"
+    tokenizer_path = LEGACY_ROOT / "data" / "bpe_4096_special.pkl"
+    ckpt_path = LEGACY_ROOT / "checkpoints" / "model_phase2_chat_ro.pt"
     
     print("Loading 38M tokenizer...", flush=True)
     tokenizer = BytePairEncoding.load(tokenizer_path)

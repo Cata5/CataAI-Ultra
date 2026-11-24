@@ -15,12 +15,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..utils.paths import data_dir
 from .estimator import ParameterCalculator
 from .templates import ALL_TEMPLATES
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_REGISTRY_DIR = Path("networks/registry")
+DEFAULT_REGISTRY_DIR = data_dir() / "networks" / "registry"
 
 
 class NetworkRegistry:

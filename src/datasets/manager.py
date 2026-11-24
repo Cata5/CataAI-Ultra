@@ -17,12 +17,13 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..db.database import StudioDatabase
 from ..tokenizer.tokenizer import RoCanonTokenizer
+from ..utils.paths import cache_dir, datasets_dir, uploads_dir
 from .analyzer import DatasetAnalyzer
 from .validator import DatasetValidator
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_UPLOAD_DIR = Path("data/uploads")
+DEFAULT_UPLOAD_DIR = uploads_dir()
 
 
 class DatasetManager:
@@ -142,11 +143,11 @@ class DatasetManager:
             return ds
         for preset in self.list_all_datasets():
             if preset["id"] == dataset_id:
-                cache_p = Path("data/cache") / f"{dataset_id}_tokens.pt"
+                cache_p = cache_dir() / f"{dataset_id}_tokens.pt"
                 if not cache_p.exists():
-                    cache_p = Path("data/cache") / f"{dataset_id}_full_tokens.pt"
-                raw_txt = Path(f"data/{dataset_id}.txt")
-                raw_path = str(raw_txt.resolve()) if raw_txt.exists() else f"data/{dataset_id}.txt"
+                    cache_p = cache_dir() / f"{dataset_id}_full_tokens.pt"
+                raw_txt = datasets_dir() / f"{dataset_id}.txt"
+                raw_path = str(raw_txt.resolve()) if raw_txt.exists() else str(raw_txt)
                 return {
                     "id": preset["id"],
                     "name": preset["name"],
@@ -208,7 +209,7 @@ class DatasetManager:
         self.deleted_dataset_ids.add(dataset_id)
         self.db.delete_dataset(dataset_id)
         # Safely remove files
-        for search_dir in (self.upload_dir, Path("data/cache"), Path("data")):
+        for search_dir in (self.upload_dir, cache_dir(), datasets_dir()):
             if search_dir.exists():
                 for p in search_dir.glob(f"*{dataset_id}*"):
                     try:

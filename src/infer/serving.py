@@ -180,7 +180,12 @@ def export_ollama_modelfile(
     output_dir: str = "models",
     template: str = "chatml",
 ) -> str:
-    """Generates an official Ollama Modelfile for 1-click loading with `ollama create`."""
+    """Writes a Modelfile only for a real GGUF; `.pt` is not an Ollama blob."""
+    if Path(model_path).suffix.lower() != ".gguf":
+        raise ValueError(
+            "Ollama requires a .gguf blob; RoCanon .pt checkpoints contain Canon "
+            "convolutions that stock llama.cpp cannot execute."
+        )
     p = Path(output_dir) / model_name
     p.mkdir(parents=True, exist_ok=True)
     modelfile_path = p / "Modelfile"

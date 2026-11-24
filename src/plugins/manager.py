@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..db.database import StudioDatabase
+from ..utils.paths import data_dir
 from .manifest import PluginCategory, PluginManifest
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,8 @@ logger = logging.getLogger(__name__)
 class PluginManager:
     """Manages discovery, validation, and activation of trusted local plugins."""
 
-    def __init__(self, plugins_dir: Path | str = "plugins", db: Optional[StudioDatabase] = None) -> None:
-        self.plugins_dir = Path(plugins_dir)
+    def __init__(self, plugins_dir: Optional[Path | str] = None, db: Optional[StudioDatabase] = None) -> None:
+        self.plugins_dir = Path(plugins_dir) if plugins_dir else data_dir() / "plugins"
         # Safe mode is a support/diagnostic switch: no plugin discovery, no sample
         # generation, no execution. It never modifies the user's enabled set.
         self.env_safe_mode = os.environ.get("LLMMAKER_SAFE_MODE", "").strip().lower() in {"1", "true", "yes", "on"}

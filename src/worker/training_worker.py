@@ -33,6 +33,7 @@ from ..training.loss import ChunkedCrossEntropyLoss
 from ..training.scheduler import WSDScheduler
 from ..training.task_adapter import BaseTaskAdapter, TaskAdapterFactory
 from ..training.trainer import Trainer, TrainingConfig
+from ..utils.paths import checkpoints_dir, workspaces_dir
 from .protocol import CommandType, EventType, RunState, WorkerCommand, WorkerEvent
 from .state_machine import RunStateMachine
 
@@ -54,6 +55,31 @@ def _first_int(mapping: Dict[str, Any], keys: List[str], default: int) -> int:
         except (TypeError, ValueError):
             logger.warning("Ignoring non-numeric %s=%r in run payload", key, value)
     return default
+
+
+class _NonMainProcessDB:
+    """Read-through database facade that drops writes on non-zero DDP ranks.
+
+    SQLite is a single-writer store; only rank 0 may persist run state, metrics,
+    checkpoints and alerts. Reads still work so every rank sees the same config.
+    """
+
+    _WRITE_PREFIXES = (
+        "log_", "save_", "update_", "insert_", "delete_", "create_",
+        "record_", "set_", "upsert_", "mark_", "register_", "prune_", "clear_",
+    )
+
+    def __init__(self, inner: Any) -> None:
+        self._inner = inner
+
+    def __getattr__(self, name: str) -> Any:
+        attr = getattr(self._inner, name)
+        if callable(attr) and name.startswith(self._WRITE_PREFIXES):
+            def _skip(*args: Any, **kwargs: Any) -> None:
+                logger.debug("Skipping %s on non-zero DDP rank", name)
+                return None
+            return _skip
+        return attr
 
 
 class TrainingWorkerProcess:
@@ -263,6 +289,8 @@ class TrainingWorkerProcess:
         )
         eval_freq = max(0, eval_freq)
         save_freq = max(0, save_freq)
+        auto_rollback_on_spike = bool(payload.get("auto_rollback_on_spike", False))
+        max_spike_rollbacks = max(0, int(payload.get("max_spike_rollbacks", 3)))
         es_enabled = bool(payload.get("early_stopping_enabled", False))
         es_patience = int(payload.get("early_stopping_patience", 20))
         es_min_delta = float(payload.get("early_stopping_min_delta", 0.001))
@@ -305,21 +333,24 @@ class TrainingWorkerProcess:
 
         self.workspace_id = str(payload.get("workspace_id") or "default")
         if self.workspace_id and self.workspace_id != "default":
-            ws_chk_dir = Path(f"workspaces/{self.workspace_id}/checkpoints")
+            ws_chk_dir = workspaces_dir() / self.workspace_id / "checkpoints"
             ws_chk_dir.mkdir(parents=True, exist_ok=True)
             self.checkpoint_manager.checkpoint_dir = ws_chk_dir
         else:
-            self.checkpoint_manager.checkpoint_dir = Path("checkpoints")
+            self.checkpoint_manager.checkpoint_dir = checkpoints_dir()
 
         self.state_machine.transition_to(RunState.STARTING)
-        self.db.create_run(
-            run_id=run_id,
-            name=payload.get("run_name", f"RoCanon Run {run_id}"),
-            current_phase=phase,
-            dataset_source=str(dataset_source),
-            config={"arch": config_arch, "opt": config_opt, "es": config_es},
-            workspace_id=self.workspace_id,
-        )
+        # Every DDP rank opens the same SQLite file; only rank 0 may insert the run.
+        rank_hint = int(payload.get("rank") or os.environ.get("RANK", "0") or 0)
+        if rank_hint == 0:
+            self.db.create_run(
+                run_id=run_id,
+                name=payload.get("run_name", f"RoCanon Run {run_id}"),
+                current_phase=phase,
+                dataset_source=str(dataset_source),
+                config={"arch": config_arch, "opt": config_opt, "es": config_es},
+                workspace_id=self.workspace_id,
+            )
 
         target_device_str = payload.get("device")
         # Handle 'auto', empty, 'cluster', 'multi_gpu', or unrecognised device strings safely
@@ -335,14 +366,18 @@ class TrainingWorkerProcess:
             logger.warning("Failed to parse device '%s' (%s). Falling back to safe default.", target_device_str, dev_err)
             device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-        # Cluster / Distributed Environment Setup (Only if cluster mode is explicitly active AND multi-node world_size > 1)
-        if bool(payload.get("is_cluster")) and int(payload.get("world_size", 1)) > 1:
+        # Cluster / Distributed Environment Setup. torchrun already exports
+        # WORLD_SIZE/RANK/LOCAL_RANK; explicit payload fields support manual launches.
+        distributed_active = False
+        dist_world_size = 1
+        dist_rank = 0
+        requested_world_size = int(payload.get("world_size") or os.environ.get("WORLD_SIZE", "1"))
+        if bool(payload.get("is_cluster")) or requested_world_size > 1:
             import os
             import datetime
             import socket
 
             raw_addr = str(payload.get("master_addr") or os.environ.get("MASTER_ADDR", "127.0.0.1")).strip()
-            # If raw_addr is a hostname like DESKTOP-*, resolve to IPv4 or safe loopback
             if raw_addr.lower() in ("localhost", ""):
                 master_addr = "127.0.0.1"
             else:
@@ -354,6 +389,7 @@ class TrainingWorkerProcess:
             master_port = str(payload.get("master_port") or os.environ.get("MASTER_PORT", "29500"))
             world_size = int(payload.get("world_size") or os.environ.get("WORLD_SIZE", "1"))
             rank = int(payload.get("rank") or os.environ.get("RANK", "0"))
+            local_rank = int(os.environ.get("LOCAL_RANK", rank))
 
             if world_size <= 1:
                 logger.info("Cluster mode requested with world_size=%d: Running single-node standalone on %s (multi-node sync skipped).", world_size, device)
@@ -362,19 +398,30 @@ class TrainingWorkerProcess:
                 os.environ["MASTER_PORT"] = master_port
                 os.environ["WORLD_SIZE"] = str(world_size)
                 os.environ["RANK"] = str(rank)
-                if not torch.distributed.is_initialized():
-                    try:
-                        backend = "nccl" if torch.cuda.is_available() and device.type == "cuda" else "gloo"
+                os.environ.setdefault("LOCAL_RANK", str(local_rank))
+                try:
+                    backend = "nccl" if torch.cuda.is_available() and device.type == "cuda" else "gloo"
+                    if not torch.distributed.is_initialized():
                         logger.info("Connecting to cluster master %s:%s (rank %d/%d, backend=%s)...", master_addr, master_port, rank, world_size, backend)
                         torch.distributed.init_process_group(
                             backend=backend,
-                            rank=rank,
-                            world_size=world_size,
-                            timeout=datetime.timedelta(seconds=5),
+                            init_method="env://",
+                            timeout=datetime.timedelta(minutes=30),
                         )
-                        logger.info("Cluster distributed initialized: rank %d/%d at %s:%s (backend=%s)", rank, world_size, master_addr, master_port, backend)
-                    except Exception as dist_err:
-                        logger.warning("Cluster distributed initialization failed: %s. Continuing standalone on %s.", dist_err, device)
+                    distributed_active = torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1
+                    if distributed_active:
+                        dist_world_size = torch.distributed.get_world_size()
+                        dist_rank = torch.distributed.get_rank()
+                        if device.type == "cuda":
+                            device = torch.device(f"cuda:{local_rank % max(1, torch.cuda.device_count())}")
+                            target_device_str = str(device)
+                        if dist_rank != 0:
+                            self.db = _NonMainProcessDB(self.db)
+                            self.checkpoint_manager.db = self.db
+                        logger.info("DDP initialized: rank %d/%d local_rank=%d device=%s", dist_rank, dist_world_size, local_rank, device)
+                except Exception as dist_err:
+                    distributed_active = False
+                    logger.warning("Cluster distributed initialization failed: %s. Continuing standalone on %s.", dist_err, device)
 
         if device.type == "cuda":
             torch.set_float32_matmul_precision("high")
@@ -397,13 +444,22 @@ class TrainingWorkerProcess:
                 except Exception as lora_err:
                     logger.warning("LoRA injection failed: %s", lora_err)
 
+            if distributed_active:
+                try:
+                    from ..training.distributed import wrap_model_for_ddp
+                    model = wrap_model_for_ddp(model, device, local_rank=dist_rank)
+                except Exception as ddp_err:
+                    logger.exception("DDP wrapping failed: %s", ddp_err)
+                    self.state_machine.transition_to(RunState.FAILED)
+                    return
+
             self.param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
             logger.info("Trainable parameters: %d", self.param_count)
 
             # Check for Multi-GPU Distributed Training
             use_multi_gpu = bool(payload.get("use_multi_gpu", False))
             device_ids = payload.get("device_ids")
-            if use_multi_gpu and torch.cuda.is_available() and torch.cuda.device_count() > 1:
+            if not distributed_active and use_multi_gpu and torch.cuda.is_available() and torch.cuda.device_count() > 1:
                 try:
                     from ..training.distributed import wrap_model_for_multi_gpu
                     model, bound_devices = wrap_model_for_multi_gpu(model, device_ids=device_ids)
@@ -565,7 +621,7 @@ class TrainingWorkerProcess:
             min_delta=es_min_delta,
             min_steps=int(payload.get("early_stopping_min_steps", config_es.get("min_steps", 500))),
             overfitting_ratio=float(config_es.get("overfitting_ratio", 1.15)),
-            checkpoint_dir="checkpoints",
+            checkpoint_dir=str(checkpoints_dir()),
         )
         detector = OverfittingDetector(es_cfg)
 
@@ -713,6 +769,9 @@ class TrainingWorkerProcess:
         except Exception as we:
             logger.debug("Run start notification error: %s", we)
 
+        last_good_checkpoint = Path(checkpoint_to_load) if checkpoint_to_load else None
+        rollback_count = 0
+
         try:
             while self.state_machine.current_state in {RunState.RUNNING, RunState.PAUSING, RunState.PAUSED}:
                 self._poll_commands()
@@ -822,6 +881,7 @@ class TrainingWorkerProcess:
                         filename_prefix="manual_snapshot",
                         workspace_id=self.workspace_id,
                     )
+                    last_good_checkpoint = chk_p
                     self._send_event(WorkerEvent(
                         event_type=EventType.CHECKPOINT_SAVED,
                         run_id=run_id,
@@ -834,7 +894,10 @@ class TrainingWorkerProcess:
                     trainer.zero_grad()
                     session_curr_step = max(0, step - start_step - 1)
                     for accum_idx in range(training_cfg.grad_accum_steps):
-                        start_pos = (session_curr_step * training_cfg.grad_accum_steps + accum_idx) * batch_len
+                        global_micro_step = session_curr_step * training_cfg.grad_accum_steps + accum_idx
+                        # DDP shards the stream: every rank takes a distinct window,
+                        # then all-reduce makes the effective batch world_size times larger.
+                        start_pos = (global_micro_step * dist_world_size + dist_rank) * batch_len
                         if is_seq_tokens:
                             if start_pos + batch_len <= train_len:
                                 batch_in = train_inputs[start_pos : start_pos + batch_len].view(
@@ -861,7 +924,11 @@ class TrainingWorkerProcess:
                             batch_in = train_inputs[idx]
                             batch_lbl = train_labels[idx] if train_labels is not None else None
 
-                        _, micro_valid = trainer.accumulate_micro_batch(input_ids=batch_in, labels=batch_lbl)
+                        if distributed_active and hasattr(model, "no_sync") and accum_idx < training_cfg.grad_accum_steps - 1:
+                            with model.no_sync():
+                                _, micro_valid = trainer.accumulate_micro_batch(input_ids=batch_in, labels=batch_lbl)
+                        else:
+                            _, micro_valid = trainer.accumulate_micro_batch(input_ids=batch_in, labels=batch_lbl)
                         valid_tokens_in_step += max(0, int(micro_valid))
 
                         self._poll_commands()
@@ -884,6 +951,10 @@ class TrainingWorkerProcess:
                     scheduler.current_step = step
                     scheduler.current_tokens = total_tokens
                     train_loss = trainer.loss_accumulator.reset()
+                    if distributed_active:
+                        loss_tensor = torch.tensor(float(train_loss), device=device)
+                        torch.distributed.all_reduce(loss_tensor, op=torch.distributed.ReduceOp.SUM)
+                        train_loss = float(loss_tensor.item()) / max(1, dist_world_size)
                     dt = time.time() - t0
                     self.cumulative_active_time += dt
 
@@ -932,20 +1003,56 @@ class TrainingWorkerProcess:
                     self.loss_ema = train_loss
                 else:
                     if train_loss > (self.loss_ema * 2.5) and step > 10:
+                        ema_before = self.loss_ema
                         self.db.log_alert(
                             level="WARNING",
                             category="LOSS_SPIKE",
-                            message=f"Sudden loss spike: {train_loss:.4f} vs EMA {self.loss_ema:.4f}",
+                            message=f"Sudden loss spike: {train_loss:.4f} vs EMA {ema_before:.4f}",
                             run_id=run_id,
                             step=step,
                         )
+                        rolled_back = False
+                        if (
+                            auto_rollback_on_spike
+                            and last_good_checkpoint is not None
+                            and rollback_count < max_spike_rollbacks
+                            and Path(last_good_checkpoint).is_file()
+                        ):
+                            try:
+                                self.checkpoint_manager.load_checkpoint(
+                                    checkpoint_path=last_good_checkpoint,
+                                    model=model,
+                                    optimizers=(muon_opt, adamw_opt),
+                                    scheduler=scheduler,
+                                    device=device,
+                                    restore_training_state=True,
+                                )
+                                rollback_count += 1
+                                rolled_back = True
+                                self.loss_ema = None
+                                self.adaptive_lr_factor = 1.0
+                                self.db.log_alert(
+                                    level="WARNING",
+                                    category="LOSS_ROLLBACK",
+                                    message=f"Rolled back to {Path(last_good_checkpoint).name} after loss spike at step {step}",
+                                    run_id=run_id,
+                                    step=step,
+                                )
+                            except Exception as rollback_error:
+                                logger.error("Loss-spike rollback failed: %s", rollback_error)
                         self._send_event(WorkerEvent(
                             event_type=EventType.LOSS_SPIKE,
                             run_id=run_id,
                             step=step,
-                            payload={"loss": train_loss, "ema": self.loss_ema},
+                            payload={
+                                "loss": train_loss,
+                                "ema": ema_before,
+                                "rolled_back": rolled_back,
+                                "checkpoint": str(last_good_checkpoint) if rolled_back else None,
+                            },
                         ))
-                    self.loss_ema = (1.0 - self.ema_alpha) * self.loss_ema + self.ema_alpha * train_loss
+                    if self.loss_ema is not None:
+                        self.loss_ema = (1.0 - self.ema_alpha) * self.loss_ema + self.ema_alpha * train_loss
 
                 # Gradient Norm threshold alert
                 if grad_norm > 15.0:
@@ -1019,6 +1126,7 @@ class TrainingWorkerProcess:
                             is_best=True,
                             workspace_id=self.workspace_id,
                         )
+                        last_good_checkpoint = self.checkpoint_manager.checkpoint_dir / "best_model.pt"
                         try:
                             from ..notifications.webhook import get_notifier
                             get_notifier(db=self.db).notify_best_checkpoint(
@@ -1082,6 +1190,7 @@ class TrainingWorkerProcess:
                         filename_prefix="checkpoint",
                         workspace_id=self.workspace_id,
                     )
+                    last_good_checkpoint = chk_p
                     self._send_event(WorkerEvent(
                         event_type=EventType.CHECKPOINT_SAVED,
                         run_id=run_id,

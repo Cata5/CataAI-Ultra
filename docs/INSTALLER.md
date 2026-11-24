@@ -1,8 +1,14 @@
 # First-run installer design
 
 This document describes how the portable setup becomes a downloadable Windows
-installer. The detection and PyTorch installation engine already exists in
-`installer/`; the Tauri packaging and setup screen are the remaining work.
+installer. The detection and PyTorch installation engine exists in
+`installer/`; packaging is implemented by `scripts/build_installer.ps1` and
+verified by `scripts/verify_installer.ps1`. The first-run wizard is wired in
+`src-tauri/src/commands.rs` and `frontend/src/components/onboarding/RuntimeSetupGate.tsx`.
+
+**Shipped status:** no signed installer or auto-updater is published. Building
+one requires a pinned CPython archive URL + SHA-256 and a code-signing
+certificate; neither is committed to this repository.
 
 ## Decision: two phases, not one NSIS script
 
@@ -37,16 +43,16 @@ Per-user install (`currentUser`, no UAC):
 
 %LOCALAPPDATA%\LLMMaker\
   runtime\
-    py311\                     virtual environment
+    venv\                      virtual environment
     runtime.json               hardware + wheel + verification
     cache\pip\                 wheel cache (optional)
   data\                        studio.db, checkpoints, secrets
   logs\
 ```
 
-Never write the database into `Program Files`. The Tauri app must resolve the
-data directory with `app.path().app_local_data_dir()` and pass it to the Python
-worker. This also fixes the current project-root walk after installation.
+Never write the database into `Program Files`. The Tauri shell resolves the
+per-user root from `LLMMAKER_DATA_DIR` or `%LOCALAPPDATA%\LLMMaker` and passes
+it to the Python worker. Packaged builds never write into the install folder.
 
 ## Tauri configuration
 
@@ -109,7 +115,7 @@ which the wizard uses to create the venv.
 
    ```text
    ..\python\python.exe -m installer install \
-     --venv %LOCALAPPDATA%\LLMMaker\runtime\py311 \
+     --venv %LOCALAPPDATA%\LLMMaker\runtime\venv \
      --requirements requirements.txt \
      --manifest %LOCALAPPDATA%\LLMMaker\runtime\runtime.json
    ```
@@ -121,7 +127,7 @@ which the wizard uses to create the venv.
    ```json
    {
      "schema": 1,
-     "venv": "C:\\Users\\...\\LLMMaker\\runtime\\py311",
+     "venv": "C:\\Users\\...\\LLMMaker\\runtime\\venv",
      "python": "...\\Scripts\\python.exe",
      "plan": { "channel": "cu128", "index_url": "https://download.pytorch.org/whl/cu128" },
      "hardware": { "gpus": [{ "name": "NVIDIA GeForce RTX 3060", "driver_version": "621.24" }] },
@@ -168,7 +174,7 @@ until a Linux test target exists.
 
 ## Worker resolution
 
-Change `src-tauri/src/worker.rs` to resolve the interpreter in this order:
+`src-tauri/src/worker.rs` resolves the interpreter in this order:
 
 1. `LLMMAKER_PYTHON` (explicit override / tests).
 2. `runtime.json` in the app data directory.
@@ -177,6 +183,13 @@ Change `src-tauri/src/worker.rs` to resolve the interpreter in this order:
 
 Pass the app data directory to the worker as an environment variable or CLI
 argument so SQLite, checkpoints and logs stay out of the install directory.
+
+## Uninstall policy
+
+The NSIS uninstaller removes the program files only. User data stays in
+`%LOCALAPPDATA%\LLMMaker` (SQLite DB, checkpoints, datasets, venv, logs) so a
+reinstall keeps runs and models. Removing that directory is an explicit manual
+reset; the app never deletes it on uninstall.
 
 ## Security and operations
 
@@ -203,14 +216,29 @@ fallback, CSV parsing and manifest round-trips. Before shipping:
 - Interrupted download, disk full, proxy failure, and cancel mid-install.
 - Re-run setup with an existing valid runtime and with a corrupted venv.
 - Confirm the installed app starts with no system Python on `PATH`.
-- Confirm uninstall leaves or removes `%LOCALAPPDATA%\LLMMaker` according to a
-  documented choice.
+- Confirm uninstall removes `%LOCALAPPDATA%\Programs\LLMMaker` but keeps
+  `%LOCALAPPDATA%\LLMMaker` (models, runs, runtime, logs).
 
-## Remaining implementation
+## Implemented vs. release blockers
 
-1. Build script that downloads and verifies the standalone CPython, then stages
+Implemented in this repository:
+
+1. `scripts/build_installer.ps1` verifies a pinned CPython archive and stages
    `src-tauri/resources/python` and `src-tauri/resources/app`.
-2. Tauri resource configuration and `app_local_data_dir()` plumbing.
-3. Setup screen + Rust command that streams installer output.
-4. Worker interpreter resolution from `runtime.json`.
-5. NSIS signing, versioning, and a release workflow.
+2. Tauri bundles those resources and passes the per-user data root to Python.
+3. `RuntimeSetupGate` + `run_setup` stream installer output and cancel.
+4. The worker re-reads `runtime.json` on every spawn, so setup needs no restart.
+5. `scripts/verify_installer.ps1` checks the staged payload, and
+   `.github/workflows/release.yml` builds/uploads the NSIS artifact and signs it
+   when signing secrets are configured.
+
+External prerequisites still required for a shipped build:
+
+1. A pinned `python-build-standalone` URL + SHA-256 in repository variables.
+2. An Authenticode certificate and password in repository secrets; without
+   them the release workflow publishes an explicitly **unsigned** installer.
+3. An end-to-end run on clean Windows 10/11 machines, including no-GPU and
+   no-system-Python cases.
+4. A per-channel requirements lock and the offline CPU-wheel ZIP.
+5. A documented uninstall choice: keep or delete `%LOCALAPPDATA%\LLMMaker`.
+6. Signing `llm-maker.exe` itself (the current workflow signs the NSIS bundle).
