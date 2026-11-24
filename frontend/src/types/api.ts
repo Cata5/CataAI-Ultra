@@ -260,6 +260,15 @@ export interface BenchmarkResult {
   created_at: string | number;
 }
 
+export interface SystemLogEntry {
+  id: number;
+  timestamp: string;
+  level: "ERROR" | "WARN" | "INFO" | "DEBUG";
+  source: "WORKER" | "TAURI" | "SYSTEM" | "DATABASE";
+  message: string;
+  raw: string;
+}
+
 export interface WebSocketEvent {
   event_type:
     | "STEP_METRICS"

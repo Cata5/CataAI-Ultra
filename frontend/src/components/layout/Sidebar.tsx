@@ -16,6 +16,7 @@ import {
   BarChart2,
   Cpu,
   Settings,
+  Terminal,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
@@ -63,6 +64,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: "System",
     items: [
       { name: "Hardware", href: "/hardware", icon: Cpu },
+      { name: "Logs", href: "/logs", icon: Terminal },
       { name: "Settings", href: "/settings", icon: Settings },
     ],
   },

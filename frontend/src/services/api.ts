@@ -1,5 +1,6 @@
 import {
   Alert,
+  SystemLogEntry,
   BenchmarkResult,
   CheckpointItem,
   DatasetItem,
@@ -103,6 +104,29 @@ export const api = {
       }
     }
     return request<Alert[]>(`/api/alerts?limit=${limit}${runId ? `&run_id=${runId}` : ""}`);
+  },
+  getSystemLogs: async (limit: number = 2000): Promise<SystemLogEntry[]> => {
+    const inv = await getTauriInvoke();
+    if (inv) {
+      try {
+        return await inv("get_system_logs", { limit });
+      } catch (e) {
+        console.warn("Tauri get_system_logs fallback:", e);
+      }
+    }
+    return request<SystemLogEntry[]>(`/api/logs?limit=${limit}`);
+  },
+  clearSystemLogs: async (): Promise<void> => {
+    const inv = await getTauriInvoke();
+    if (inv) {
+      try {
+        await inv("clear_system_logs");
+        return;
+      } catch (e) {
+        console.warn("Tauri clear_system_logs fallback:", e);
+      }
+    }
+    await request<any>("/api/logs/clear", { method: "POST" });
   },
 
   // Runs & Controls
@@ -735,6 +759,21 @@ export const api = {
     return request<{ status: string; settings: any }>("/api/settings", {
       method: "POST",
       body: JSON.stringify(settings),
+    });
+  },
+
+  testNotification: async (data: Record<string, any>): Promise<{ discord: boolean; telegram: boolean; errors: string[] }> => {
+    const inv = await getTauriInvoke();
+    if (inv) {
+      try {
+        return await inv("test_notification", { data });
+      } catch (e) {
+        console.warn("Tauri test_notification fallback:", e);
+      }
+    }
+    return request<{ discord: boolean; telegram: boolean; errors: string[] }>("/api/notifications/test", {
+      method: "POST",
+      body: JSON.stringify(data),
     });
   },
 

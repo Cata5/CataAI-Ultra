@@ -556,6 +556,7 @@ async def handle_test_notification(request: web.Request) -> web.Response:
     notifier = get_notifier(db=DB)
     res = notifier.test_notification(
         discord_url=data.get("discord_webhook_url"),
+        discord_mention=data.get("discord_mention"),
         telegram_token=data.get("telegram_bot_token"),
         telegram_chat_id=data.get("telegram_chat_id"),
     )
@@ -1399,6 +1400,78 @@ async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+async def handle_get_logs(request: web.Request) -> web.Response:
+    limit = int(request.query.get("limit", 2000))
+    raw_lines = []
+    for log_path in ["tauri_debug.prev.log", "tauri_debug.log"]:
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            raw_lines.append(line)
+            except Exception:
+                pass
+
+    start_idx = max(0, len(raw_lines) - limit)
+    entries = []
+    for i, line in enumerate(raw_lines[start_idx:]):
+        lower = line.lower()
+        if "error" in lower or "traceback" in lower or "exception" in lower or "runtimeerror" in lower or "failed" in lower:
+            lvl = "ERROR"
+        elif "warn" in lower or "rejected" in lower:
+            lvl = "WARN"
+        elif "debug" in lower:
+            lvl = "DEBUG"
+        else:
+            lvl = "INFO"
+
+        if "[python stderr]" in lower or "[python stdout]" in lower or "worker" in lower or "pytorch" in lower or "cuda" in lower:
+            src = "WORKER"
+        elif "database" in lower or "sqlite" in lower:
+            src = "DATABASE"
+        elif "hardware" in lower or "system" in lower:
+            src = "SYSTEM"
+        else:
+            src = "TAURI"
+
+        ts = ""
+        import re
+        m = re.search(r'\[(20\d{2}-\d{2}-\d{2}[^\]]*)\]', line)
+        if m:
+            ts = m.group(1)
+
+        msg = line
+        for prefix in ["[PYTHON STDERR] ", "[PYTHON STDOUT] ", "[TRACE] "]:
+            if prefix in msg:
+                msg = msg.split(prefix, 1)[1]
+
+        entries.append({
+            "id": start_idx + i + 1,
+            "timestamp": ts,
+            "level": lvl,
+            "source": src,
+            "message": msg.strip(),
+            "raw": line,
+        })
+    return web.json_response(entries)
+
+
+async def handle_clear_logs(request: web.Request) -> web.Response:
+    if os.path.exists("tauri_debug.prev.log"):
+        try:
+            os.remove("tauri_debug.prev.log")
+        except Exception:
+            pass
+    try:
+        with open("tauri_debug.log", "w", encoding="utf-8") as f:
+            f.write("[TRACE] Logs cleared by user\n")
+    except Exception:
+        pass
+    return web.json_response({"success": True})
+
+
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
     if request.method == "OPTIONS":
@@ -1452,6 +1525,8 @@ def create_app() -> web.Application:
     app.router.add_get("/api/system/status", handle_system_status)
     app.router.add_get("/api/hardware", handle_hardware_telemetry)
     app.router.add_get("/api/alerts", handle_get_alerts)
+    app.router.add_get("/api/logs", handle_get_logs)
+    app.router.add_post("/api/logs/clear", handle_clear_logs)
 
     app.router.add_get("/api/runs", handle_list_runs)
     app.router.add_post("/api/runs", handle_create_run)

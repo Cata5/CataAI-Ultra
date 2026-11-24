@@ -77,6 +77,7 @@ class TrainingWorkerProcess:
         self.ema_alpha: float = 0.05
         self._last_vram_alert_time: float = 0.0
         self._last_emergency_save_time: float = 0.0
+        self._last_webhook_progress_time: float = 0.0
 
     def _handle_state_transition(self, old_state: RunState, new_state: RunState) -> None:
         event = WorkerEvent(
@@ -209,12 +210,12 @@ class TrainingWorkerProcess:
         config_opt = payload.get("config_opt", {})
         config_es = payload.get("config_early_stopping", {})
         max_samples = payload.get("max_samples")
-        checkpoint_to_load = (
-            payload.get("resume_checkpoint")
-            or payload.get("checkpoint_to_load")
-            or payload.get("checkpoint_path")
-            or payload.get("checkpoint")
-        )
+        start_fresh = bool(payload.get("start_fresh", False))
+        resume_chk = payload.get("resume_checkpoint")
+        if start_fresh or not resume_chk or str(resume_chk).strip() in ("", "none", "null"):
+            checkpoint_to_load = None
+        else:
+            checkpoint_to_load = str(resume_chk).strip()
         duration_mode = str(payload.get("duration_mode", "steps")).lower()
         target_epochs = int(payload.get("target_epochs") or payload.get("epochs") or 3)
         target_steps = int(payload.get("total_steps") or payload.get("target_steps") or 1000)
@@ -263,6 +264,10 @@ class TrainingWorkerProcess:
             config_opt["micro_batch_size"] = int(payload["micro_batch_size"])
         if "grad_accum_steps" in payload:
             config_opt["grad_accum_steps"] = int(payload["grad_accum_steps"])
+        if "grad_clip" in payload:
+            config_opt["max_grad_norm"] = float(payload["grad_clip"])
+        elif "max_grad_norm" in payload:
+            config_opt["max_grad_norm"] = float(payload["max_grad_norm"])
 
         self.latest_val_loss = None
         self.latest_val_step = None
@@ -288,28 +293,59 @@ class TrainingWorkerProcess:
         )
 
         target_device_str = payload.get("device")
-        if not target_device_str:
-            target_device_str = self.device_str if self.device_str else ("cuda" if torch.cuda.is_available() else "cpu")
-        device = torch.device(target_device_str)
+        # Handle 'auto', empty, 'cluster', 'multi_gpu', or unrecognised device strings safely
+        if not target_device_str or str(target_device_str).strip().lower() in ("auto", "default", "cluster", "multi_gpu"):
+            target_device_str = self.device_str if (self.device_str and str(self.device_str).strip().lower() not in ("auto", "default", "cluster", "multi_gpu")) else ("cuda:0" if torch.cuda.is_available() else "cpu")
+        elif str(target_device_str).startswith("cuda") and not torch.cuda.is_available():
+            logger.warning("CUDA requested (%s) but not available. Falling back to cpu.", target_device_str)
+            target_device_str = "cpu"
 
-        # Cluster / Distributed Environment Setup
-        if payload.get("is_cluster") or payload.get("world_size", 1) > 1:
+        try:
+            device = torch.device(target_device_str)
+        except Exception as dev_err:
+            logger.warning("Failed to parse device '%s' (%s). Falling back to safe default.", target_device_str, dev_err)
+            device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+        # Cluster / Distributed Environment Setup (Only if cluster mode is explicitly active AND multi-node world_size > 1)
+        if bool(payload.get("is_cluster")) and int(payload.get("world_size", 1)) > 1:
             import os
-            master_addr = payload.get("master_addr") or os.environ.get("MASTER_ADDR", "127.0.0.1")
+            import datetime
+            import socket
+
+            raw_addr = str(payload.get("master_addr") or os.environ.get("MASTER_ADDR", "127.0.0.1")).strip()
+            # If raw_addr is a hostname like DESKTOP-*, resolve to IPv4 or safe loopback
+            if raw_addr.lower() in ("localhost", ""):
+                master_addr = "127.0.0.1"
+            else:
+                try:
+                    master_addr = socket.gethostbyname(raw_addr)
+                except Exception:
+                    master_addr = "127.0.0.1"
+
             master_port = str(payload.get("master_port") or os.environ.get("MASTER_PORT", "29500"))
             world_size = int(payload.get("world_size") or os.environ.get("WORLD_SIZE", "1"))
             rank = int(payload.get("rank") or os.environ.get("RANK", "0"))
-            os.environ["MASTER_ADDR"] = master_addr
-            os.environ["MASTER_PORT"] = master_port
-            os.environ["WORLD_SIZE"] = str(world_size)
-            os.environ["RANK"] = str(rank)
-            if not torch.distributed.is_initialized():
-                try:
-                    backend = "nccl" if torch.cuda.is_available() and device.type == "cuda" else "gloo"
-                    torch.distributed.init_process_group(backend=backend, rank=rank, world_size=world_size)
-                    logger.info("Cluster distributed initialized: rank %d/%d at %s:%s (backend=%s)", rank, world_size, master_addr, master_port, backend)
-                except Exception as dist_err:
-                    logger.warning("Cluster distributed initialization failed: %s", dist_err)
+
+            if world_size <= 1:
+                logger.info("Cluster mode requested with world_size=%d: Running single-node standalone on %s (multi-node sync skipped).", world_size, device)
+            else:
+                os.environ["MASTER_ADDR"] = master_addr
+                os.environ["MASTER_PORT"] = master_port
+                os.environ["WORLD_SIZE"] = str(world_size)
+                os.environ["RANK"] = str(rank)
+                if not torch.distributed.is_initialized():
+                    try:
+                        backend = "nccl" if torch.cuda.is_available() and device.type == "cuda" else "gloo"
+                        logger.info("Connecting to cluster master %s:%s (rank %d/%d, backend=%s)...", master_addr, master_port, rank, world_size, backend)
+                        torch.distributed.init_process_group(
+                            backend=backend,
+                            rank=rank,
+                            world_size=world_size,
+                            timeout=datetime.timedelta(seconds=5),
+                        )
+                        logger.info("Cluster distributed initialized: rank %d/%d at %s:%s (backend=%s)", rank, world_size, master_addr, master_port, backend)
+                    except Exception as dist_err:
+                        logger.warning("Cluster distributed initialization failed: %s. Continuing standalone on %s.", dist_err, device)
 
         if device.type == "cuda":
             torch.set_float32_matmul_precision("high")
@@ -594,6 +630,25 @@ class TrainingWorkerProcess:
         logger.info("Training loop started on %s (%d train tokens)", device, train_len)
 
         try:
+            from ..notifications.webhook import get_notifier
+            get_notifier(db=self.db).notify_run_started(
+                run_id=run_id,
+                model_name=config_arch.get("name", "RoCanon"),
+                param_count=config_arch.get("parameters", {}).get("total_parameters"),
+                dataset_name=str(dataset_source),
+                target_steps=target_steps,
+                target_epochs=target_epochs if duration_mode == "epochs" else None,
+                duration_mode=duration_mode,
+                batch_size=effective_batch,
+                muon_lr=base_muon,
+                adamw_lr=base_adamw,
+                device_name=str(device),
+                resumed_from=checkpoint_to_load,
+            )
+        except Exception as we:
+            logger.debug("Run start notification error: %s", we)
+
+        try:
             while self.state_machine.current_state in {RunState.RUNNING, RunState.PAUSING, RunState.PAUSED}:
                 self._poll_commands()
 
@@ -663,13 +718,14 @@ class TrainingWorkerProcess:
                     sched_factor = 1.0
                     sched_phase = "constant"
 
-                # 2. Gradient stability protection (intervenes only if exploding gradient > 15.0)
-                if self.auto_lr_adjust and step > (start_step + 3) and grad_norm is not None:
-                    if grad_norm > 15.0:
-                        self.adaptive_lr_factor = max(0.5, self.adaptive_lr_factor * 0.90)
-                    elif grad_norm < 5.0 and self.adaptive_lr_factor < 1.0:
-                        self.adaptive_lr_factor = min(1.0, self.adaptive_lr_factor * 1.02)
-                else:
+                # 2. Gradient stability protection (prevents catastrophic weight blowouts)
+                if grad_norm is not None and grad_norm > 15.0:
+                    # Dynamically scale down LR during gradient shocks to preserve model weights
+                    spike_attenuation = max(0.1, 15.0 / grad_norm)
+                    self.adaptive_lr_factor = min(self.adaptive_lr_factor * 0.90, spike_attenuation)
+                elif grad_norm is not None and grad_norm < 5.0 and self.adaptive_lr_factor < 1.0:
+                    self.adaptive_lr_factor = min(1.0, self.adaptive_lr_factor * 1.05)
+                elif not self.auto_lr_adjust and (grad_norm is None or grad_norm <= 15.0):
                     self.adaptive_lr_factor = 1.0
 
                 # 3. Dynamic Base LR overrides (live adjustment from dashboard)
@@ -896,6 +952,8 @@ class TrainingWorkerProcess:
                                 val_loss=float(val_loss),
                                 checkpoint_path="best_model.pt",
                                 run_id=run_id,
+                                train_loss=float(train_loss),
+                                tokens_seen=total_tokens,
                             )
                         except Exception as n_err:
                             logger.debug("Webhook notification error: %s", n_err)
@@ -1084,6 +1142,35 @@ class TrainingWorkerProcess:
                     payload=metric_dict,
                 ))
 
+                # Periodic live progress webhook (rate-limited, NO PING)
+                now_t = time.time()
+                is_val_step = val_loss is not None
+                is_chk_step = (save_freq > 0 and step % save_freq == 0)
+                is_early_step = (step in (5, 10, 25))
+                is_periodic_interval = (now_t - self._last_webhook_progress_time) >= 30.0
+
+                if (is_val_step or is_chk_step or is_early_step or is_periodic_interval) and (now_t - self._last_webhook_progress_time) >= 8.0:
+                    self._last_webhook_progress_time = now_t
+                    try:
+                        from ..notifications.webhook import get_notifier
+                        get_notifier(db=self.db).notify_live_progress(
+                            run_id=run_id,
+                            step=step,
+                            total_steps=target_steps if duration_mode != "epochs" else session_total_steps,
+                            train_loss=float(train_loss),
+                            val_loss=float(self.latest_val_loss) if self.latest_val_loss is not None else None,
+                            tok_per_sec=float(tok_per_sec),
+                            tokens_seen=total_tokens,
+                            vram_used_gb=float(vram_gb),
+                            muon_lr=float(muon_lr) if muon_lr else None,
+                            adamw_lr=float(adamw_lr) if adamw_lr else None,
+                            grad_norm=float(grad_norm),
+                            eta_s=float(eta_s) if eta_s else None,
+                            elapsed_s=float(self.cumulative_active_time),
+                        )
+                    except Exception as we:
+                        logger.debug("Live webhook progress error: %s", we)
+
                 # Check completion targets
                 is_completed = False
                 if duration_mode == "epochs":
@@ -1193,8 +1280,11 @@ class TrainingWorkerProcess:
                         get_notifier(db=self.db).notify_run_completed(
                             run_id=run_id,
                             step=step,
-                            final_loss=float(self.latest_val_loss) if self.latest_val_loss is not None else (float(val_loss) if val_loss is not None else None),
+                            final_loss=float(train_loss),
+                            best_val_loss=float(detector.best_val_loss) if detector.best_val_loss < float("inf") else (float(self.latest_val_loss) if self.latest_val_loss is not None else None),
                             tokens_seen=total_tokens,
+                            elapsed_sec=float(self.cumulative_active_time),
+                            peak_vram_gb=float(vram_gb),
                         )
                     except Exception as n_err:
                         logger.debug("Webhook notification error: %s", n_err)
@@ -1218,6 +1308,15 @@ class TrainingWorkerProcess:
 
         except Exception as e:
             logger.exception("Fatal error in training session: %s", e)
+            try:
+                from ..notifications.webhook import get_notifier
+                get_notifier(db=self.db).notify_run_failed(
+                    run_id=run_id,
+                    step=step,
+                    error_message=str(e),
+                )
+            except Exception:
+                pass
             self.db.log_alert(
                 level="CRITICAL",
                 category="WORKER_CRASH",
@@ -1261,6 +1360,20 @@ class TrainingWorkerProcess:
                         )
                     except Exception as ce:
                         logger.debug("Chart generation on stop: %s", ce)
+
+                    try:
+                        from ..notifications.webhook import get_notifier
+                        get_notifier(db=self.db).notify_run_stopped(
+                            run_id=run_id,
+                            step=step,
+                            train_loss=float(train_loss) if 'train_loss' in locals() and train_loss is not None else None,
+                            val_loss=float(self.latest_val_loss) if self.latest_val_loss is not None else None,
+                            tokens_seen=total_tokens,
+                            elapsed_sec=float(self.cumulative_active_time),
+                            snapshot_path=f"stopped_snapshot_step_{step}.pt",
+                        )
+                    except Exception as stop_we:
+                        logger.debug("Run stop notification error: %s", stop_we)
                 except Exception as save_err:
                     logger.warning("Could not save stopped snapshot: %s", save_err)
 

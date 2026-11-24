@@ -143,7 +143,12 @@ pub fn get_worker_status(state: State<AppState>) -> WorkerStatus {
 
 #[tauri::command]
 pub fn start_training(app: AppHandle, state: State<AppState>, payload_json: String) -> Result<String, String> {
-    state.supervisor.start_training(app, payload_json)
+    let mut payload: serde_json::Value = serde_json::from_str(&payload_json).unwrap_or(serde_json::json!({}));
+    if payload.get("workspace_id").is_none() || payload["workspace_id"].as_str().map(|s| s.trim().is_empty()).unwrap_or(true) {
+        let active_ws = state.db.get_active_workspace().map(|w| w.id).unwrap_or_else(|_| "default".to_string());
+        payload["workspace_id"] = serde_json::json!(active_ws);
+    }
+    state.supervisor.start_training(app, payload.to_string())
 }
 
 #[tauri::command]
@@ -1488,6 +1493,165 @@ pub fn export_ollama(model_id: String, options: Option<serde_json::Value>) -> Re
 }
 
 #[tauri::command]
-pub fn test_notification(_data: serde_json::Value) -> serde_json::Value {
-    serde_json::json!({ "success": true, "message": "Notification dispatched successfully" })
+pub async fn test_notification(state: State<'_, AppState>, data: serde_json::Value) -> Result<serde_json::Value, String> {
+    // Persist settings immediately in SQLite database
+    let _ = state.db.save_settings(&data);
+
+    let db_path = state.db.get_db_path().to_string();
+    tokio::task::spawn_blocking(move || {
+        let venv_py = if cfg!(target_os = "windows") {
+            PathBuf::from(".venv/Scripts/python.exe")
+        } else {
+            PathBuf::from(".venv/bin/python")
+        };
+        let python_path = if venv_py.exists() { venv_py } else { PathBuf::from("python") };
+
+        #[cfg(target_os = "windows")]
+        let mut cmd = Command::new(&python_path);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        #[cfg(not(target_os = "windows"))]
+        let mut cmd = Command::new(&python_path);
+
+        let script = r#"
+import sys, json
+from src.db.database import StudioDatabase
+from src.notifications.webhook import get_notifier
+
+data = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
+db_path = sys.argv[2] if len(sys.argv) > 2 else "studio.db"
+db = StudioDatabase(db_path)
+if data:
+    try:
+        db.save_settings(data)
+    except Exception:
+        pass
+
+notifier = get_notifier(db=db)
+res = notifier.test_notification(
+    discord_url=data.get('discord_webhook_url'),
+    discord_mention=data.get('discord_mention'),
+    telegram_token=data.get('telegram_bot_token'),
+    telegram_chat_id=data.get('telegram_chat_id'),
+)
+print(json.dumps(res))
+"#;
+        let payload_str = data.to_string();
+        cmd.arg("-c").arg(script).arg(&payload_str).arg(&db_path);
+
+        let output = cmd.output().map_err(|e| format!("Failed to dispatch notification: {}", e))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let trimmed = stdout.trim();
+        for line in trimmed.lines().rev() {
+            if line.starts_with('{') && line.ends_with('}') {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
+                    return Ok(v);
+                }
+            }
+        }
+        Ok(serde_json::json!({
+            "discord": false,
+            "telegram": false,
+            "errors": [String::from_utf8_lossy(&output.stderr).to_string()]
+        }))
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SystemLogEntry {
+    pub id: usize,
+    pub timestamp: String,
+    pub level: String,
+    pub source: String,
+    pub message: String,
+    pub raw: String,
+}
+
+fn parse_log_line(line: &str) -> (String, String, String, String) {
+    let lower = line.to_lowercase();
+    
+    let level = if lower.contains("error") || lower.contains("traceback") || lower.contains("exception") || lower.contains("[panic]") || line.contains("RuntimeError") || line.contains("Error:") {
+        "ERROR"
+    } else if lower.contains("warn") || lower.contains("rejected") {
+        "WARN"
+    } else if lower.contains("debug") {
+        "DEBUG"
+    } else {
+        "INFO"
+    };
+
+    let source = if line.contains("[PYTHON STDERR]") || line.contains("[PYTHON STDOUT]") || lower.contains("worker") || lower.contains("pytorch") || lower.contains("cuda") {
+        "WORKER"
+    } else if lower.contains("database") || lower.contains("sqlite") {
+        "DATABASE"
+    } else if lower.contains("hardware") || lower.contains("telemetry") || lower.contains("system") {
+        "SYSTEM"
+    } else {
+        "TAURI"
+    };
+
+    let mut timestamp = String::new();
+    if let Some(start) = line.find("[20") {
+        if let Some(end) = line[start..].find(']') {
+            timestamp = line[start + 1..start + end].to_string();
+        }
+    }
+
+    let mut message = line.to_string();
+    if let Some(idx) = message.find("[PYTHON STDERR] ") {
+        message = message[idx + 16..].to_string();
+    } else if let Some(idx) = message.find("[PYTHON STDOUT] ") {
+        message = message[idx + 16..].to_string();
+    } else if let Some(idx) = message.find("[TRACE] ") {
+        message = message[idx + 8..].to_string();
+    }
+
+    (source.to_string(), level.to_string(), message.trim().to_string(), timestamp)
+}
+
+#[tauri::command]
+pub fn get_system_logs(limit: Option<usize>) -> Vec<SystemLogEntry> {
+    let mut raw_lines = Vec::new();
+    let log_files = ["tauri_debug.prev.log", "tauri_debug.log"];
+
+    for file_path in &log_files {
+        if let Ok(content) = fs::read_to_string(file_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    raw_lines.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    let max_lines = limit.unwrap_or(2000);
+    let start_idx = if raw_lines.len() > max_lines {
+        raw_lines.len() - max_lines
+    } else {
+        0
+    };
+
+    let mut entries = Vec::with_capacity(raw_lines.len() - start_idx);
+    for (i, line) in raw_lines[start_idx..].iter().enumerate() {
+        let (source, level, message, timestamp) = parse_log_line(line);
+        entries.push(SystemLogEntry {
+            id: start_idx + i + 1,
+            timestamp,
+            level,
+            source,
+            message,
+            raw: line.clone(),
+        });
+    }
+
+    entries
+}
+
+#[tauri::command]
+pub fn clear_system_logs() -> Result<(), String> {
+    let _ = fs::remove_file("tauri_debug.prev.log");
+    let _ = fs::write("tauri_debug.log", "[TRACE] Logs cleared by user\n");
+    Ok(())
 }

@@ -821,3 +821,7 @@ class StudioDatabase:
             conn.execute("DELETE FROM datasets WHERE workspace_id = ?", (workspace_id,))
         return True
 
+
+# Backward compatibility alias
+Database = StudioDatabase
+

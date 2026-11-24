@@ -26,7 +26,9 @@ pub fn log_trace(msg: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = std::fs::remove_file("tauri_debug.log");
+    if std::path::Path::new("tauri_debug.log").exists() {
+        let _ = std::fs::rename("tauri_debug.log", "tauri_debug.prev.log");
+    }
     std::panic::set_hook(Box::new(|info| {
         if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("tauri_debug.log") {
             let _ = writeln!(f, "[PANIC] {:?}", info);
@@ -112,7 +114,9 @@ pub fn run() {
             recommend_budget,
             import_foundation_model,
             export_ollama,
-            test_notification
+            test_notification,
+            get_system_logs,
+            clear_system_logs
         ]);
 
     log_trace("Running Tauri context...");

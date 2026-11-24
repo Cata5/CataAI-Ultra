@@ -25,10 +25,12 @@ import {
   Clock,
   Sparkles,
   BarChart2,
+  Terminal,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { LogsView } from "@/features/logs/LogsView";
 
-export type RunManagementTab = "experiments" | "checkpoints" | "analytics" | "all";
+export type RunManagementTab = "experiments" | "checkpoints" | "analytics" | "logs" | "all";
 
 export interface RunsViewProps {
   initialTab?: RunManagementTab | string;
@@ -36,7 +38,7 @@ export interface RunsViewProps {
 
 export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }) => {
   const [activeTab, setActiveTab] = useState<RunManagementTab>(() => {
-    if (initialTab === "checkpoints" || initialTab === "analytics" || initialTab === "all") {
+    if (initialTab === "checkpoints" || initialTab === "analytics" || initialTab === "logs" || initialTab === "all") {
       return initialTab;
     }
     return "experiments";
@@ -53,7 +55,7 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
 
   // Sync tab if prop changes (e.g. navigation across sidebar routes)
   useEffect(() => {
-    if (initialTab && (initialTab === "checkpoints" || initialTab === "analytics" || initialTab === "all" || initialTab === "experiments")) {
+    if (initialTab && (initialTab === "checkpoints" || initialTab === "analytics" || initialTab === "logs" || initialTab === "all" || initialTab === "experiments")) {
       setActiveTab(initialTab as RunManagementTab);
     }
   }, [initialTab]);
@@ -326,18 +328,21 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
           {activeTab === "experiments" && <Layers className="w-4 h-4 text-[#A3A3A3]" />}
           {activeTab === "checkpoints" && <Bookmark className="w-4 h-4 text-[#A3A3A3]" />}
           {activeTab === "analytics" && <LineChart className="w-4 h-4 text-[#A3A3A3]" />}
+          {activeTab === "logs" && <Terminal className="w-4 h-4 text-[#A3A3A3]" />}
           {activeTab === "all" && <History className="w-4 h-4 text-[#A3A3A3]" />}
           <div>
             <h3 className="font-semibold text-[#F2F2F2] uppercase tracking-wider text-xs">
               {activeTab === "experiments" && "EXPERIMENTS & RUNS REPOSITORY"}
               {activeTab === "checkpoints" && "CHECKPOINT STORAGE & WEIGHT MANAGER"}
               {activeTab === "analytics" && "TRAINING RUN ANALYTICS & DYNAMICS"}
+              {activeTab === "logs" && "SYSTEM & TRAINING EXECUTION LOGS"}
               {activeTab === "all" && "MANAGEMENT OVERVIEW (RUNS, CHECKPOINTS & ANALYTICS)"}
             </h3>
             <p className="text-[11px] text-[#737373]">
               {activeTab === "experiments" && "Track training run lifecycles, execution status, and token throughput milestones"}
               {activeTab === "checkpoints" && "Inspect saved model weights, safe deserialization (weights_only=True), and export options"}
               {activeTab === "analytics" && "Examine train vs validation loss convergence and adaptive learning rate curves"}
+              {activeTab === "logs" && "Filter and inspect worker stdout/stderr, supervisor diagnostics, and CUDA runtime traces"}
               {activeTab === "all" && "Consolidated view of all experiments, stored checkpoints, and telemetry"}
             </p>
           </div>
@@ -381,6 +386,18 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
             >
               <LineChart className="w-3 h-3" />
               <span>Analytics</span>
+            </button>
+            <button
+              onClick={() => setActiveTab("logs")}
+              className={cn(
+                "px-2.5 py-1 rounded text-[11px] font-medium transition-colors flex items-center gap-1.5",
+                activeTab === "logs"
+                  ? "bg-[#2A2A2A] text-[#F2F2F2] shadow-sm border border-[#404040]"
+                  : "text-[#737373] hover:text-[#A3A3A3]"
+              )}
+            >
+              <Terminal className="w-3 h-3" />
+              <span>Logs</span>
             </button>
             <button
               onClick={() => setActiveTab("all")}
@@ -612,6 +629,11 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
             </div>
           )}
         </div>
+      )}
+
+      {/* TAB 4: LOGS */}
+      {activeTab === "logs" && (
+        <LogsView />
       )}
 
       {/* Confirm Delete Dialog */}

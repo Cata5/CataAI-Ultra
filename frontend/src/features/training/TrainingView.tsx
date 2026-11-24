@@ -28,6 +28,7 @@ import {
   RotateCcw,
   Calculator,
   HardDrive,
+  Terminal,
 } from "lucide-react";
 import {
   cn,
@@ -216,7 +217,7 @@ const DEFAULT_TRAINING_CONFIG: TrainingFormConfig = {
   deviceMode: "cuda:0",
   clusterMasterAddr: "127.0.0.1",
   clusterMasterPort: 29500,
-  clusterWorldSize: 2,
+  clusterWorldSize: 1,
   clusterRank: 0,
   useMultiGpu: false,
   selectedGpuIds: [0],
@@ -236,6 +237,8 @@ const getSavedConfig = (): TrainingFormConfig => {
     if (typeof merged.stablePct !== "number" || merged.stablePct < 15 || merged.stablePct > 95) {
       merged.stablePct = 82;
     }
+    // Always default to fresh training on page load (never restore stale checkpoint unintentionally)
+    merged.resumeCheckpoint = "";
     return merged;
   } catch (e) {
     console.warn("Failed to load training form config from localStorage:", e);
@@ -449,7 +452,14 @@ export const TrainingView: React.FC = () => {
   const handleStartTraining = async () => {
     setIsSubmitting(true);
     try {
+      let currentWsId = "default";
+      try {
+        const activeWs = await api.getActiveWorkspace();
+        if (activeWs?.id) currentWsId = activeWs.id;
+      } catch (e) {}
+
       const payload: any = {
+        workspace_id: currentWsId,
         network_id: form.selectedNetwork,
         dataset_id: form.selectedDataset,
         dataset_source: form.selectedDataset,
@@ -482,8 +492,8 @@ export const TrainingView: React.FC = () => {
         is_cluster: form.deviceMode === "cluster",
         master_addr: form.clusterMasterAddr,
         master_port: form.clusterMasterPort,
-        world_size: form.clusterWorldSize,
-        rank: form.clusterRank,
+        world_size: form.deviceMode === "cluster" ? form.clusterWorldSize : 1,
+        rank: form.deviceMode === "cluster" ? form.clusterRank : 0,
       };
 
       if (form.durationMode === "epochs") {
@@ -492,9 +502,8 @@ export const TrainingView: React.FC = () => {
         payload.total_steps = form.totalSteps;
       }
 
-      if (form.resumeCheckpoint) {
-        payload.resume_checkpoint = form.resumeCheckpoint;
-      }
+      payload.start_fresh = !form.resumeCheckpoint;
+      payload.resume_checkpoint = form.resumeCheckpoint || null;
 
       if (form.useLora) {
         payload.use_lora = true;
@@ -637,6 +646,13 @@ export const TrainingView: React.FC = () => {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-1.5">
+          <a
+            href="/logs"
+            className="btn btn-secondary btn-sm flex items-center gap-1"
+            title="Inspect real-time system & training logs"
+          >
+            <Terminal className="w-3 h-3 text-[#A3A3A3]" /> Logs
+          </a>
           {!isRunning && !isPaused ? (
             <div className="flex items-center gap-1.5">
               <button
@@ -941,9 +957,20 @@ export const TrainingView: React.FC = () => {
 
             {/* Resume from checkpoint */}
             <div>
-              <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold block mb-1">
-                Resume From Checkpoint (Optional)
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] text-[#A3A3A3] uppercase font-semibold">
+                  Resume From Checkpoint (Optional)
+                </label>
+                {form.resumeCheckpoint && (
+                  <button
+                    type="button"
+                    onClick={() => updateForm("resumeCheckpoint", "")}
+                    className="text-[10px] text-[#facc15] hover:underline flex items-center gap-1 font-mono"
+                  >
+                    ✕ Reset to Start Fresh
+                  </button>
+                )}
+              </div>
               <select
                 value={form.resumeCheckpoint}
                 onChange={(e) => updateForm("resumeCheckpoint", e.target.value)}
@@ -1431,6 +1458,10 @@ export const TrainingView: React.FC = () => {
                     <span className="text-[9px] text-[#A3A3A3] font-mono">
                       TCP/IP Socket Sync
                     </span>
+                  </div>
+
+                  <div className="p-2 rounded bg-amber-950/25 border border-amber-800/40 text-[10px] text-amber-200 leading-relaxed">
+                    <strong>Notice:</strong> Multi-Node Cluster mode connects separate physical computers over a network via PyTorch DDP. If you are training locally on this PC (using your NVIDIA GPU or CPU), select <strong>Auto</strong> or <strong>GPU 0</strong> above instead.
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">

@@ -204,12 +204,27 @@ impl WorkerSupervisor {
 
         // Spawn background reader thread for stderr to prevent pipe buffer deadlocks and log all issues
         if let Some(err_pipe) = stderr {
+            let app_err = app.clone();
             thread::spawn(move || {
                 let reader = BufReader::new(err_pipe);
                 for line_res in reader.lines() {
                     if let Ok(line) = line_res {
                         crate::log_trace(&format!("[PYTHON STDERR] {}", line));
                         log::warn!("[PYTHON STDERR] {}", line);
+                        let lower = line.to_lowercase();
+                        let level = if lower.contains("error") || lower.contains("traceback") || lower.contains("exception") || line.contains("RuntimeError") || line.contains("Error:") {
+                            "ERROR"
+                        } else if lower.contains("warn") {
+                            "WARN"
+                        } else {
+                            "INFO"
+                        };
+                        let _ = app_err.emit("tauri://system-log", serde_json::json!({
+                            "level": level,
+                            "source": "WORKER",
+                            "message": line.clone(),
+                            "raw": format!("[PYTHON STDERR] {}", line),
+                        }));
                     }
                 }
             });
@@ -262,6 +277,14 @@ impl WorkerSupervisor {
                             }
                             let _ = app.emit("tauri://training-metrics", val);
                         }
+                    } else if !trimmed.is_empty() {
+                        crate::log_trace(&format!("[PYTHON STDOUT] {}", line));
+                        let _ = app.emit("tauri://system-log", serde_json::json!({
+                            "level": "INFO",
+                            "source": "WORKER",
+                            "message": line.clone(),
+                            "raw": format!("[PYTHON STDOUT] {}", line),
+                        }));
                     }
                 }
             }
