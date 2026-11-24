@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -23,9 +24,30 @@ class PluginManager:
 
     def __init__(self, plugins_dir: Path | str = "plugins", db: Optional[StudioDatabase] = None) -> None:
         self.plugins_dir = Path(plugins_dir)
-        self.plugins_dir.mkdir(parents=True, exist_ok=True)
+        # Safe mode is a support/diagnostic switch: no plugin discovery, no sample
+        # generation, no execution. It never modifies the user's enabled set.
+        self.env_safe_mode = os.environ.get("LLMMAKER_SAFE_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
         self.db = db or StudioDatabase()
+        stored_safe_mode = bool(self.db.get_settings().get("safe_mode", False))
+        # The environment variable is an operator override for support sessions;
+        # the persisted setting is the user-facing switch.
+        self.safe_mode = self.env_safe_mode or stored_safe_mode
+        if not self.safe_mode:
+            self.plugins_dir.mkdir(parents=True, exist_ok=True)
+            self._ensure_sample_plugins()
+
+    def set_safe_mode(self, enabled: bool) -> Tuple[bool, str]:
+        """Applies the Settings toggle at runtime without restarting the app."""
+        if self.env_safe_mode:
+            return False, "Safe mode is forced by LLMMAKER_SAFE_MODE and cannot be changed here."
+        self.safe_mode = bool(enabled)
+        if self.safe_mode:
+            logger.warning("Safe mode enabled: plugin discovery and execution are disabled.")
+            return True, "Safe mode enabled. Plugin discovery is disabled until restart or toggle off."
+        self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self._ensure_sample_plugins()
+        logger.info("Safe mode disabled: plugin discovery re-enabled.")
+        return True, "Safe mode disabled."
 
     def _ensure_sample_plugins(self) -> None:
         """Seeds standard extension plugin templates if directory is empty."""
@@ -78,6 +100,9 @@ class PluginManager:
 
     def discover_plugins(self) -> List[Dict[str, Any]]:
         """Scans plugins/ directory and returns list of validated plugin manifests."""
+        if self.safe_mode:
+            logger.warning("Safe mode is active: plugin discovery is disabled.")
+            return []
         plugins = []
         enabled_set = self._get_enabled_set()
 
@@ -124,6 +149,8 @@ class PluginManager:
 
     def set_plugin_enabled(self, plugin_id: str, enabled: bool) -> Tuple[bool, str]:
         """Enables or disables a registered local plugin."""
+        if self.safe_mode:
+            return False, "Safe mode is active; plugins cannot be changed."
         plugins = {p["id"]: p for p in self.discover_plugins()}
         if plugin_id not in plugins:
             return False, f"Plugin '{plugin_id}' not found."

@@ -18,6 +18,8 @@ import {
   Radio,
   Check,
   AlertCircle,
+  Download,
+  Upload,
 } from "lucide-react";
 import { cn, formatDateTime } from "@/lib/utils";
 
@@ -34,8 +36,20 @@ export const SettingsView: React.FC = () => {
   });
 
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [secretDrafts, setSecretDrafts] = useState({
+    discord_webhook_url: "",
+    telegram_bot_token: "",
+  });
+  const [secretsConfigured, setSecretsConfigured] = useState({
+    discord_webhook_url: false,
+    telegram_bot_token: false,
+  });
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState("default");
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isTestingWebhook, setIsTestingWebhook] = useState(false);
   const [testResult, setTestResult] = useState<{
     discord: boolean;
@@ -45,13 +59,25 @@ export const SettingsView: React.FC = () => {
 
   const fetchSettingsAndAlerts = async () => {
     try {
-      const [s, a] = await Promise.all([api.getSettings(), api.getAlerts(undefined, 50)]);
+      const [s, a, ws] = await Promise.all([
+        api.getSettings(),
+        api.getAlerts(undefined, 50),
+        api.getActiveWorkspace().catch(() => null),
+      ]);
+      if (ws?.id) setActiveWorkspaceId(ws.id);
       if (s && Object.keys(s).length > 0) {
-        setSettings((prev) => ({ ...prev, ...s }));
+        setSecretsConfigured({
+          discord_webhook_url: Boolean(s.discord_webhook_url_configured),
+          telegram_bot_token: Boolean(s.telegram_bot_token_configured),
+        });
+        const { discord_webhook_url, telegram_bot_token, ...safeSettings } = s;
+        setSettings((prev) => ({ ...prev, ...safeSettings }));
       }
       setAlerts(a);
+      setLoadError(null);
     } catch (e: any) {
       console.error(e);
+      setLoadError(e?.message || String(e));
     }
   };
 
@@ -59,18 +85,80 @@ export const SettingsView: React.FC = () => {
     fetchSettingsAndAlerts();
   }, []);
 
+  const secretPayload = () => {
+    const payload: Record<string, string> = {};
+    if (secretDrafts.discord_webhook_url) {
+      payload.discord_webhook_url = secretDrafts.discord_webhook_url;
+    }
+    if (secretDrafts.telegram_bot_token) {
+      payload.telegram_bot_token = secretDrafts.telegram_bot_token;
+    }
+    return payload;
+  };
+
+  const handleClearSecret = async (field: "discord_webhook_url" | "telegram_bot_token") => {
+    try {
+      await api.saveSettings({ [field]: "" });
+      setSecretsConfigured((prev) => ({ ...prev, [field]: false }));
+      setSecretDrafts((prev) => ({ ...prev, [field]: "" }));
+      setFeedback("Stored credential removed.");
+    } catch (e: any) {
+      alert(`Could not clear credential: ${e.message}`);
+    }
+  };
+
+  const handleExportWorkspace = async () => {
+    setIsExporting(true);
+    try {
+      const blob = await api.exportWorkspaceArchive(activeWorkspaceId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${activeWorkspaceId}-workspace.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setFeedback("Workspace archive downloaded (manifest + checksums included).");
+    } catch (e: any) {
+      alert(`Export failed: ${e.message}`);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleImportWorkspace = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setIsImporting(true);
+    try {
+      const res = await api.importWorkspaceArchive(file);
+      setFeedback(
+        `Imported workspace '${res.workspace?.name}' with ${res.runs_imported} runs and ${res.files_imported} files.`,
+      );
+    } catch (e: any) {
+      alert(`Import failed: ${e.message}`);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
   const handleTestNotification = async () => {
     setIsTestingWebhook(true);
     setTestResult(null);
     try {
-      await api.saveSettings(settings);
+      await api.saveSettings({ ...settings, ...secretPayload() });
+      setSecretsConfigured((prev) => ({
+        discord_webhook_url: prev.discord_webhook_url || Boolean(secretDrafts.discord_webhook_url),
+        telegram_bot_token: prev.telegram_bot_token || Boolean(secretDrafts.telegram_bot_token),
+      }));
       setFeedback("Settings saved to database.");
       setTimeout(() => setFeedback(null), 3000);
 
       const res = await api.testNotification({
-        discord_webhook_url: settings.discord_webhook_url,
+        ...secretPayload(),
         discord_mention: settings.discord_mention,
-        telegram_bot_token: settings.telegram_bot_token,
         telegram_chat_id: settings.telegram_chat_id,
       });
       setTestResult(res);
@@ -88,7 +176,12 @@ export const SettingsView: React.FC = () => {
   const handleSave = async () => {
     setIsSaving(true);
     try {
-      await api.saveSettings(settings);
+      await api.saveSettings({ ...settings, ...secretPayload() });
+      setSecretsConfigured((prev) => ({
+        discord_webhook_url: prev.discord_webhook_url || Boolean(secretDrafts.discord_webhook_url),
+        telegram_bot_token: prev.telegram_bot_token || Boolean(secretDrafts.telegram_bot_token),
+      }));
+      setSecretDrafts({ discord_webhook_url: "", telegram_bot_token: "" });
       setFeedback("Settings successfully persisted to SQLite database.");
       setTimeout(() => setFeedback(null), 4000);
     } catch (e: any) {
@@ -174,6 +267,15 @@ export const SettingsView: React.FC = () => {
           Save Settings
         </Button>
       </div>
+
+      {loadError && (
+        <InlineAlert
+          tone="error"
+          title="Could not load settings"
+          message={`${loadError}. Stored credentials are never returned; resolve the error before saving.`}
+          onDismiss={() => setLoadError(null)}
+        />
+      )}
 
       {feedback && (
         <InlineAlert
@@ -291,6 +393,60 @@ export const SettingsView: React.FC = () => {
         </div>
       </div>
 
+      {/* Recovery & Diagnostics */}
+      <div className="panel p-4 bg-[#202020] border-[#333333] space-y-3">
+        <h4 className="text-xs font-semibold text-[#F2F2F2] uppercase tracking-wider pb-2 border-b border-[#333333] flex items-center gap-1.5">
+          <Shield className="w-3.5 h-3.5 text-[#A3A3A3]" /> RECOVERY & DIAGNOSTICS
+        </h4>
+        <label className="flex items-start gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.safe_mode === true}
+            onChange={(e) => setSettings({ ...settings, safe_mode: e.target.checked })}
+            className="mt-0.5 rounded bg-[#1B1B1B] border-[#333333] text-[#F2F2F2]"
+          />
+          <span>
+            <span className="text-[11px] text-[#F2F2F2] block">Safe mode</span>
+            <span className="text-[10px] text-[#737373] block">
+              Disables plugin discovery and execution without changing the enabled set. Intended for
+              diagnosing a broken plugin. Saved with the other settings.
+            </span>
+          </span>
+        </label>
+
+        <div className="border-t border-[#333333] pt-3 space-y-2">
+          <span className="text-[11px] text-[#F2F2F2] block">Workspace backup</span>
+          <p className="text-[10px] text-[#737373]">
+            Export a ZIP with the workspace, runs, metrics, checkpoints, datasets, a versioned
+            manifest and SHA-256 checksums. Import always creates a new workspace; it never
+            overwrites an existing one.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleExportWorkspace}
+              loading={isExporting}
+              icon={<Download className="w-3.5 h-3.5" />}
+            >
+              Export workspace
+            </Button>
+            <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-[#333333] bg-[#1B1B1B] text-[11px] text-[#F2F2F2] hover:border-[#525252] cursor-pointer">
+              <Upload className="w-3.5 h-3.5" />
+              {isImporting ? "Importing…" : "Import archive"}
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                onChange={handleImportWorkspace}
+                disabled={isImporting}
+                className="sr-only"
+              />
+            </label>
+            <span className="text-[10px] text-[#737373]">Active: {activeWorkspaceId}</span>
+          </div>
+        </div>
+      </div>
+
       {/* Real-Time Webhook Notifications (Discord & Telegram) */}
       <div className="panel p-4 bg-[#202020] border-[#333333] space-y-4">
         <div className="flex items-center justify-between pb-2 border-b border-[#333333]">
@@ -324,17 +480,28 @@ export const SettingsView: React.FC = () => {
               <label className="text-[10px] text-[#A3A3A3] uppercase font-medium block mb-1">
                 Discord Webhook URL
               </label>
-              <input
-                type="text"
-                placeholder="https://discord.com/api/webhooks/..."
-                value={settings.discord_webhook_url || ""}
-                onChange={(e) =>
-                  setSettings({ ...settings, discord_webhook_url: e.target.value })
-                }
-                className="w-full bg-[#141414] border border-[#333333] rounded px-2.5 py-1.5 text-[#F2F2F2] placeholder-[#525252] focus:outline-none focus:border-[#525252]"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="password"
+                  placeholder={secretsConfigured.discord_webhook_url ? "Saved encrypted — enter a new URL to replace" : "https://discord.com/api/webhooks/..."}
+                  value={secretDrafts.discord_webhook_url}
+                  onChange={(e) =>
+                    setSecretDrafts({ ...secretDrafts, discord_webhook_url: e.target.value })
+                  }
+                  className="w-full bg-[#141414] border border-[#333333] rounded px-2.5 py-1.5 text-[#F2F2F2] placeholder-[#525252] focus:outline-none focus:border-[#525252]"
+                />
+                {secretsConfigured.discord_webhook_url && (
+                  <button
+                    type="button"
+                    onClick={() => handleClearSecret("discord_webhook_url")}
+                    className="text-[10px] text-[#A3A3A3] hover:text-[#F2F2F2] underline shrink-0"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
               <span className="text-[10px] text-[#737373] mt-1 block">
-                Channel Settings → Integrations → Webhooks → Copy Webhook URL.
+                Stored with AES-256-GCM, key protected by Windows DPAPI. Never returned by the API.
               </span>
             </div>
 
@@ -370,17 +537,28 @@ export const SettingsView: React.FC = () => {
               <label className="text-[10px] text-[#A3A3A3] uppercase font-medium block mb-1">
                 Telegram Bot Token
               </label>
-              <input
-                type="password"
-                placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
-                value={settings.telegram_bot_token || ""}
-                onChange={(e) =>
-                  setSettings({ ...settings, telegram_bot_token: e.target.value })
-                }
-                className="w-full bg-[#141414] border border-[#333333] rounded px-2.5 py-1.5 text-[#F2F2F2] placeholder-[#525252] focus:outline-none focus:border-[#525252]"
-              />
+              <div className="flex items-center gap-2">
+                <input
+                  type="password"
+                  placeholder={secretsConfigured.telegram_bot_token ? "Saved encrypted — enter a new token to replace" : "123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"}
+                  value={secretDrafts.telegram_bot_token}
+                  onChange={(e) =>
+                    setSecretDrafts({ ...secretDrafts, telegram_bot_token: e.target.value })
+                  }
+                  className="w-full bg-[#141414] border border-[#333333] rounded px-2.5 py-1.5 text-[#F2F2F2] placeholder-[#525252] focus:outline-none focus:border-[#525252]"
+                />
+                {secretsConfigured.telegram_bot_token && (
+                  <button
+                    type="button"
+                    onClick={() => handleClearSecret("telegram_bot_token")}
+                    className="text-[10px] text-[#A3A3A3] hover:text-[#F2F2F2] underline shrink-0"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
               <span className="text-[10px] text-[#737373] mt-1 block">
-                Created via @BotFather on Telegram.
+                Created via @BotFather. Stored encrypted and never echoed back.
               </span>
             </div>
 

@@ -172,8 +172,10 @@ def create_optimizers_from_dict(
 
 
 def list_checkpoints(checkpoint_dir: str = "checkpoints") -> List[Dict[str, Any]]:
-    """Returns a list of saved checkpoints with size and modification timestamp across local and project directories."""
-    dirs_to_scan = [Path(checkpoint_dir), Path(r"d:\proiecte\LLM from Scratch\checkpoints")]
+    """Returns saved checkpoints from the requested directory and every workspace store."""
+    project_root = Path(__file__).resolve().parents[2]
+    dirs_to_scan = [Path(checkpoint_dir), project_root / "checkpoints_v2"]
+    dirs_to_scan.extend(sorted((project_root / "workspaces").glob("*/checkpoints")))
     files = []
     seen_paths = set()
 

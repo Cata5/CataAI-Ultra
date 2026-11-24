@@ -30,11 +30,43 @@ class CustomDatasetEngine:
     Provides automatic 95/5 train/validation split for real-time held-out generalization tracking.
     """
 
-    KNOWN_DATASETS = {
-        "tech_wiki_ro": r"d:\proiecte\LLM from Scratch\data\phase1_pretrain_tech_history_v2.txt",
-        "chat_persona_ro": r"d:\proiecte\LLM from Scratch\data\phase2_chat_ro.txt",
-        "alpaca_ro": r"d:\proiecte\LLM from Scratch\data\alpaca_ro.txt",
+    # Preset ids map to file names so the same build works on any machine: the file is
+    # looked up in LLMMAKER_DATASETS_DIR, the project data/ folder and the working
+    # directory, in that order.
+    KNOWN_DATASET_FILES = {
+        "tech_wiki_ro": "phase1_pretrain_tech_history_v2.txt",
+        "chat_persona_ro": "phase2_chat_ro.txt",
+        "alpaca_ro": "alpaca_ro.txt",
     }
+    # Read-only fallback for installations created before datasets moved into the project.
+    LEGACY_DATASETS_DIR = Path("d:/proiecte/LLM from Scratch/data")
+    KNOWN_DATASETS = {
+        key: str(Path("data") / name) for key, name in KNOWN_DATASET_FILES.items()
+    }
+
+    @classmethod
+    def preset_candidates(cls, dataset_source: str) -> list:
+        """Ordered locations searched for a preset dataset file."""
+        filename = cls.KNOWN_DATASET_FILES[dataset_source]
+        project_root = Path(__file__).resolve().parents[2]
+        candidates = []
+        env_dir = os.environ.get("LLMMAKER_DATASETS_DIR")
+        if env_dir:
+            candidates.append(Path(env_dir) / filename)
+        candidates.append(project_root / "data" / filename)
+        candidates.append(Path.cwd() / "data" / filename)
+        candidates.append(cls.LEGACY_DATASETS_DIR / filename)
+        return candidates
+
+    @classmethod
+    def resolve_dataset_path(cls, dataset_source: str):
+        """Resolve a known preset id to an existing file, or None when it is absent."""
+        if dataset_source not in cls.KNOWN_DATASET_FILES:
+            return None
+        for candidate in cls.preset_candidates(dataset_source):
+            if candidate.exists():
+                return candidate
+        return None
 
     def __init__(self, tokenizer: Optional[RoCanonTokenizer] = None, cache_dir: str = "data/cache", db: Optional[Any] = None):
         self.tokenizer = tokenizer or RoCanonTokenizer()
@@ -74,12 +106,15 @@ class CustomDatasetEngine:
         file_path: Optional[Path] = None
 
         # 1. Check known presets
-        if dataset_source in self.KNOWN_DATASETS:
-            cand = Path(self.KNOWN_DATASETS[dataset_source])
-            if cand.exists():
+        if dataset_source in self.KNOWN_DATASET_FILES:
+            cand = self.resolve_dataset_path(dataset_source)
+            if cand is not None:
                 file_path = cand
             else:
-                raise FileNotFoundError(f"Preset dataset '{dataset_source}' path does not exist on disk: {cand}")
+                searched = ", ".join(str(p) for p in self.preset_candidates(dataset_source))
+                raise FileNotFoundError(
+                    f"Preset dataset '{dataset_source}' was not found. Looked in: {searched}"
+                )
 
         # 2. Check SQLite database for uploaded/registered dataset ID
         elif self.db is not None:

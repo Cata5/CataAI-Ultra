@@ -166,6 +166,25 @@ pytest tests/e2e/test_product_generalization.py
 
 ---
 
+## 🌐 Website
+
+The public site lives in `website/` and is a separate static Next.js export, so its
+dependencies and build do not affect the desktop app:
+
+```bash
+cd website
+npm ci
+npm run dev      # http://localhost:3000
+npm run build    # static output in website/out
+```
+
+`.github/workflows/pages.yml` deploys `website/out` to GitHub Pages on a push to
+`main` that touches the site. Set the repository Pages source to "GitHub Actions".
+For a project site the workflow builds with `NEXT_PUBLIC_BASE_PATH=/<repo>`; a user
+site or custom domain builds with an empty base path.
+
+---
+
 ## 🏛 Architecture & Project Layout
 
 ```
@@ -204,6 +223,10 @@ llm-maker/
 │   │   ├── features/          # Builder, Training, Datasets, Runs, Inference
 │   │   └── services/api.ts    # Dual-mode API adapter (Tauri IPC + HTTP/WS)
 │   └── package.json
+│
+├── website/                   # Static marketing/audit site (Next.js export)
+│   ├── app/                   # Single-page dossier & styles
+│   └── public/                # Screenshots and static assets
 │
 ├── networks/registry/         # Exported model architecture configs (JSON)
 ├── datasets/                  # Datasets & pre-tokenized memmap binaries (.bin/.meta.json)

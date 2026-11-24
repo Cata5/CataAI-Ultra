@@ -69,6 +69,14 @@ def main():
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    def exit_after_terminal_event() -> None:
+        # The terminal event is emitted before the session finishes flushing metrics,
+        # writing the final checkpoint and updating the run row. Wait for that work to
+        # complete so the desktop never observes a half-persisted run.
+        if not worker.session_done.wait(timeout=30.0):
+            logger.warning("Timed out waiting for the training session to finalize; exiting.")
+        os._exit(0)
+
     # Background thread consuming worker events and printing JSON to stdout
     def event_emitter():
         while True:
@@ -86,8 +94,7 @@ def main():
 
                     if et in ("RUN_STOPPED", "RUN_FAILED", "RUN_COMPLETED"):
                         logger.info("Terminal run event received (%s), exiting standalone worker.", et)
-                        time.sleep(0.5)
-                        os._exit(0)
+                        exit_after_terminal_event()
                 elif hasattr(event_data, "event_type"):
                     et_val = event_data.event_type.value if hasattr(event_data.event_type, "value") else str(event_data.event_type)
                     if et_val == "METRICS_UPDATED" and getattr(event_data, "payload", None):
@@ -97,8 +104,7 @@ def main():
 
                     if et_val in ("RUN_STOPPED", "RUN_FAILED", "RUN_COMPLETED"):
                         logger.info("Terminal run event received (%s), exiting standalone worker.", et_val)
-                        time.sleep(0.5)
-                        os._exit(0)
+                        exit_after_terminal_event()
             except Exception as e:
                 logger.debug("Emitter exception: %s", e)
                 break

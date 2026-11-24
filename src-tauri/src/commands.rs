@@ -181,6 +181,12 @@ pub fn checkpoint_run(state: State<AppState>, _run_id: Option<String>) -> Result
 }
 
 #[tauri::command]
+pub fn validate_run(state: State<AppState>) -> Result<serde_json::Value, String> {
+    state.supervisor.validate_run()?;
+    Ok(serde_json::json!({ "success": true }))
+}
+
+#[tauri::command]
 pub fn update_lr(state: State<AppState>, data: serde_json::Value) -> Result<serde_json::Value, String> {
     state.supervisor.send_command(&serde_json::json!({
         "command_type": "SET_LR_MULTIPLIER",
@@ -203,7 +209,7 @@ pub async fn list_datasets(state: State<'_, AppState>, workspace_id: Option<Stri
         check_dirs.push(PathBuf::from("data/uploads"));
         check_dirs.push(PathBuf::from("data"));
 
-        let db = DatabaseManager::new(&db_path);
+        let db = DatabaseManager::new(&db_path).map_err(|e| e.to_string())?;
 
         for dir in check_dirs {
             if !dir.exists() {
@@ -355,7 +361,7 @@ pub async fn tokenize_dataset(
             cmd.args(&["--workspace", &ws]);
         }
 
-        let db = DatabaseManager::new(&db_path);
+        let db = DatabaseManager::new(&db_path).map_err(|e| e.to_string())?;
 
         if let Ok(output) = cmd.output() {
             let stdout = String::from_utf8_lossy(&output.stdout);

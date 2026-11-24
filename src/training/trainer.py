@@ -176,9 +176,6 @@ class Trainer:
         self.loss_accumulator.add(loss_sum, valid_tokens)
         return loss_val, valid_tokens
 
-        self.loss_accumulator.add(loss_sum, valid_tokens)
-        return loss_val, valid_tokens
-
     def optimizer_step(
         self,
         num_tokens_in_step: int | None = None,

@@ -20,8 +20,10 @@ accelerate>=0.30.0
 
 # Numerical & GPU Telemetry
 numpy>=1.26.0
-nvidia-ml-py>=12.535.0
 nvidia-ml-py>=13.615.71
+
+# Encrypted settings at rest (AES-256-GCM)
+cryptography>=42.0.0
 tqdm>=4.66.0
 PyYAML>=6.0
 

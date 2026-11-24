@@ -199,8 +199,17 @@ export const api = {
     }
     return request<{ success: boolean }>(`/api/runs/${runId}/checkpoint`, { method: "POST" });
   },
-  validateRun: async (_runId: string = "current"): Promise<{ success: boolean }> => {
-    return { success: true };
+  validateRun: async (runId: string = "current"): Promise<{ success: boolean }> => {
+    const inv = await getTauriInvoke();
+    if (inv) {
+      await inv("validate_run");
+      return { success: true };
+    }
+    const res = await request<{ success: boolean }>(`/api/runs/${runId}/validate`, { method: "POST" });
+    if (!res.success) {
+      throw new Error("No active training run is available for validation.");
+    }
+    return res;
   },
   updateLr: async (data: { multiplier?: number; peak_lr?: number; adam_lr?: number; muon_lr?: number }): Promise<any> => {
     const inv = await getTauriInvoke();
@@ -741,6 +750,9 @@ export const api = {
       try {
         return await inv("get_settings");
       } catch (e) {
+        // A key/decryption failure must not silently fall back to another
+        // backend that might show an empty credential.
+        if (/encryption key|cannot decrypt|stored secret/i.test(String(e))) throw e;
         console.warn("Tauri get_settings fallback:", e);
       }
     }
@@ -753,6 +765,7 @@ export const api = {
         await inv("save_settings", { settings });
         return { status: "ok", settings };
       } catch (e) {
+        if (/encryption key|cannot encrypt|stored secret/i.test(String(e))) throw e;
         console.warn("Tauri save_settings fallback:", e);
       }
     }
@@ -789,7 +802,12 @@ export const api = {
     }
     return request<any[]>("/api/models/foundation_presets");
   },
-  importFoundationModel: async (hfRepoId: string, modelName?: string, defaultTask?: string): Promise<any> => {
+  importFoundationModel: async (
+    hfRepoId: string,
+    modelName?: string,
+    defaultTask?: string,
+    allowRemoteCode = false,
+  ): Promise<any> => {
     const inv = await getTauriInvoke();
     if (inv) {
       try {
@@ -804,6 +822,7 @@ export const api = {
         hf_repo_id: hfRepoId,
         model_name: modelName,
         default_task: defaultTask,
+        allow_remote_code: allowRemoteCode,
       }),
     });
   },
@@ -885,6 +904,41 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, description }),
     });
+  },
+  exportWorkspaceArchive: async (id: string): Promise<Blob> => {
+    const response = await fetch(
+      `${BASE_URL}/api/workspaces/${encodeURIComponent(id)}/export`,
+      { method: "POST" },
+    );
+    if (!response.ok) {
+      let message = `Export failed: ${response.status}`;
+      try {
+        const body = await response.json();
+        if (body?.error) message = body.error;
+      } catch {
+        // binary error body
+      }
+      throw new Error(message);
+    }
+    return response.blob();
+  },
+  importWorkspaceArchive: async (file: File): Promise<any> => {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const response = await fetch(`${BASE_URL}/api/workspaces/import`, {
+      method: "POST",
+      body: form,
+    });
+    let body: any = null;
+    try {
+      body = await response.json();
+    } catch {
+      // ignore
+    }
+    if (!response.ok) {
+      throw new Error(body?.error || `Import failed: ${response.status}`);
+    }
+    return body;
   },
   deleteWorkspace: async (id: string): Promise<{ success: boolean }> => {
     const inv = await getTauriInvoke();

@@ -53,6 +53,24 @@ frontend/build/
 .next/
 *.tsbuildinfo
 
+# Encrypted settings key (never commit; DPAPI-bound on Windows)
+.secrets.key
+*.key
+
+# Local pip/temporary build directories
+.pip-tmp/
+.tmp-test/
+.test-run/
+.pytest-tmp/
+.run-tmp-*/
+
+# Website build output
+website/node_modules/
+website/.next/
+website/out/
+website/tsconfig.tsbuildinfo
+website/next-env.d.ts
+
 # Logs and debug artifacts
 *.log
 npm-debug.log*

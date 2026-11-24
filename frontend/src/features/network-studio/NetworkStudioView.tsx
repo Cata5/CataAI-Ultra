@@ -606,7 +606,24 @@ export const NetworkStudioView: React.FC = () => {
   const handleImportFoundationModel = async (repoId: string, modelName?: string, task?: string) => {
     setIsImporting(true);
     try {
-      const res = await api.importFoundationModel(repoId, modelName, task);
+      let res: any;
+      try {
+        res = await api.importFoundationModel(repoId, modelName, task, false);
+      } catch (firstError: any) {
+        const message = String(firstError?.message || firstError);
+        if (!/trust_remote_code|remote code|custom code/i.test(message)) {
+          throw firstError;
+        }
+        const confirmed = window.confirm(
+          `This repository ships custom Python that will run with LLM Maker's privileges.\n\n` +
+            `Only continue if you trust the publisher and have reviewed the code.\n\n` +
+            `Import ${repoId} with remote code enabled?`,
+        );
+        if (!confirmed) {
+          throw new Error("Import cancelled: remote code was not approved.");
+        }
+        res = await api.importFoundationModel(repoId, modelName, task, true);
+      }
       setStatusMessage(`Imported ${res.model?.name || repoId}!`);
       await fetchAllNetworks();
       if (res.model?.id) {

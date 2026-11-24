@@ -13,149 +13,100 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ..security.secrets import SECRET_KEYS, REDACTED, SecretStore, SecretsKeyError
+from .migrations import apply_migrations
+
 logger = logging.getLogger(__name__)
 
-DEFAULT_DB_PATH = Path("data/rocanon_studio.db")
+
+class DatabaseIntegrityError(RuntimeError):
+    """Raised when SQLite reports a corrupt or unreadable database."""
+
+
+# Resolved against the repository root rather than the process CWD so the browser
+# server and direct StudioDatabase() calls always share one database.
+DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "rocanon_studio.db"
 
 
 class StudioDatabase:
     """Thread-safe SQLite database manager for training metadata and metrics."""
 
-    def __init__(self, db_path: Path | str = DEFAULT_DB_PATH) -> None:
+    def __init__(
+        self,
+        db_path: Path | str = DEFAULT_DB_PATH,
+        secret_key_path: Path | str | None = None,
+    ) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        key_path = Path(secret_key_path) if secret_key_path else self.db_path.parent / ".secrets.key"
+        if not key_path.exists() and self._has_encrypted_secrets():
+            raise SecretsKeyError(
+                f"The encryption key for {self.db_path} is missing ({key_path}). "
+                "Restore the matching .secrets.key file; encrypted credentials cannot be "
+                "recovered without it. A new key is not generated to avoid silently losing them."
+            )
+        self._secret_store = SecretStore(key_path)
         self._lock = threading.Lock()
         self._init_db()
+
+    def _has_encrypted_secrets(self) -> bool:
+        """Checks for encrypted rows without creating a replacement key."""
+        if not self.db_path.exists():
+            return False
+        try:
+            conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True, timeout=5.0)
+            try:
+                rows = conn.execute(
+                    "SELECT value_json FROM settings WHERE key IN (?, ?)",
+                    tuple(SECRET_KEYS),
+                ).fetchall()
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return False
+        for (raw,) in rows:
+            try:
+                value = json.loads(raw)
+            except Exception:
+                continue
+            if SecretStore.is_encrypted(value):
+                return True
+        return False
 
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA synchronous = NORMAL;")
+        conn.execute("PRAGMA foreign_keys = ON;")
         return conn
 
     def _init_db(self) -> None:
-        with self._lock, self._get_connection() as conn:
-            conn.executescript("""
-            CREATE TABLE IF NOT EXISTS runs (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                current_phase TEXT NOT NULL,
-                dataset_source TEXT,
-                total_steps INTEGER DEFAULT 0,
-                total_tokens INTEGER DEFAULT 0,
-                best_val_loss REAL,
-                config_json TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
+        try:
+            conn = self._get_connection()
+        except sqlite3.DatabaseError as exc:
+            raise DatabaseIntegrityError(
+                f"Cannot open database {self.db_path}: {exc}. Restore a backup from the backups/ folder."
+            ) from exc
+        with self._lock, conn:
+            # Refuse to migrate a database SQLite already considers damaged: a
+            # backup of a corrupt file is not a recovery point.
+            try:
+                row = conn.execute("PRAGMA quick_check").fetchone()
+            except sqlite3.DatabaseError as exc:
+                raise DatabaseIntegrityError(
+                    f"Cannot read database {self.db_path}: {exc}. Restore a backup from the backups/ folder."
+                ) from exc
+            result = str(row[0]) if row else "unknown"
+            if result.lower() != "ok":
+                raise DatabaseIntegrityError(
+                    f"Database integrity check failed for {self.db_path}: {result}. "
+                    "Stop the app and restore a snapshot from backups/."
+                )
 
-            CREATE TABLE IF NOT EXISTS metrics (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                step INTEGER NOT NULL,
-                tokens INTEGER NOT NULL,
-                train_loss REAL NOT NULL,
-                val_loss REAL,
-                generalization_gap REAL,
-                grad_norm REAL DEFAULT 0.0,
-                muon_lr REAL DEFAULT 0.0,
-                adamw_lr REAL DEFAULT 0.0,
-                vram_used_gb REAL DEFAULT 0.0,
-                tok_per_sec REAL DEFAULT 0.0,
-                tflops REAL DEFAULT 0.0,
-                timestamp REAL NOT NULL,
-                FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_metrics_run_step ON metrics(run_id, step);
-
-            CREATE TABLE IF NOT EXISTS checkpoints (
-                id TEXT PRIMARY KEY,
-                run_id TEXT,
-                step INTEGER NOT NULL,
-                tokens INTEGER DEFAULT 0,
-                train_loss REAL,
-                val_loss REAL,
-                file_path TEXT NOT NULL,
-                file_size_bytes INTEGER DEFAULT 0,
-                phase TEXT,
-                metadata_json TEXT,
-                created_at REAL NOT NULL
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_checkpoints_step ON checkpoints(step);
-
-            CREATE TABLE IF NOT EXISTS alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT,
-                level TEXT NOT NULL,
-                category TEXT NOT NULL,
-                message TEXT NOT NULL,
-                step INTEGER DEFAULT 0,
-                timestamp REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS pipelines (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                current_phase_idx INTEGER DEFAULT 0,
-                phases_json TEXT NOT NULL,
-                state_json TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS datasets (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                file_size_bytes INTEGER DEFAULT 0,
-                format TEXT NOT NULL,
-                token_count INTEGER DEFAULT 0,
-                sample_count INTEGER DEFAULT 0,
-                revision TEXT NOT NULL,
-                stats_json TEXT,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS benchmarks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT,
-                checkpoint_id TEXT,
-                step INTEGER DEFAULT 0,
-                category TEXT NOT NULL,
-                score REAL DEFAULT 0.0,
-                results_json TEXT,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value_json TEXT NOT NULL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS workspaces (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT DEFAULT '',
-                root_path TEXT NOT NULL,
-                is_active INTEGER DEFAULT 0,
-                config_json TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-            """)
-
-            # Safe column migrations for workspace_id
-            for tbl in ("runs", "datasets", "checkpoints", "benchmarks"):
-                try:
-                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN workspace_id TEXT DEFAULT 'default';")
-                except sqlite3.OperationalError:
-                    pass  # column already exists
+            applied = apply_migrations(conn, self.db_path)
+            if applied:
+                logger.info("Database %s upgraded to schema version %s", self.db_path, applied[-1])
 
             # Ensure default workspace exists
             cur = conn.execute("SELECT id FROM workspaces WHERE id = 'default'")
@@ -168,6 +119,8 @@ class StudioDatabase:
                     """,
                     (now, now),
                 )
+
+            self._encrypt_legacy_secrets(conn)
 
     # ------------------- Runs -------------------
     def create_run(
@@ -182,14 +135,21 @@ class StudioDatabase:
         now = time.time()
         cfg_str = json.dumps(config or {})
         with self._lock, self._get_connection() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO runs 
-                (id, name, status, current_phase, dataset_source, total_steps, total_tokens, config_json, workspace_id, created_at, updated_at)
-                VALUES (?, ?, 'STARTING', ?, ?, 0, 0, ?, ?, ?, ?)
-                """,
-                (run_id, name, current_phase, dataset_source, cfg_str, workspace_id, now, now),
-            )
+            # A duplicate id is a caller error, not a request to replace a run.
+            # INSERT OR REPLACE silently deleted the old row while leaving its
+            # metrics orphaned; reject the collision so the caller can pick a
+            # new id and the existing history stays intact.
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO runs
+                    (id, name, status, current_phase, dataset_source, total_steps, total_tokens, config_json, workspace_id, created_at, updated_at)
+                    VALUES (?, ?, 'STARTING', ?, ?, 0, 0, ?, ?, ?, ?)
+                    """,
+                    (run_id, name, current_phase, dataset_source, cfg_str, workspace_id, now, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"Run id '{run_id}' already exists; refusing to overwrite its history.") from exc
 
     def update_run_status(
         self,
@@ -198,6 +158,7 @@ class StudioDatabase:
         step: Optional[int] = None,
         tokens: Optional[int] = None,
         best_val_loss: Optional[float] = None,
+        final_loss: Optional[float] = None,
     ) -> None:
         now = time.time()
         updates = ["status = ?", "updated_at = ?"]
@@ -211,6 +172,9 @@ class StudioDatabase:
         if best_val_loss is not None:
             updates.append("best_val_loss = ?")
             params.append(best_val_loss)
+        if final_loss is not None:
+            updates.append("final_loss = ?")
+            params.append(final_loss)
         params.append(run_id)
 
         sql = f"UPDATE runs SET {', '.join(updates)} WHERE id = ?"
@@ -670,29 +634,72 @@ class StudioDatabase:
             return res
 
     # ------------------- Persistent Settings -------------------
+    def _encrypt_legacy_secrets(self, conn: sqlite3.Connection) -> None:
+        """Upgrades plaintext credentials written by older builds in place."""
+        now = time.time()
+        rows = conn.execute("SELECT key, value_json FROM settings").fetchall()
+        for row in rows:
+            key = row["key"]
+            if key not in SECRET_KEYS:
+                continue
+            try:
+                value = json.loads(row["value_json"])
+            except Exception:
+                continue
+            if not isinstance(value, str) or not value or SecretStore.is_encrypted(value):
+                continue
+            conn.execute(
+                "UPDATE settings SET value_json = ?, updated_at = ? WHERE key = ?",
+                (json.dumps(self._secret_store.encrypt(value)), now, key),
+            )
+            logger.info("Encrypted legacy plaintext setting %s", key)
+
     def save_settings(self, settings_dict: Dict[str, Any]) -> None:
         now = time.time()
         with self._lock, self._get_connection() as conn:
             for k, v in settings_dict.items():
+                key = str(k)
+                # Presence flags are derived on read and must never be persisted.
+                if key.endswith("_configured"):
+                    continue
+                if key in SECRET_KEYS:
+                    # The redacted sentinel means "keep the stored credential".
+                    if v == REDACTED:
+                        continue
+                    text = "" if v is None else str(v)
+                    v = self._secret_store.encrypt(text)
                 conn.execute(
                     """
                     INSERT INTO settings (key, value_json, updated_at)
                     VALUES (?, ?, ?)
                     ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json, updated_at = excluded.updated_at
                     """,
-                    (str(k), json.dumps(v), now),
+                    (key, json.dumps(v), now),
                 )
 
-    def get_settings(self) -> Dict[str, Any]:
+    def get_settings(self, redact: bool = False) -> Dict[str, Any]:
         with self._lock, self._get_connection() as conn:
             cur = conn.execute("SELECT key, value_json FROM settings")
-            res = {}
+            res: Dict[str, Any] = {}
             for row in cur.fetchall():
+                key = row["key"]
                 try:
-                    res[row["key"]] = json.loads(row["value_json"])
+                    value = json.loads(row["value_json"])
                 except Exception:
-                    res[row["key"]] = row["value_json"]
-            return res
+                    value = row["value_json"]
+                if key in SECRET_KEYS and isinstance(value, str) and value:
+                    try:
+                        value = self._secret_store.decrypt(value)
+                    except SecretsKeyError as exc:
+                        # Never present an unreadable credential as an empty one:
+                        # the UI could then save over a value it never decrypted.
+                        logger.error("Cannot decrypt setting %s: %s", key, exc)
+                        raise
+                res[key] = value
+        if redact:
+            from ..security.secrets import redact_settings
+            return redact_settings(res)
+        return res
 
     # ------------------- Workspaces -------------------
     def create_workspace(
@@ -706,13 +713,18 @@ class StudioDatabase:
         now = time.time()
         cfg_str = json.dumps(config or {})
         with self._lock, self._get_connection() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO workspaces (id, name, description, root_path, is_active, config_json, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 0, ?, ?, ?)
-                """,
-                (workspace_id, name, description, root_path, cfg_str, now, now),
-            )
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO workspaces (id, name, description, root_path, is_active, config_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 0, ?, ?, ?)
+                    """,
+                    (workspace_id, name, description, root_path, cfg_str, now, now),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(
+                    f"Workspace id '{workspace_id}' already exists; refusing to overwrite it."
+                ) from exc
         return self.get_workspace(workspace_id)
 
     def list_workspaces(self) -> List[Dict[str, Any]]:
@@ -815,13 +827,18 @@ class StudioDatabase:
             self.set_active_workspace("default")
 
         with self._lock, self._get_connection() as conn:
-            conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
+            # Delete children first: with foreign keys enabled the order matters,
+            # and metrics must not survive their run.
+            conn.execute(
+                "DELETE FROM metrics WHERE run_id IN (SELECT id FROM runs WHERE workspace_id = ?)",
+                (workspace_id,),
+            )
             conn.execute("DELETE FROM runs WHERE workspace_id = ?", (workspace_id,))
             conn.execute("DELETE FROM checkpoints WHERE workspace_id = ?", (workspace_id,))
             conn.execute("DELETE FROM datasets WHERE workspace_id = ?", (workspace_id,))
+            conn.execute("DELETE FROM workspaces WHERE id = ?", (workspace_id,))
         return True
 
 
 # Backward compatibility alias
 Database = StudioDatabase
-

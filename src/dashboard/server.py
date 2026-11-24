@@ -11,7 +11,9 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -42,6 +44,7 @@ from ..pipeline.manager import PipelineManager
 from ..pipeline.runner import PipelineRunner
 from ..pipeline.scheduler_math import calculate_schedule_curve
 from ..plugins.manager import PluginManager
+from ..security.secrets import SecretsKeyError
 from ..telemetry.hardware import HardwareMonitor
 from ..telemetry.profiles import HardwareProfile
 from ..training.factory import calculate_analytical_parameters, list_checkpoints
@@ -405,7 +408,15 @@ async def handle_advance_pipeline(request: web.Request) -> web.Response:
 
 
 async def handle_get_settings(request: web.Request) -> web.Response:
-    settings = DB.get_settings()
+    # Never return a usable webhook URL or bot token to the renderer. The
+    # *_configured flags let the UI show presence without holding the secret.
+    try:
+        settings = DB.get_settings(redact=True)
+    except SecretsKeyError as exc:
+        return web.json_response(
+            {"error": f"Stored credentials cannot be decrypted: {exc}"},
+            status=500,
+        )
     return web.json_response(settings)
 
 
@@ -414,8 +425,21 @@ async def handle_save_settings(request: web.Request) -> web.Response:
         data = await request.json()
     except Exception:
         return web.json_response({"error": "Invalid JSON"}, status=400)
-    DB.save_settings(data)
-    return web.json_response({"status": "saved", "settings": data})
+    if not isinstance(data, dict):
+        return web.json_response({"error": "Settings must be a JSON object"}, status=400)
+    if "safe_mode" in data:
+        applied, message = PLUGIN_MGR.set_safe_mode(bool(data["safe_mode"]))
+        if not applied:
+            return web.json_response({"error": message}, status=409)
+    try:
+        DB.save_settings(data)
+        settings = DB.get_settings(redact=True)
+    except SecretsKeyError as exc:
+        return web.json_response(
+            {"error": f"Stored credentials cannot be decrypted: {exc}"},
+            status=500,
+        )
+    return web.json_response({"status": "saved", "settings": settings})
 
 
 async def handle_scheduler_curve(request: web.Request) -> web.Response:
@@ -553,12 +577,21 @@ async def handle_test_notification(request: web.Request) -> web.Response:
     except Exception:
         data = {}
     from ..notifications.webhook import get_notifier
+    stored = DB.get_settings()
+
+    def _value(field: str) -> str | None:
+        candidate = data.get(field)
+        # Redacted values mean "use the stored credential".
+        if not candidate or candidate == "__LLMMAKER_SECRET_SET__":
+            return stored.get(field)
+        return candidate
+
     notifier = get_notifier(db=DB)
     res = notifier.test_notification(
-        discord_url=data.get("discord_webhook_url"),
-        discord_mention=data.get("discord_mention"),
-        telegram_token=data.get("telegram_bot_token"),
-        telegram_chat_id=data.get("telegram_chat_id"),
+        discord_url=_value("discord_webhook_url"),
+        discord_mention=data.get("discord_mention") or stored.get("discord_mention"),
+        telegram_token=_value("telegram_bot_token"),
+        telegram_chat_id=data.get("telegram_chat_id") or stored.get("telegram_chat_id"),
     )
     return web.json_response(res)
 
@@ -1035,7 +1068,8 @@ async def handle_get_dataset_info(request: web.Request) -> web.Response:
     from ..data.custom_loader import CustomDatasetEngine
     src = STATE.dataset_source
     engine = CustomDatasetEngine()
-    p = Path(engine.KNOWN_DATASETS.get(src, src))
+    resolved = engine.resolve_dataset_path(src)
+    p = resolved if resolved is not None else Path(engine.KNOWN_DATASETS.get(src, src))
     exists = p.exists()
     sub_tag = "_full"
     cache_bin = engine.cache_dir / f"{p.stem}{sub_tag}_tokens.bin"
@@ -1164,20 +1198,78 @@ async def handle_delete_workspace(request: web.Request) -> web.Response:
 
 async def handle_export_workspace(request: web.Request) -> web.Response:
     ws_id = request.match_info["id"]
+    from ..workspace.archive import WorkspaceArchive, WorkspaceArchiveError
+
     try:
-        bundle = WORKSPACE_MGR.export_workspace(ws_id)
-        return web.json_response(bundle)
-    except Exception as e:
+        path, filename = WorkspaceArchive(DB).export(ws_id)
+    except WorkspaceArchiveError as e:
         return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        logger.exception("Workspace export failed")
+        return web.json_response({"error": str(e)}, status=500)
+
+    response = web.StreamResponse(
+        headers={
+            "Content-Type": "application/zip",
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        }
+    )
+    await response.prepare(request)
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                await response.write(chunk)
+        await response.write_eof()
+    finally:
+        path.unlink(missing_ok=True)
+    return response
+
+
+async def _receive_upload(request: web.Request, destination: Path) -> None:
+    """Streams a multipart or raw upload to disk without buffering it in RAM."""
+    limit = 4 * 1024 * 1024 * 1024
+    written = 0
+    if request.content_type.startswith("multipart/"):
+        reader = await request.multipart()
+        field = await reader.next()
+        while field is not None and field.name != "file":
+            field = await reader.next()
+        if field is None:
+            raise ValueError("Multipart upload needs a 'file' field.")
+        source = field
+    else:
+        source = request.content
+
+    with open(destination, "wb") as out:
+        while True:
+            chunk = await source.read_chunk(1024 * 1024) if hasattr(source, "read_chunk") else await source.read(1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > limit:
+                raise ValueError("Upload exceeds the 4 GiB limit.")
+            out.write(chunk)
 
 
 async def handle_import_workspace(request: web.Request) -> web.Response:
+    from ..workspace.archive import WorkspaceArchive, WorkspaceArchiveError
+
+    upload_dir = Path("data/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    temp = tempfile.NamedTemporaryFile(prefix="workspace_import_", suffix=".zip", dir=upload_dir, delete=False)
+    temp_path = Path(temp.name)
+    temp.close()
     try:
-        data = await request.json()
-        res = WORKSPACE_MGR.import_workspace(data)
-        return web.json_response(res)
-    except Exception as e:
+        await _receive_upload(request, temp_path)
+        result = WorkspaceArchive(DB).import_archive(temp_path)
+        return web.json_response(result)
+    except (ValueError, WorkspaceArchiveError) as e:
         return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        logger.exception("Workspace import failed")
+        return web.json_response({"error": str(e)}, status=500)
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 # ---------------- Hardware Profiles ----------------
@@ -1269,12 +1361,13 @@ async def handle_import_hf_model(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "Invalid JSON body"}, status=400)
 
-    repo_id = data.get("repo_id")
+    repo_id = data.get("repo_id") or data.get("hf_repo_id")
     if not repo_id:
         return web.json_response({"error": "Missing 'repo_id' field (e.g. 'Qwen/Qwen2.5-0.5B-Instruct')"}, status=400)
 
-    custom_name = data.get("custom_name")
+    custom_name = data.get("custom_name") or data.get("model_name")
     hf_token = data.get("hf_token")
+    allow_remote_code = bool(data.get("allow_remote_code", False))
     ws_id = get_request_workspace_id(request)
 
     try:
@@ -1284,6 +1377,7 @@ async def handle_import_hf_model(request: web.Request) -> web.Response:
             custom_name=custom_name,
             workspace_id=ws_id,
             hf_token=hf_token,
+            allow_remote_code=allow_remote_code,
         )
         return web.json_response({"success": True, "network": net_cfg})
     except Exception as e:
@@ -1372,6 +1466,11 @@ async def handle_export_ollama(request: web.Request) -> web.Response:
 # ---------------- WebSocket ----------------
 
 async def handle_websocket(request: web.Request) -> web.WebSocketResponse:
+    origin = request.headers.get("Origin", "")
+    if origin and not _is_local_origin(origin):
+        # Browsers always send Origin on WebSocket handshakes; refuse remote pages
+        # instead of streaming live training state to an arbitrary site.
+        raise web.HTTPForbidden(text="Cross-origin WebSocket rejected")
     ws = web.WebSocketResponse()
     await ws.prepare(request)
     CONNECTED_CLIENTS.add(ws)
@@ -1472,8 +1571,53 @@ async def handle_clear_logs(request: web.Request) -> web.Response:
     return web.json_response({"success": True})
 
 
+LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1"}
+LOCAL_ORIGIN_RE = re.compile(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$")
+
+
+def _hostname_only(value: str) -> str:
+    """Extracts a lowercase hostname from a Host or Origin header value."""
+    host = (value or "").strip().lower()
+    if "://" in host:
+        host = host.split("://", 1)[1]
+    host = host.split("/", 1)[0]
+    if "@" in host:
+        host = host.rsplit("@", 1)[1]
+    if host.startswith("["):
+        return host.split("]", 1)[0].lstrip("[")
+    return host.rsplit(":", 1)[0]
+
+
+def _allowed_hostnames() -> set[str]:
+    extra = os.environ.get("LLMMAKER_ALLOWED_HOSTS", "")
+    return LOCAL_HOSTNAMES | {part.strip().lower() for part in extra.split(",") if part.strip()}
+
+
+def _is_local_origin(origin: str) -> bool:
+    # An absent Origin means a same-origin/non-CORS request (no CORS headers are
+    # needed); "null" is what sandboxed iframes and data: pages send and must
+    # never be treated as local, otherwise any site could read this API.
+    if not origin or origin.strip().lower() == "null":
+        return False
+    return bool(LOCAL_ORIGIN_RE.match(origin.strip().lower()))
+
+
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
+    # The desktop app talks to Rust over IPC, so HTTP is only used by local browser
+    # sessions. Reflecting '*' let any website read this API (settings contain the
+    # Discord webhook URL) and issue destructive requests against 127.0.0.1.
+    if _hostname_only(request.host or "") not in _allowed_hostnames():
+        return web.json_response(
+            {"error": "Host not allowed. Set LLMMAKER_ALLOWED_HOSTS to permit remote access."},
+            status=403,
+        )
+
+    origin = request.headers.get("Origin", "")
+    origin_allowed = _is_local_origin(origin)
+    if origin and not origin_allowed and request.method not in ("GET", "HEAD", "OPTIONS"):
+        return web.json_response({"error": "Cross-origin request rejected"}, status=403)
+
     if request.method == "OPTIONS":
         response = web.Response(status=200)
     else:
@@ -1481,15 +1625,23 @@ async def cors_middleware(request: web.Request, handler):
             response = await handler(request)
         except web.HTTPException as ex:
             response = ex
-    response.headers["Access-Control-Allow-Origin"] = "*"
-    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
+
+    response.headers["Vary"] = "Origin"
+    if origin_allowed:
+        response.headers["Access-Control-Allow-Origin"] = origin or "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With"
     return response
 
 
 def create_app() -> web.Application:
     """Builds and returns the configured aiohttp Application."""
-    app = web.Application(client_max_size=1024 * 1024 * 500, middlewares=[cors_middleware])  # Support up to 500MB dataset uploads
+    # Dataset uploads are capped at 500 MB in their handler; workspace archives
+    # can legitimately contain multi-GB checkpoints.
+    app = web.Application(
+        client_max_size=4 * 1024 * 1024 * 1024,
+        middlewares=[cors_middleware],
+    )
 
     async def _on_startup(app_instance: web.Application) -> None:
         global MAIN_EVENT_LOOP

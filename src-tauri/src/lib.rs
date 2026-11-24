@@ -4,6 +4,7 @@
 pub mod commands;
 pub mod database;
 pub mod hardware;
+pub mod secrets;
 pub mod worker;
 
 use commands::*;
@@ -11,41 +12,62 @@ use database::DatabaseManager;
 use hardware::HardwareMonitor;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::sync::Mutex;
+use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use worker::WorkerSupervisor;
 
 use tauri::Manager;
 
 const ICON_RGBA_128: &[u8] = include_bytes!("../icons/icon_128.rgba");
 
+fn log_path() -> &'static PathBuf {
+    static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+    LOG_PATH.get_or_init(|| worker::project_root().join("tauri_debug.log"))
+}
+
 pub fn log_trace(msg: &str) {
-    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("tauri_debug.log") {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log_path()) {
         let _ = writeln!(f, "[TRACE] {}", msg);
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    if std::path::Path::new("tauri_debug.log").exists() {
-        let _ = std::fs::rename("tauri_debug.log", "tauri_debug.prev.log");
+    let root = worker::project_root();
+    let debug_log = root.join("tauri_debug.log");
+    if debug_log.exists() {
+        let _ = std::fs::rename(&debug_log, root.join("tauri_debug.prev.log"));
     }
     std::panic::set_hook(Box::new(|info| {
-        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open("tauri_debug.log") {
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(log_path()) {
             let _ = writeln!(f, "[PANIC] {:?}", info);
         }
     }));
 
     log_trace("Application starting...");
+    log_trace(&format!("Resolved project root: {:?}", root));
     let _ = env_logger::try_init();
 
-    log_trace("Initializing DatabaseManager...");
-    let db = DatabaseManager::new("studio.db");
+    // Absolute database path: a relative one silently created a fresh database
+    // (losing every run) whenever the process working directory changed.
+    let db_path = root.join("studio.db");
+    log_trace(&format!("Initializing DatabaseManager at {:?}...", db_path));
+    let db = DatabaseManager::new(&db_path.to_string_lossy()).unwrap_or_else(|err| {
+        log_trace(&format!("FATAL: database initialization failed: {}", err));
+        panic!("database initialization failed: {}", err);
+    });
+
+    match db.recover_stale_runs() {
+        Ok(0) => {}
+        Ok(count) => log_trace(&format!("Recovered {} stale run(s) from a previous session", count)),
+        Err(err) => log_trace(&format!("Stale run recovery failed: {}", err)),
+    }
 
     log_trace("Initializing HardwareMonitor...");
     let hw = Mutex::new(HardwareMonitor::new());
 
     log_trace("Initializing WorkerSupervisor...");
-    let sup = WorkerSupervisor::new();
+    let sup = WorkerSupervisor::new(db_path);
 
     let state = AppState {
         db,
@@ -78,6 +100,7 @@ pub fn run() {
             pause_run,
             resume_run,
             checkpoint_run,
+            validate_run,
             update_lr,
             list_datasets,
             upload_dataset,
@@ -120,7 +143,23 @@ pub fn run() {
         ]);
 
     log_trace("Running Tauri context...");
-    if let Err(e) = builder.run(tauri::generate_context!()) {
-        log_trace(&format!("Tauri run error: {:?}", e));
-    }
+    let app = match builder.build(tauri::generate_context!()) {
+        Ok(app) => app,
+        Err(e) => {
+            log_trace(&format!("Tauri build error: {:?}", e));
+            return;
+        }
+    };
+
+    // Never leave an orphaned Python/CUDA process behind when the window closes.
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                state.supervisor.shutdown();
+            }
+        }
+    });
 }

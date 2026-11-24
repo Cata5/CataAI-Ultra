@@ -104,12 +104,23 @@ class FoundationModelManager:
         """Returns catalogue of popular open-weights foundation models."""
         return FOUNDATION_PRESETS
 
-    def inspect_repo(self, repo_id: str, hf_token: Optional[str] = None) -> Dict[str, Any]:
-        """Inspects model configuration directly from Hugging Face Hub."""
+    def inspect_repo(
+        self,
+        repo_id: str,
+        hf_token: Optional[str] = None,
+        allow_remote_code: bool = False,
+    ) -> Dict[str, Any]:
+        """Inspects model configuration directly from Hugging Face Hub.
+
+        Remote code is opt-in per import: a repository can ship Python that runs
+        with the app's privileges, so the default path never executes it.
+        """
         from transformers import AutoConfig
 
         try:
-            cfg = AutoConfig.from_pretrained(repo_id, token=hf_token, trust_remote_code=True)
+            cfg = AutoConfig.from_pretrained(
+                repo_id, token=hf_token, trust_remote_code=allow_remote_code
+            )
             cfg_dict = cfg.to_dict()
 
             hidden_size = cfg_dict.get("hidden_size") or cfg_dict.get("d_model", 2048)
@@ -139,7 +150,16 @@ class FoundationModelManager:
             }
         except Exception as e:
             logger.error("Failed inspecting HF repo %s: %s", repo_id, e)
-            return {"success": False, "error": str(e), "repo_id": repo_id}
+            message = str(e)
+            needs_remote_code = (not allow_remote_code) and (
+                "trust_remote_code" in message.lower() or "custom code" in message.lower()
+            )
+            return {
+                "success": False,
+                "error": message,
+                "repo_id": repo_id,
+                "needs_remote_code": needs_remote_code,
+            }
 
     def import_to_registry(
         self,
@@ -147,9 +167,10 @@ class FoundationModelManager:
         custom_name: Optional[str] = None,
         workspace_id: str = "default",
         hf_token: Optional[str] = None,
+        allow_remote_code: bool = False,
     ) -> Dict[str, Any]:
         """Registers a foundation model in the Network Studio registry as an imported network."""
-        info = self.inspect_repo(repo_id, hf_token=hf_token)
+        info = self.inspect_repo(repo_id, hf_token=hf_token, allow_remote_code=allow_remote_code)
         if not info.get("success"):
             raise ValueError(f"Could not inspect foundation model: {info.get('error')}")
 
@@ -162,6 +183,7 @@ class FoundationModelManager:
             "workspace_id": workspace_id,
             "is_foundation": True,
             "hf_repo_id": repo_id,
+            "trust_remote_code": bool(allow_remote_code),
             "family": "decoder_only",
             "description": f"Imported Open-Weights Foundation Model ({repo_id}). Total parameters: ~{info.get('estimated_parameters', 0):,}.",
             "architecture": {
@@ -191,6 +213,7 @@ def load_foundation_model(
     dtype: torch.dtype = torch.bfloat16,
     load_in_4bit: bool = False,
     hf_token: Optional[str] = None,
+    trust_remote_code: bool = False,
 ) -> Tuple[nn.Module, Any]:
     """Loads foundation model and tokenizer using Hugging Face AutoClasses."""
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -201,13 +224,13 @@ def load_foundation_model(
     tokenizer = AutoTokenizer.from_pretrained(
         repo_id_or_path,
         token=hf_token,
-        trust_remote_code=True,
+        trust_remote_code=trust_remote_code,
     )
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
     kwargs: Dict[str, Any] = {
-        "trust_remote_code": True,
+        "trust_remote_code": trust_remote_code,
         "token": hf_token,
     }
 

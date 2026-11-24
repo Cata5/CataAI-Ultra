@@ -12,6 +12,7 @@ import math
 import os
 import queue
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -38,6 +39,23 @@ from .state_machine import RunStateMachine
 logger = logging.getLogger("RoCanonWorker")
 
 
+def _first_int(mapping: Dict[str, Any], keys: List[str], default: int) -> int:
+    """Returns the first explicitly provided integer value, treating 0 as valid.
+
+    Using ``a or b or default`` silently converts an explicit 0 (the documented way
+    to disable periodic validation/checkpointing) back into the default interval.
+    """
+    for key in keys:
+        value = mapping.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logger.warning("Ignoring non-numeric %s=%r in run payload", key, value)
+    return default
+
+
 class TrainingWorkerProcess:
     """Manages the full lifecycle of training inside an isolated process."""
 
@@ -61,6 +79,12 @@ class TrainingWorkerProcess:
             on_transition=self._handle_state_transition,
         )
 
+        # Set once the current session has fully finished (DB flushed, terminal event
+        # emitted, GPU resources released). The standalone runner waits on this before
+        # exiting so terminal events can never truncate persistence work.
+        self.session_done = threading.Event()
+        self.session_done.set()
+
         self.current_run_id: Optional[str] = None
         self.current_phase: str = "pretrain"
         self.lr_multiplier: float = 1.0
@@ -71,6 +95,9 @@ class TrainingWorkerProcess:
         self.stop_requested: bool = False
         self.manual_val_requested: bool = False
         self.manual_chk_requested: bool = False
+
+        # Active parameter count of the model under training, used for the FLOPs estimate.
+        self.param_count: int = 0
 
         # Moving average of loss for spike detection
         self.loss_ema: Optional[float] = None
@@ -157,7 +184,11 @@ class TrainingWorkerProcess:
                     cmd_dict = self.cmd_queue.get(timeout=0.1)
                     cmd = WorkerCommand.from_dict(cmd_dict)
                     if cmd.command_type == CommandType.START_RUN:
-                        self._execute_training_session(cmd.payload)
+                        self.session_done.clear()
+                        try:
+                            self._execute_training_session(cmd.payload)
+                        finally:
+                            self.session_done.set()
                     else:
                         self._handle_command(cmd)
                 except queue.Empty:
@@ -220,20 +251,18 @@ class TrainingWorkerProcess:
         target_epochs = int(payload.get("target_epochs") or payload.get("epochs") or 3)
         target_steps = int(payload.get("total_steps") or payload.get("target_steps") or 1000)
         target_tokens = int(payload.get("target_tokens", 10_000_000_000_000))
-        eval_freq = int(
-            payload.get("validation_interval")
-            or payload.get("val_interval")
-            or payload.get("eval_frequency")
-            or payload.get("eval_freq")
-            or config_es.get("eval_frequency")
-            or 250
+        eval_freq = _first_int(
+            payload,
+            ["validation_interval", "val_interval", "eval_frequency", "eval_freq"],
+            _first_int(config_es, ["eval_frequency"], 250),
         )
-        save_freq = int(
-            payload.get("checkpoint_interval")
-            or payload.get("save_frequency")
-            or payload.get("chk_interval")
-            or 50
+        save_freq = _first_int(
+            payload,
+            ["checkpoint_interval", "save_frequency", "chk_interval"],
+            50,
         )
+        eval_freq = max(0, eval_freq)
+        save_freq = max(0, save_freq)
         es_enabled = bool(payload.get("early_stopping_enabled", False))
         es_patience = int(payload.get("early_stopping_patience", 20))
         es_min_delta = float(payload.get("early_stopping_min_delta", 0.001))
@@ -368,6 +397,9 @@ class TrainingWorkerProcess:
                 except Exception as lora_err:
                     logger.warning("LoRA injection failed: %s", lora_err)
 
+            self.param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            logger.info("Trainable parameters: %d", self.param_count)
+
             # Check for Multi-GPU Distributed Training
             use_multi_gpu = bool(payload.get("use_multi_gpu", False))
             device_ids = payload.get("device_ids")
@@ -492,12 +524,25 @@ class TrainingWorkerProcess:
                     },
                 ))
             except Exception as e:
-                logger.warning("Could not fully load checkpoint %s: %s", checkpoint_to_load, e)
-                self._send_event(WorkerEvent(
-                    event_type=EventType.GRADIENT_WARNING,
+                # Never silently continue from step 0 with freshly initialised weights:
+                # the run would look like a resume while discarding all previous training.
+                logger.error("Could not fully load checkpoint %s: %s", checkpoint_to_load, e)
+                self.db.log_alert(
+                    level="CRITICAL",
+                    category="CHECKPOINT_LOAD_FAILED",
+                    message=f"Failed to resume from {checkpoint_to_load}: {e}",
                     run_id=run_id,
-                    payload={"alert": f"Warning: Failed to restore checkpoint {checkpoint_to_load}: {e}"},
+                )
+                self.state_machine.transition_to(RunState.FAILED)
+                self._send_event(WorkerEvent(
+                    event_type=EventType.RUN_FAILED,
+                    run_id=run_id,
+                    payload={
+                        "error": f"Failed to resume from checkpoint {checkpoint_to_load}: {e}",
+                        "checkpoint": str(checkpoint_to_load),
+                    },
                 ))
+                return
 
         # Checkpoint resume & target steps resolution:
         # If user loads a checkpoint at step 10,000 and entered 1,000 steps,
@@ -512,9 +557,6 @@ class TrainingWorkerProcess:
             )
         else:
             session_steps = max(1, target_steps - start_step)
-
-        if total_tokens > 0 and target_tokens <= total_tokens:
-            target_tokens = total_tokens + 10_000_000_000_000
 
         # 4. Configure Early Stopping
         es_cfg = EarlyStoppingConfig(
@@ -565,6 +607,31 @@ class TrainingWorkerProcess:
             batch_len = training_cfg.micro_batch_size * training_cfg.seq_len
             train_len = len(train_inputs)
             val_len = len(val_inputs)
+
+            # Token ids outside the embedding table crash the GPU with an opaque
+            # "device-side assert"; catch the mismatch before the first step instead.
+            model_vocab = int(getattr(getattr(model, "config", None), "vocab_size", 0) or 0)
+            observed_max = int(train_inputs.max().item()) if train_inputs.numel() else -1
+            if model_vocab and observed_max >= model_vocab:
+                message = (
+                    f"Dataset token ids reach {observed_max}, but the selected network's "
+                    f"vocabulary is {model_vocab}. Choose a tokenizer/network pair with the same vocabulary."
+                )
+                logger.error(message)
+                self.db.log_alert(
+                    level="CRITICAL",
+                    category="TOKENIZER_MISMATCH",
+                    message=message,
+                    run_id=run_id,
+                )
+                self._send_event(WorkerEvent(
+                    event_type=EventType.RUN_FAILED,
+                    run_id=run_id,
+                    payload={"error": message},
+                ))
+                if self.state_machine.can_transition_to(RunState.FAILED):
+                    self.state_machine.transition_to(RunState.FAILED)
+                return
         else:
             batch_len = training_cfg.micro_batch_size
             train_len = train_inputs.size(0)
@@ -608,20 +675,18 @@ class TrainingWorkerProcess:
         step = start_step
         base_muon = float(payload.get("muon_lr") or config_opt.get("muon_lr", 3e-3))
         base_adamw = float(payload.get("adamw_lr") or payload.get("peak_lr") or config_opt.get("adamw_lr", 6e-4))
-        eval_freq = int(
-            payload.get("validation_interval")
-            or payload.get("val_interval")
-            or payload.get("eval_frequency")
-            or payload.get("eval_freq")
-            or config_es.get("eval_frequency")
-            or 250
+        eval_freq = _first_int(
+            payload,
+            ["validation_interval", "val_interval", "eval_frequency", "eval_freq"],
+            _first_int(config_es, ["eval_frequency"], 250),
         )
-        save_freq = int(
-            payload.get("checkpoint_interval")
-            or payload.get("save_frequency")
-            or payload.get("chk_interval")
-            or 50
+        save_freq = _first_int(
+            payload,
+            ["checkpoint_interval", "save_frequency", "chk_interval"],
+            50,
         )
+        eval_freq = max(0, eval_freq)
+        save_freq = max(0, save_freq)
         grad_norm: Optional[float] = None
 
         # Metrics write buffer for batch sqlite commits
@@ -670,6 +735,7 @@ class TrainingWorkerProcess:
                     break
 
                 step += 1
+                valid_tokens_in_step = 0
                 t0 = time.time()
 
                 # Dynamic Learning Rate Scheduling & Adaptation
@@ -719,14 +785,15 @@ class TrainingWorkerProcess:
                     sched_phase = "constant"
 
                 # 2. Gradient stability protection (prevents catastrophic weight blowouts)
-                if grad_norm is not None and grad_norm > 15.0:
+                if not self.auto_lr_adjust:
+                    # Adaptive LR disabled by the user: never attenuate the configured schedule.
+                    self.adaptive_lr_factor = 1.0
+                elif grad_norm is not None and grad_norm > 15.0:
                     # Dynamically scale down LR during gradient shocks to preserve model weights
                     spike_attenuation = max(0.1, 15.0 / grad_norm)
                     self.adaptive_lr_factor = min(self.adaptive_lr_factor * 0.90, spike_attenuation)
                 elif grad_norm is not None and grad_norm < 5.0 and self.adaptive_lr_factor < 1.0:
                     self.adaptive_lr_factor = min(1.0, self.adaptive_lr_factor * 1.05)
-                elif not self.auto_lr_adjust and (grad_norm is None or grad_norm <= 15.0):
-                    self.adaptive_lr_factor = 1.0
 
                 # 3. Dynamic Base LR overrides (live adjustment from dashboard)
                 active_base_muon = self.dynamic_muon_lr if self.dynamic_muon_lr is not None else base_muon
@@ -794,7 +861,8 @@ class TrainingWorkerProcess:
                             batch_in = train_inputs[idx]
                             batch_lbl = train_labels[idx] if train_labels is not None else None
 
-                        trainer.accumulate_micro_batch(input_ids=batch_in, labels=batch_lbl)
+                        _, micro_valid = trainer.accumulate_micro_batch(input_ids=batch_in, labels=batch_lbl)
+                        valid_tokens_in_step += max(0, int(micro_valid))
 
                         self._poll_commands()
                         if self.stop_requested or self.state_machine.current_state == RunState.STOPPING:
@@ -804,10 +872,15 @@ class TrainingWorkerProcess:
                         logger.info("Stopping requested during micro-batch accumulation at step %d", step)
                         break
 
-                    tokens_in_step = training_cfg.micro_batch_size * (training_cfg.seq_len - 1) * training_cfg.grad_accum_steps
+                    # Throughput describes hardware work (all positions); progress and
+                    # scheduler tokens describe labels that actually contributed to the
+                    # loss. SFT prompts are masked, so conflating the two overstates
+                    # training progress (AUD-023).
+                    processed_tokens_in_step = training_cfg.micro_batch_size * (training_cfg.seq_len - 1) * training_cfg.grad_accum_steps
+                    tokens_in_step = valid_tokens_in_step or processed_tokens_in_step
                     total_tokens += tokens_in_step
 
-                    grad_norm = trainer.optimizer_step(num_tokens_in_step=total_tokens, advance_scheduler=False)
+                    grad_norm = trainer.optimizer_step(num_tokens_in_step=tokens_in_step, advance_scheduler=False)
                     scheduler.current_step = step
                     scheduler.current_tokens = total_tokens
                     train_loss = trainer.loss_accumulator.reset()
@@ -834,8 +907,9 @@ class TrainingWorkerProcess:
                         self.state_machine.transition_to(RunState.PAUSING)
                     continue
 
-                tok_per_sec = tokens_in_step / max(1e-5, dt)
-                tflops = (tok_per_sec * 354.11e6) / 1e12
+                tok_per_sec = processed_tokens_in_step / max(1e-5, dt)
+                # Dense-transformer training cost is ~6 * N * T FLOPs (fwd + bwd).
+                tflops = (6.0 * max(1, self.param_count) * tok_per_sec) / 1e12
 
                 # Stability checks: NaN / Inf / Spike detection
                 if math.isnan(train_loss) or math.isinf(train_loss):
@@ -1016,7 +1090,12 @@ class TrainingWorkerProcess:
                     ))
 
                 # Telemetry & Memory
-                vram_gb = trainer.memory_tracker.get_peak_allocated_gb() if torch.cuda.is_available() else 0.0
+                vram_peak_gb = trainer.memory_tracker.get_peak_allocated_gb() if torch.cuda.is_available() else 0.0
+                vram_gb = (
+                    torch.cuda.memory_allocated(device) / (1024 ** 3)
+                    if torch.cuda.is_available()
+                    else 0.0
+                )
 
                 # Check Dynamic VRAM Protection
                 if device.type == "cuda":
@@ -1026,7 +1105,9 @@ class TrainingWorkerProcess:
                     pt_cache_free = max(0, pt_reserved - pt_allocated)
                     effective_free_mb = (free_b + pt_cache_free) / (1024 * 1024)
 
-                    alert_lvl, alert_msg = self.vram_guard.evaluate(effective_free_mb, pytorch_allocated_mb=vram_gb * 1024)
+                    # The guard stays on peak allocation: it is the conservative
+                    # number, while the UI now receives current allocation.
+                    alert_lvl, alert_msg = self.vram_guard.evaluate(effective_free_mb, pytorch_allocated_mb=vram_peak_gb * 1024)
                     now_t = time.time()
                     if alert_lvl in (VRAMAlertLevel.CRITICAL, VRAMAlertLevel.EMERGENCY):
                         if (now_t - self._last_vram_alert_time) > 30.0:
@@ -1114,6 +1195,7 @@ class TrainingWorkerProcess:
                     "target_epochs": target_epochs if duration_mode == "epochs" else None,
                     "tokens_per_epoch": train_len,
                     "vram_used_gb": round(vram_gb, 2),
+                    "vram_peak_gb": round(vram_peak_gb, 2),
                     "memory_allocated_mb": round(vram_gb * 1024, 1),
                     "tokens_seen": total_tokens,
                     "tok_per_sec": round(tok_per_sec, 1),
@@ -1336,14 +1418,18 @@ class TrainingWorkerProcess:
             if self.stop_requested or self.state_machine.current_state in (RunState.STOPPING, RunState.RUNNING):
                 logger.info("Finalizing run stop at step %d", step)
                 try:
-                    detector.restore_best(model)
-                    self.checkpoint_manager.save_checkpoint(
+                    # Save the *live* training state. Restoring the best-validation
+                    # weights here would pair old weights with the current optimizer
+                    # moments, producing a checkpoint that cannot be resumed correctly.
+                    snapshot_path = self.checkpoint_manager.save_checkpoint(
                         model=model,
                         step=step,
                         tokens_seen=total_tokens,
                         optimizers=(muon_opt, adamw_opt),
                         scheduler=scheduler,
                         phase=phase,
+                        val_loss=self.latest_val_loss,
+                        train_loss=train_loss if 'train_loss' in locals() else None,
                         run_id=run_id,
                         filename_prefix="stopped_snapshot",
                         workspace_id=self.workspace_id,
@@ -1370,12 +1456,20 @@ class TrainingWorkerProcess:
                             val_loss=float(self.latest_val_loss) if self.latest_val_loss is not None else None,
                             tokens_seen=total_tokens,
                             elapsed_sec=float(self.cumulative_active_time),
-                            snapshot_path=f"stopped_snapshot_step_{step}.pt",
+                            snapshot_path=snapshot_path.name if snapshot_path else None,
                         )
                     except Exception as stop_we:
                         logger.debug("Run stop notification error: %s", stop_we)
                 except Exception as save_err:
-                    logger.warning("Could not save stopped snapshot: %s", save_err)
+                    logger.error("Could not save stopped snapshot: %s", save_err)
+                    snapshot_path = None
+                    self.db.log_alert(
+                        level="ERROR",
+                        category="CHECKPOINT_SAVE_FAILED",
+                        message=f"Could not save the stop snapshot at step {step}: {save_err}",
+                        run_id=run_id,
+                        step=step,
+                    )
 
                 if self.state_machine.current_state == RunState.RUNNING:
                     if self.state_machine.can_transition_to(RunState.STOPPING):
@@ -1395,7 +1489,22 @@ class TrainingWorkerProcess:
             if metrics_buffer:
                 self.db.log_metrics_batch(run_id, metrics_buffer)
                 metrics_buffer.clear()
-            self.db.update_run_status(run_id, self.state_machine.current_state.value, step=step, tokens=total_tokens)
+            final_train_loss = train_loss if 'train_loss' in locals() and train_loss is not None else None
+            best_val = None
+            if 'detector' in locals():
+                try:
+                    if detector.best_val_loss < float("inf"):
+                        best_val = float(detector.best_val_loss)
+                except Exception:
+                    best_val = None
+            self.db.update_run_status(
+                run_id,
+                self.state_machine.current_state.value,
+                step=step,
+                tokens=total_tokens,
+                best_val_loss=best_val,
+                final_loss=float(final_train_loss) if final_train_loss is not None else None,
+            )
             logger.info("Session %s ended with state %s at step %d", run_id, self.state_machine.current_state.value, step)
 
             # Comprehensive GPU & CPU resource cleanup

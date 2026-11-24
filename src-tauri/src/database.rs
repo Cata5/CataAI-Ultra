@@ -2,7 +2,8 @@
 //! Native SQLite Database Manager for LLM Maker in Rust.
 //! Provides instant (<1ms) workspace, run, and metric queries without launching Python.
 
-use rusqlite::{params, Connection, Result};
+use crate::secrets::{is_secret_key, SecretStore, REDACTED, SECRET_KEYS};
+use rusqlite::{params, Connection, OptionalExtension, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -51,15 +52,70 @@ pub struct CheckpointRecord {
 
 pub struct DatabaseManager {
     db_path: String,
+    secrets: SecretStore,
+}
+
+
+/// Checks for encrypted rows without creating a replacement key.
+fn encrypted_secret_exists(db_path: &str) -> Result<bool> {
+    let path = Path::new(db_path);
+    if !path.exists() {
+        return Ok(false);
+    }
+    let conn = Connection::open(path)?;
+    let table: Option<String> = conn
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'settings'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if table.is_none() {
+        return Ok(false);
+    }
+    let mut stmt = conn.prepare("SELECT value_json FROM settings WHERE key IN (?1, ?2)")?;
+    let rows = stmt.query_map(params![SECRET_KEYS[0], SECRET_KEYS[1]], |row| {
+        let value: String = row.get(0)?;
+        Ok(value)
+    })?;
+    for row in rows.flatten() {
+        if let Ok(serde_json::Value::String(value)) =
+            serde_json::from_str::<serde_json::Value>(&row)
+        {
+            if SecretStore::is_encrypted(&value) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 impl DatabaseManager {
-    pub fn new(db_path: &str) -> Self {
+    /// Opens the database and applies pending migrations.
+    ///
+    /// Initialization errors are returned instead of ignored: silently running
+    /// against an unknown or half-migrated schema is how data gets corrupted.
+    pub fn new(db_path: &str) -> Result<Self> {
+        let key_path = Path::new(db_path)
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(".secrets.key");
+        // Never replace a missing key while encrypted rows exist: doing so would
+        // silently make every stored credential undecryptable.
+        if !key_path.exists() && encrypted_secret_exists(db_path)? {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "the encryption key {} is missing; restore the matching .secrets.key file",
+                key_path.display()
+            )));
+        }
+        let secrets = SecretStore::load_or_create(&key_path)
+            .map_err(rusqlite::Error::InvalidParameterName)?;
         let mgr = Self {
             db_path: db_path.to_string(),
+            secrets,
         };
-        let _ = mgr.init_tables();
-        mgr
+        mgr.init_tables()?;
+        Ok(mgr)
     }
 
     fn open(&self) -> Result<Connection> {
@@ -67,125 +123,27 @@ impl DatabaseManager {
         if let Some(parent) = p.parent() {
             let _ = fs::create_dir_all(parent);
         }
-        Connection::open(&self.db_path)
+        let conn = Connection::open(&self.db_path)?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        Ok(conn)
     }
 
     pub fn init_tables(&self) -> Result<()> {
         let conn = self.open()?;
-        conn.execute_batch(
-            r#"
-            CREATE TABLE IF NOT EXISTS workspaces (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                description TEXT DEFAULT '',
-                root_path TEXT NOT NULL,
-                is_active INTEGER DEFAULT 0,
-                config_json TEXT DEFAULT '{}',
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
 
-            CREATE TABLE IF NOT EXISTS runs (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                current_phase TEXT NOT NULL,
-                dataset_source TEXT,
-                workspace_id TEXT DEFAULT 'default',
-                total_steps INTEGER DEFAULT 0,
-                total_tokens INTEGER DEFAULT 0,
-                best_val_loss REAL,
-                final_loss REAL,
-                config_json TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
+        // quick_check is cheap on startup and catches a damaged file before the
+        // migration runner takes a backup of it or writes new tables.
+        let check: String = conn.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+        if !check.eq_ignore_ascii_case("ok") {
+            log::error!("Database integrity check failed for {:?}: {}", self.db_path, check);
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "database integrity check failed: {}; stop the app and restore a backup",
+                check
+            )));
+        }
 
-            CREATE TABLE IF NOT EXISTS metrics (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                step INTEGER NOT NULL,
-                tokens INTEGER NOT NULL,
-                train_loss REAL NOT NULL,
-                val_loss REAL,
-                generalization_gap REAL,
-                grad_norm REAL DEFAULT 0.0,
-                muon_lr REAL DEFAULT 0.0,
-                adamw_lr REAL DEFAULT 0.0,
-                vram_used_gb REAL DEFAULT 0.0,
-                tok_per_sec REAL DEFAULT 0.0,
-                tflops REAL DEFAULT 0.0,
-                timestamp REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS datasets (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                file_path TEXT NOT NULL,
-                file_size_bytes INTEGER DEFAULT 0,
-                format TEXT NOT NULL,
-                workspace_id TEXT DEFAULT 'default',
-                token_count INTEGER DEFAULT 0,
-                sample_count INTEGER DEFAULT 0,
-                revision TEXT NOT NULL DEFAULT '1',
-                stats_json TEXT DEFAULT '{}',
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS checkpoints (
-                id TEXT PRIMARY KEY,
-                run_id TEXT,
-                step INTEGER NOT NULL,
-                tokens INTEGER DEFAULT 0,
-                train_loss REAL,
-                val_loss REAL,
-                file_path TEXT NOT NULL,
-                file_size_bytes INTEGER DEFAULT 0,
-                phase TEXT,
-                workspace_id TEXT DEFAULT 'default',
-                metadata_json TEXT DEFAULT '{}',
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS alerts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT,
-                level TEXT NOT NULL,
-                category TEXT NOT NULL,
-                message TEXT NOT NULL,
-                step INTEGER DEFAULT 0,
-                timestamp REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS pipelines (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                status TEXT NOT NULL,
-                current_phase_idx INTEGER DEFAULT 0,
-                phases_json TEXT NOT NULL,
-                state_json TEXT,
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS benchmarks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT,
-                checkpoint_id TEXT,
-                step INTEGER DEFAULT 0,
-                category TEXT NOT NULL,
-                score REAL DEFAULT 0.0,
-                results_json TEXT,
-                created_at REAL NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value_json TEXT NOT NULL,
-                updated_at REAL NOT NULL
-            );
-            "#,
-        )?;
+        self.ensure_schema(&conn)?;
+        self.migrate_plaintext_secrets(&conn)?;
 
         // Ensure default workspace exists
         let count: i64 = conn
@@ -212,6 +170,179 @@ impl DatabaseManager {
         }
 
         Ok(())
+    }
+
+    /// Applies the shared SQL migrations embedded at compile time.
+    ///
+    /// The Python control plane executes the same files, so the schema has exactly
+    /// one definition and one version history.
+    fn ensure_schema(&self, conn: &Connection) -> Result<()> {
+        const MIGRATIONS: &[(i64, &str, &str)] = &[
+            (1, "001_baseline.sql", include_str!("../../src/db/migrations/001_baseline.sql")),
+            (2, "002_final_loss.sql", include_str!("../../src/db/migrations/002_final_loss.sql")),
+            (3, "003_workspace_columns.sql", include_str!("../../src/db/migrations/003_workspace_columns.sql")),
+        ];
+
+        let latest = MIGRATIONS.last().map(|m| m.0).unwrap_or(0);
+        let current = self.schema_version(conn)?;
+        if current > latest {
+            // Written by a newer build; do not write against an unknown schema.
+            log::error!(
+                "Database schema version {} is newer than supported version {}",
+                current, latest
+            );
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "database schema version {} is newer than this build supports ({})",
+                current, latest
+            )));
+        }
+        if current == latest {
+            return Ok(());
+        }
+
+        if self.has_user_tables(conn) {
+            match self.backup_database(conn) {
+                Some(path) => {
+                    crate::log_trace(&format!("Pre-migration database backup written: {:?}", path));
+                }
+                None => {
+                    // Never upgrade a populated database without a recovery point.
+                    log::error!("Pre-migration backup failed; refusing to migrate {:?}", self.db_path);
+                    return Err(rusqlite::Error::InvalidParameterName(
+                        "pre-migration database backup failed; refusing to upgrade".to_string(),
+                    ));
+                }
+            }
+        }
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at REAL NOT NULL)",
+            [],
+        )?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+
+        for &(version, filename, sql) in MIGRATIONS {
+            if version <= current {
+                continue;
+            }
+            for statement in split_sql_statements(sql) {
+                match conn.execute(&statement, []) {
+                    Ok(_) => {}
+                    // The baseline creates columns that later ALTERs add; on an
+                    // existing database "duplicate column name" means satisfied.
+                    Err(err)
+                        if statement.trim_start().to_uppercase().starts_with("ALTER")
+                            && err.to_string().to_lowercase().contains("duplicate column name") => {}
+                    Err(err) => return Err(err),
+                }
+            }
+            conn.execute(
+                "INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![version, filename, now],
+            )?;
+            crate::log_trace(&format!("Applied database migration {} ({})", version, filename));
+            log::info!("Applied database migration {} ({})", version, filename);
+        }
+        Ok(())
+    }
+
+    fn schema_version(&self, conn: &Connection) -> Result<i64> {
+        let exists: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
+            [],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            return Ok(0);
+        }
+        Ok(conn
+            .query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |row| row.get(0))
+            .unwrap_or(0))
+    }
+
+    fn has_user_tables(&self, conn: &Connection) -> bool {
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('runs', 'workspaces')",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count > 0)
+        .unwrap_or(false)
+    }
+
+    /// Copies the database with SQLite's online backup API before a schema change.
+    fn backup_database(&self, conn: &Connection) -> Option<std::path::PathBuf> {
+        use rusqlite::backup::Backup;
+        use std::time::Duration;
+
+        let db = Path::new(&self.db_path);
+        if !db.exists() {
+            return None;
+        }
+        let dir = db.parent()?.join("backups");
+        fs::create_dir_all(&dir).ok()?;
+        let stem = db.file_stem()?.to_string_lossy().to_string();
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        let mut target = dir.join(format!("{}-{}.db", stem, secs));
+        let mut suffix = 1;
+        while target.exists() {
+            target = dir.join(format!("{}-{}-{}.db", stem, secs, suffix));
+            suffix += 1;
+        }
+        let mut dest = Connection::open(&target).ok()?;
+        {
+            let backup = Backup::new(conn, &mut dest).ok()?;
+            backup
+                .run_to_completion(5, Duration::from_millis(50), None)
+                .ok()?;
+        }
+        Self::prune_backups(&dir, &stem);
+        Some(target)
+    }
+
+    fn prune_backups(dir: &Path, stem: &str) {
+        let mut backups: Vec<_> = fs::read_dir(dir)
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with(&format!("{}-", stem))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        backups.sort_by_key(|entry| entry.metadata().and_then(|m| m.modified()).ok());
+        if backups.len() > 10 {
+            for stale in &backups[..backups.len() - 10] {
+                let _ = fs::remove_file(stale.path());
+            }
+        }
+    }
+    /// Marks runs left in a non-terminal state by a crash/forced exit as stopped.
+    ///
+    /// Without this, a killed desktop session leaves runs permanently displayed as
+    /// RUNNING/STOPPING, which also makes the UI believe a worker is active.
+    pub fn recover_stale_runs(&self) -> Result<usize> {
+        let conn = self.open()?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        let updated = conn.execute(
+            "UPDATE runs SET status = 'STOPPED', updated_at = ?1 WHERE status IN ('STARTING','RUNNING','PAUSING','PAUSED','STOPPING')",
+            params![now],
+        )?;
+        Ok(updated)
     }
 
     pub fn list_workspaces(&self) -> Result<Vec<WorkspaceItem>> {
@@ -389,10 +520,15 @@ impl DatabaseManager {
             let _ = conn.execute("UPDATE workspaces SET is_active = 1 WHERE id = 'default'", []);
         }
 
-        conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
+        // Children before the parent; metrics would otherwise outlive their run.
+        conn.execute(
+            "DELETE FROM metrics WHERE run_id IN (SELECT id FROM runs WHERE workspace_id = ?1)",
+            params![id],
+        )?;
         conn.execute("DELETE FROM runs WHERE workspace_id = ?1", params![id])?;
         conn.execute("DELETE FROM datasets WHERE workspace_id = ?1", params![id])?;
         conn.execute("DELETE FROM checkpoints WHERE workspace_id = ?1", params![id])?;
+        conn.execute("DELETE FROM workspaces WHERE id = ?1", params![id])?;
 
         let ws_dir = format!("workspaces/{}", id);
         let _ = fs::remove_dir_all(&ws_dir);
@@ -402,14 +538,10 @@ impl DatabaseManager {
 
     pub fn list_runs(&self, workspace_id: Option<&str>) -> Result<Vec<RunSummary>> {
         let conn = self.open()?;
-        let query = if let Some(wid) = workspace_id {
-            format!("SELECT id, name, current_phase, status, final_loss, total_steps, created_at, workspace_id FROM runs WHERE workspace_id = '{}' ORDER BY created_at DESC", wid)
-        } else {
-            "SELECT id, name, current_phase, status, final_loss, total_steps, created_at, workspace_id FROM runs ORDER BY created_at DESC".to_string()
-        };
-
-        let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map([], |row| {
+        // Parameterised: workspace ids are user-controlled and must never be interpolated.
+        let query = "SELECT id, name, current_phase, status, COALESCE(final_loss, best_val_loss), total_steps, created_at, workspace_id FROM runs WHERE (?1 IS NULL OR workspace_id = ?1) ORDER BY created_at DESC";
+        let mut stmt = conn.prepare(query)?;
+        let rows = stmt.query_map(params![workspace_id], |row| {
             Ok(RunSummary {
                 run_id: row.get(0)?,
                 name: row.get(1)?,
@@ -431,14 +563,9 @@ impl DatabaseManager {
 
     pub fn list_checkpoints(&self, workspace_id: Option<&str>) -> Result<Vec<CheckpointRecord>> {
         let conn = self.open()?;
-        let query = if let Some(wid) = workspace_id {
-            format!("SELECT id, run_id, step, tokens, train_loss, val_loss, file_path, file_size_bytes, phase, workspace_id, created_at FROM checkpoints WHERE workspace_id = '{}' ORDER BY step DESC", wid)
-        } else {
-            "SELECT id, run_id, step, tokens, train_loss, val_loss, file_path, file_size_bytes, phase, workspace_id, created_at FROM checkpoints ORDER BY step DESC".to_string()
-        };
-
-        let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map([], |row| {
+        let query = "SELECT id, run_id, step, tokens, train_loss, val_loss, file_path, file_size_bytes, phase, workspace_id, created_at FROM checkpoints WHERE (?1 IS NULL OR workspace_id = ?1) ORDER BY step DESC";
+        let mut stmt = conn.prepare(query)?;
+        let rows = stmt.query_map(params![workspace_id], |row| {
             Ok(CheckpointRecord {
                 id: row.get(0)?,
                 run_id: row.get(1).ok(),
@@ -602,7 +729,31 @@ impl DatabaseManager {
 
         let mut map = serde_json::Map::new();
         for r in rows.flatten() {
-            let val: serde_json::Value = serde_json::from_str(&r.1).unwrap_or(serde_json::Value::String(r.1));
+            let mut val: serde_json::Value =
+                serde_json::from_str(&r.1).unwrap_or(serde_json::Value::String(r.1));
+            if is_secret_key(&r.0) {
+                if let Some(stored) = val.as_str() {
+                    let plaintext = if stored.is_empty() {
+                        String::new()
+                    } else {
+                        self.secrets.decrypt(stored).map_err(|err| {
+                            rusqlite::Error::InvalidParameterName(format!(
+                                "cannot decrypt setting {}: {}",
+                                r.0, err
+                            ))
+                        })?
+                    };
+                    map.insert(
+                        format!("{}_configured", r.0),
+                        serde_json::Value::Bool(!plaintext.is_empty()),
+                    );
+                    val = if plaintext.is_empty() {
+                        serde_json::Value::String(String::new())
+                    } else {
+                        serde_json::Value::String(REDACTED.to_string())
+                    };
+                }
+            }
             map.insert(r.0, val);
         }
         Ok(serde_json::Value::Object(map))
@@ -616,12 +767,79 @@ impl DatabaseManager {
                 .unwrap()
                 .as_secs_f64();
             for (k, v) in obj {
-                let v_str = serde_json::to_string(v).unwrap_or_default();
+                // Presence flags are derived on read and are never persisted.
+                if k.ends_with("_configured") {
+                    continue;
+                }
+                let mut value = v.clone();
+                if is_secret_key(k) {
+                    let plaintext = match &value {
+                        serde_json::Value::Null => "",
+                        serde_json::Value::String(s) => s.as_str(),
+                        _ => {
+                            return Err(rusqlite::Error::InvalidParameterName(format!(
+                                "setting {} must be a string",
+                                k
+                            )))
+                        }
+                    };
+                    if plaintext == REDACTED {
+                        continue;
+                    }
+                    let sealed = self.secrets.encrypt(plaintext).map_err(|err| {
+                        rusqlite::Error::InvalidParameterName(format!(
+                            "cannot encrypt setting {}: {}",
+                            k, err
+                        ))
+                    })?;
+                    value = serde_json::Value::String(sealed);
+                }
+                let v_str = serde_json::to_string(&value)
+                    .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))?;
                 conn.execute(
                     "INSERT OR REPLACE INTO settings (key, value_json, updated_at) VALUES (?1, ?2, ?3)",
                     params![k, v_str, now],
                 )?;
             }
+        }
+        Ok(())
+    }
+
+    fn migrate_plaintext_secrets(&self, conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare("SELECT key, value_json FROM settings")?;
+        let rows = stmt.query_map([], |row| {
+            let k: String = row.get(0)?;
+            let v: String = row.get(1)?;
+            Ok((k, v))
+        })?;
+        let mut updates = Vec::new();
+        for (key, raw) in rows.flatten() {
+            if !is_secret_key(&key) {
+                continue;
+            }
+            let Ok(serde_json::Value::String(value)) =
+                serde_json::from_str::<serde_json::Value>(&raw)
+            else {
+                continue;
+            };
+            if value.is_empty() || SecretStore::is_encrypted(&value) {
+                continue;
+            }
+            updates.push((key, value));
+        }
+        drop(stmt);
+        for (key, plaintext) in updates {
+            let sealed = self.secrets.encrypt(&plaintext).map_err(|err| {
+                rusqlite::Error::InvalidParameterName(format!(
+                    "cannot encrypt legacy setting {}: {}",
+                    key, err
+                ))
+            })?;
+            conn.execute(
+                "UPDATE settings SET value_json = ?1 WHERE key = ?2",
+                params![serde_json::to_string(&sealed).unwrap_or_default(), key],
+            )?;
+            log::info!("Encrypted legacy plaintext setting {}", key);
         }
         Ok(())
     }
@@ -828,4 +1046,17 @@ impl DatabaseManager {
             "phases": phases,
         }))
     }
+}
+
+fn split_sql_statements(sql: &str) -> Vec<String> {
+    let without_comments: String = sql
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("--"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    without_comments
+        .split(';')
+        .map(|statement| statement.trim().to_string())
+        .filter(|statement| !statement.is_empty())
+        .collect()
 }

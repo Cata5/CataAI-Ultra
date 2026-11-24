@@ -32,6 +32,54 @@ class TestStudioAPI(AioHTTPTestCase):
         assert "state" in data
         assert "latest_metrics" in data
 
+    async def test_local_origin_is_reflected(self):
+        resp = await self.client.request(
+            "GET", "/api/system/status", headers={"Origin": "http://localhost:3000"}
+        )
+        assert resp.status == 200
+        assert resp.headers.get("Access-Control-Allow-Origin") == "http://localhost:3000"
+
+    async def test_remote_origin_cannot_mutate(self):
+        resp = await self.client.request(
+            "POST",
+            "/api/action",
+            headers={"Origin": "https://evil.example"},
+            json={"action": "stop"},
+        )
+        assert resp.status == 403
+
+    async def test_remote_origin_cannot_read(self):
+        resp = await self.client.request(
+            "GET", "/api/settings", headers={"Origin": "https://evil.example"}
+        )
+        assert resp.status == 200
+        assert "Access-Control-Allow-Origin" not in resp.headers
+
+    async def test_null_origin_gets_no_cors_permission(self):
+        resp = await self.client.get("/api/system/status", headers={"Origin": "null"})
+        assert resp.status == 200
+        assert "Access-Control-Allow-Origin" not in resp.headers
+
+    async def test_null_origin_post_is_rejected(self):
+        resp = await self.client.post(
+            "/api/settings",
+            json={},
+            headers={"Origin": "null", "Content-Type": "application/json"},
+        )
+        assert resp.status == 403
+
+    async def test_ipv6_local_host_is_allowed(self):
+        resp = await self.client.request(
+            "GET", "/api/system/status", headers={"Host": "[::1]:8080"}
+        )
+        assert resp.status == 200
+
+    async def test_foreign_host_header_is_rejected(self):
+        resp = await self.client.request(
+            "GET", "/api/system/status", headers={"Host": "evil.example:8080"}
+        )
+        assert resp.status == 403
+
     async def test_get_hardware(self):
         resp = await self.client.request("GET", "/api/hardware")
         assert resp.status == 200

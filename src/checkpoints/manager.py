@@ -12,7 +12,6 @@ import logging
 import os
 import random
 import re
-import shutil
 import time
 import uuid
 from pathlib import Path
@@ -26,6 +25,24 @@ from ..db.database import StudioDatabase
 logger = logging.getLogger(__name__)
 
 DEFAULT_CHECKPOINT_DIR = Path("checkpoints")
+
+
+def safe_torch_load(path: Union[str, Path], map_location: str = "cpu") -> Any:
+    """Loads a checkpoint with restricted unpickling (tensors and primitives only).
+
+    Checkpoints are user-supplied artefacts (imports, plugins, shared runs), so the
+    unrestricted "weights_only=False" pickle loader must never be used as a fallback:
+    doing so executes arbitrary code embedded in the file. Callers get a clear error
+    instead when a checkpoint cannot be deserialized safely.
+    """
+    try:
+        return torch.load(path, map_location=map_location, weights_only=True)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Refusing to deserialize checkpoint '{Path(path).name}' with unrestricted "
+            f"unpickling (weights_only load failed: {exc}). Re-export the checkpoint "
+            f"with a current version of the trainer."
+        ) from exc
 
 
 class CheckpointManager:
@@ -121,26 +138,21 @@ class CheckpointManager:
             torch.save(checkpoint_payload, temp_path)
             replaced = False
             last_err = None
-            for attempt in range(8):
+            for attempt in range(10):
                 try:
                     os.replace(temp_path, target_path)
                     replaced = True
                     break
                 except (PermissionError, OSError) as e:
                     last_err = e
-                    time.sleep(0.15 * (attempt + 1))
-                    if attempt >= 2 and target_path.exists():
-                        try:
-                            target_path.unlink(missing_ok=True)
-                        except Exception:
-                            pass
+                    time.sleep(0.2 * (attempt + 1))
             if not replaced:
-                try:
-                    shutil.copyfile(temp_path, target_path)
-                    replaced = True
-                except Exception as fb_err:
-                    logger.error("Failed to replace checkpoint atomically: %s, fallback failed: %s", last_err, fb_err)
-                    raise last_err or fb_err
+                # Never delete the previous good checkpoint or copy non-atomically here:
+                # a half-written checkpoint silently destroys a resumable run.
+                logger.error("Failed to atomically replace checkpoint %s: %s", target_path, last_err)
+                raise RuntimeError(
+                    f"Could not atomically write checkpoint '{target_path.name}': {last_err}"
+                ) from last_err
 
             file_size = target_path.stat().st_size
             logger.info("Saved atomic checkpoint to %s (%d bytes)", target_path, file_size)
@@ -244,16 +256,15 @@ class CheckpointManager:
             if found.is_file():
                 return found.resolve()
 
-        # Check legacy project location if present
-        cand_legacy = Path(r"d:\proiecte\LLM from Scratch\checkpoints") / p.name
-        if cand_legacy.is_file():
-            return cand_legacy.resolve()
-
-        # Fallback search across repository root
-        for found in Path(".").glob(f"**/{p.name}"):
-            p_str = str(found)
-            if found.is_file() and not p_str.startswith(".venv") and not p_str.startswith(".git"):
-                return found.resolve()
+        # Bounded fallback: only known artefact directories. A repository-wide search
+        # could silently resolve to an unrelated file with the same name (e.g. a
+        # downloaded copy) and is unbounded in time on large trees.
+        for artefact_root in (Path("checkpoints_v2"), Path("workspaces")):
+            if not artefact_root.is_dir():
+                continue
+            for found in artefact_root.glob(f"**/{p.name}"):
+                if found.is_file():
+                    return found.resolve()
 
         raise FileNotFoundError(f"Checkpoint not found on disk: {checkpoint_path}")
 
@@ -280,11 +291,8 @@ class CheckpointManager:
             sd = load_file(str(path), device=str(target_device))
             raw_payload = {"model_state_dict": sd, "step": 0, "tokens_seen": 0}
         else:
-            # Safe checkpoint deserialization with fallback for numpy/custom RNG states
-            try:
-                raw_payload = torch.load(path, map_location="cpu", weights_only=True)
-            except Exception:
-                raw_payload = torch.load(path, map_location="cpu", weights_only=False)
+            # Safe checkpoint deserialization: never fall back to unrestricted pickle.
+            raw_payload = safe_torch_load(path, map_location="cpu")
 
         # Extract model state dict
         if isinstance(raw_payload, dict) and "model_state_dict" in raw_payload:
@@ -586,7 +594,7 @@ class CheckpointManager:
 
         if save_mode == "best" and best_chk_path.exists():
             try:
-                payload_to_use = torch.load(best_chk_path, map_location="cpu", weights_only=False)
+                payload_to_use = safe_torch_load(best_chk_path, map_location="cpu")
                 logger.info("Loaded best_model.pt for local package '%s'", target_name)
             except Exception as e:
                 logger.warning("Could not load best_model.pt (%s), falling back to active model or latest", e)
@@ -603,8 +611,8 @@ class CheckpointManager:
             
             payload_to_use = {
                 "version": "2.0",
-                "step": getattr(active_model, "global_step", 0),
-                "tokens_seen": 0,
+                "step": int(getattr(active_scheduler, "current_step", 0) or 0),
+                "tokens_seen": int(getattr(active_scheduler, "current_tokens", 0) or 0),
                 "model_state_dict": {k: v.cpu() for k, v in active_model.state_dict().items()},
                 "muon_state_dict": muon_sd,
                 "adamw_state_dict": adamw_sd,
@@ -616,7 +624,7 @@ class CheckpointManager:
             chk_files = [p for p in self.checkpoint_dir.glob("*.pt") if not p.name.startswith(".tmp")]
             if chk_files:
                 chk_files.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                payload_to_use = torch.load(chk_files[0], map_location="cpu", weights_only=False)
+                payload_to_use = safe_torch_load(chk_files[0], map_location="cpu")
 
         if not payload_to_use or "model_state_dict" not in payload_to_use:
             raise RuntimeError(f"No checkpoint or active model weights found to save package '{target_name}'.")
@@ -775,35 +783,39 @@ class CheckpointManager:
         return meta_info
 
     def delete_checkpoint(self, filename_or_path: str) -> bool:
-        """Deletes checkpoint from disk and database."""
+        """Deletes a checkpoint file, its metadata sidecar and its database row."""
         path = Path(filename_or_path)
         if not path.is_absolute():
             path = self.checkpoint_dir / path.name
+
+        chk_id = path.stem
+        removed = False
+
         if path.exists():
             try:
                 path.unlink()
+                removed = True
             except Exception as e:
                 logger.warning("Could not unlink %s: %s", path, e)
                 return False
 
-            # Delete companion JSON if present
-            meta_path = path.with_suffix(".json")
-            if meta_path.exists():
-                try:
-                    meta_path.unlink()
-                except Exception:
-                    pass
+        # Delete companion JSON if present
+        meta_path = path.with_suffix(".json")
+        if meta_path.exists():
+            try:
+                meta_path.unlink()
+            except Exception:
+                pass
 
-            if self.db is not None:
-                # Remove from database by matching path suffix or id
-                chk_id = path.stem
-                try:
-                    self.db.delete_checkpoint(chk_id)
-                except Exception:
-                    pass
-            return True
-        return False
-        return False
+        # Always clear the row: a checkpoint whose file was removed outside the app
+        # must not stay listed forever as a broken entry.
+        if self.db is not None:
+            try:
+                if self.db.delete_checkpoint(chk_id) is not None:
+                    removed = True
+            except Exception:
+                pass
+        return removed
 
     def prune_checkpoints(self, keep_last_n: int = 4) -> List[str]:
         """
