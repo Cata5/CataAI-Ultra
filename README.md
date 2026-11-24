@@ -126,10 +126,10 @@ Unlike rigid step-count schedulers, LLM Maker schedules training by percentage r
 ### Launch Desktop Application (Windows Native)
 
 ```cmd
-# 1. Run one-time setup (sets up .venv with CUDA PyTorch)
+REM 1. One-time setup: detects the GPU and installs the matching CUDA/CPU PyTorch
 setup.bat
 
-# 2. Launch Native Desktop App
+REM 2. Launch Native Desktop App
 run_desktop.bat
 ```
 
@@ -179,9 +179,13 @@ npm run build    # static output in website/out
 ```
 
 `.github/workflows/pages.yml` deploys `website/out` to GitHub Pages on a push to
-`main` that touches the site. Set the repository Pages source to "GitHub Actions".
-For a project site the workflow builds with `NEXT_PUBLIC_BASE_PATH=/<repo>`; a user
-site or custom domain builds with an empty base path.
+`main` or `experimental` that touches the site. **The repository Pages source must
+be "GitHub Actions"** (Settings -> Pages -> Build and deployment -> Source). If it
+is left on "Deploy from a branch", GitHub ignores the workflow and renders
+`README.md` through Jekyll. For a project site the workflow builds with
+`NEXT_PUBLIC_BASE_PATH=/<repo>`; a user site or custom domain builds with an empty
+base path. Delete any duplicate Pages workflow; `pages.yml` is the only deploy
+workflow.
 
 ---
 

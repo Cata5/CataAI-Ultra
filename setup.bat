@@ -1,47 +1,49 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 cd /d "%~dp0"
 
-echo =========================================================================
-echo   LLM Maker — Setup & Installation Assistant
-echo =========================================================================
+set "CHECK_MODE="
+if not "%~1"=="" for %%A in (%*) do if /I "%%A"=="-Check" set "CHECK_MODE=1"
 
-REM Check Python
-where python >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Python was not found in PATH. Please install Python 3.10+ and re-run.
+echo ===========================================================================
+echo   LLM Maker - Setup ^& Installation Assistant
+echo ===========================================================================
+
+where node >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Node.js was not found in PATH. Install Node.js 20+ and re-run.
+    pause
     exit /b 1
 )
-
-REM Check Node.js
 where npm >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] npm was not found in PATH. Please install Node.js 18+ and re-run.
+if errorlevel 1 (
+    echo [ERROR] npm was not found in PATH. Reinstall Node.js 20+ and re-run.
+    pause
+    exit /b 1
+)
+where cargo >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Rust/cargo was not found in PATH. Install Rust from https://rustup.rs and re-run.
+    pause
     exit /b 1
 )
 
-REM Setup Python Virtual Environment
-if not exist ".venv" (
-    echo [1/3] Creating virtual environment (.venv)...
-    python -m venv .venv
-) else (
-    echo [1/3] Existing virtual environment detected (.venv).
+REM Hardware detection and PyTorch selection live in scripts\bootstrap.ps1.
+REM Forward -Check, -CpuOnly, -CudaTag, -SkipFrontend and -SkipRust.
+set "POWERSHELL=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "%POWERSHELL%" set "POWERSHELL=powershell"
+"%POWERSHELL%" -NoProfile -ExecutionPolicy Bypass -File "scripts\bootstrap.ps1" %*
+if errorlevel 1 (
+    echo.
+    echo [ERROR] Setup failed. Review the message above, then re-run.
+    pause
+    exit /b 1
 )
 
-set PYTHON_EXE=.\.venv\Scripts\python.exe
-set PIP_EXE=.\.venv\Scripts\pip.exe
-
-echo [2/3] Installing Python dependencies...
-"%PIP_EXE%" install --upgrade pip
-"%PIP_EXE%" install -r requirements.txt
-
-echo [3/3] Installing Frontend dependencies...
-cd frontend
-call npm install
-cd ..
-
-echo =========================================================================
-echo   Setup Complete!
-echo   Run "run_studio.bat" to start the workstation.
-echo =========================================================================
+echo.
+if defined CHECK_MODE (
+    echo Prerequisite check complete.
+) else (
+    echo Setup complete. Launch the workstation with run_desktop.bat.
+)
 pause

@@ -23,20 +23,33 @@ fi
 
 # Create virtual environment if needed
 if [ ! -d ".venv" ]; then
-    echo "[1/3] Creating virtual environment (.venv)..."
+    echo "[1/4] Creating virtual environment (.venv)..."
     python3 -m venv .venv
 else
-    echo "[1/3] Existing virtual environment detected (.venv)."
+    echo "[1/4] Existing virtual environment detected (.venv)."
 fi
 
 PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
 PIP_BIN="$SCRIPT_DIR/.venv/bin/pip"
 
-echo "[2/3] Installing Python dependencies..."
-$PIP_BIN install --upgrade pip
-$PIP_BIN install -r requirements.txt
+PLAN_ARGS=()
+if [ "${LLMMAKER_CPU:-0}" = "1" ]; then
+    PLAN_ARGS+=(--cpu)
+elif [ -n "${LLMMAKER_CUDA_TAG:-}" ]; then
+    PLAN_ARGS+=(--cuda "$LLMMAKER_CUDA_TAG")
+fi
 
-echo "[3/3] Installing Frontend dependencies..."
+echo "[2/4] Detecting hardware and selecting PyTorch runtime..."
+if ! python3 -m installer plan "${PLAN_ARGS[@]}"; then
+    echo "[ERROR] No compatible PyTorch runtime. Update the NVIDIA driver or run with LLMMAKER_CPU=1."
+    exit 1
+fi
+
+echo "[3/4] Installing PyTorch (this can download several GB)..."
+"$PYTHON_BIN" -m installer torch --venv "$SCRIPT_DIR/.venv" --manifest "$SCRIPT_DIR/.venv/runtime.json" "${PLAN_ARGS[@]}"
+"$PIP_BIN" install -r requirements.txt
+
+echo "[4/4] Installing Frontend dependencies..."
 cd frontend
 npm install
 cd ..

@@ -73,7 +73,7 @@ export default function Home() {
             <dl className="hero-facts">
               <div><b>54</b>desktop commands</div>
               <div><b>79</b>HTTP routes</div>
-              <div><b>238</b>Python tests</div>
+              <div><b>265</b>Python tests</div>
             </dl>
           </div>
 
@@ -171,7 +171,7 @@ export default function Home() {
             </div>
             <div className="note">
               <strong>How it was checked</strong>
-              238 Python tests, 18/18 worker lifecycle checks, a 120-step benchmark, a
+              265 Python tests, 18/18 worker lifecycle checks, a 120-step benchmark, a
               compiled desktop startup, and HTTP smoke runs. No unexecuted test is claimed.
             </div>
             <div className="note">

@@ -32,10 +32,16 @@ NEXT_PUBLIC_BASE_PATH=/CataAI-Ultra npm run build
 ## Deploy
 
 `.github/workflows/pages.yml` in the repository root publishes `website/out` on
-every push to `main` that touches this folder. In the repository settings, set
-Pages source to "GitHub Actions". The workflow uses
-`actions/configure-pages` to supply the base path, including the empty base path
-used by `<owner>.github.io` user sites and custom domains.
+every push to `main` or `experimental` that touches this folder.
+
+**Required repository setting:** Settings -> Pages -> Build and deployment ->
+Source = **GitHub Actions**. If the source stays on "Deploy from a branch",
+GitHub ignores the workflow and serves the root `README.md` through Jekyll. That
+is the Jekyll/README page, not this site. Keep only `pages.yml` as the deploy
+workflow; a duplicate workflow causes competing deployments.
+
+The workflow uses `actions/configure-pages` to supply the base path, including
+the empty base path used by `<owner>.github.io` user sites and custom domains.
 
 No analytics, no cookies, no external requests at runtime.
 

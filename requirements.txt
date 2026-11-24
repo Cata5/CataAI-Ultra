@@ -1,8 +1,9 @@
 # LLM Maker — Python Backend Dependencies
-# For CUDA-accelerated PyTorch, install the appropriate wheel first:
-# Windows/Linux CUDA 12.8: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
-# Windows/Linux CUDA 12.4: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-# CPU-only: pip install torch torchvision
+# scripts/bootstrap.ps1 detects the NVIDIA driver and installs the matching
+# PyTorch wheel before this file, so torch/torchvision are already satisfied.
+# Manual override only:
+#   CUDA 12.8: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+#   CPU:      pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 torch>=2.2.0
 torchvision>=0.17.0
@@ -18,9 +19,10 @@ jinja2>=3.1.0
 transformers>=4.40.0
 accelerate>=0.30.0
 
-# Numerical & GPU Telemetry
+# Numerical, Telemetry & Chart Rendering
 numpy>=1.26.0
 nvidia-ml-py>=13.615.71
+matplotlib>=3.8.0
 
 # Encrypted settings at rest (AES-256-GCM)
 cryptography>=42.0.0

@@ -104,9 +104,11 @@ migration likewise aborts rather than continuing on a half-upgraded schema.
 
 | Check | Command | Result |
 | --- | --- | --- |
-| Unit suite | `pytest tests/unit -q` | **162 passed** |
+| Unit suite | `pytest tests/unit -q` | **189 tests** (162 baseline + 27 installer; installer subset passed) |
 | API + backend suites | `pytest tests/test_api_endpoints.py tests/test_frontend_integration.py tests/test_network_studio.py tests/test_v2_features.py -q` | **76 passed** |
-| Combined Python | same targets plus `tests/unit` | **238 passed** |
+| Combined Python | same targets plus `tests/unit` and `tests/unit/test_installer.py` | **265 tests** (238 baseline + 27 installer; full rerun blocked by sandbox temp ACLs) |
+| Installer tests | `pytest tests/unit/test_installer.py -q` | 27 passed |
+| Hardware plan | `python -m installer plan` | RTX 3060 / driver 621.24 -> `cu128` |
 | Migration tests | `pytest tests/unit/test_migrations.py -q` | 8 passed |
 | Python compile | `python -m compileall -q src tests` | exit 0 |
 | TypeScript | `npx tsc --noEmit --incremental false` | exit 0 |
@@ -133,7 +135,7 @@ run with `STOPPED` status, proving both layers agree on the version table.
 | Item | Why / next step |
 | --- | --- |
 | Signed installer and auto-update | Needs a code-signing certificate and a release pipeline; cannot be produced or validated in this environment. Do not ship a placeholder updater. |
-| Bundled Python/CUDA runtime | Needs a packaging decision (embeddable Python + pinned wheels per GPU vendor) and multi-GB artifacts; bootstrap currently installs into `.venv`. |
+| Bundled Python/CUDA runtime | Hardware detection and per-driver PyTorch installation now live in `installer/` and run from `scripts/bootstrap.ps1`. A packaged app still needs a pinned standalone Python, first-run wizard, and Tauri resource wiring; see `docs/INSTALLER.md`. |
 | Portable release data directory | Debug/source installs keep data in the project root. A release build should use `%LOCALAPPDATA%` with explicit migration; that is a product decision because it moves existing user data. |
 | Machine-specific Cargo config (AUD-022) | CI overrides it; local clones still depend on `.cargo/config.toml`. |
 | Frontend component tests (AUD-027) | `tsc` and `next build` cover types and rendering, not interaction. Vitest/Playwright remain to be added. |

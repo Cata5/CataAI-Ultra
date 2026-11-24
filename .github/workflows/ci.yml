@@ -82,6 +82,8 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - name: Build frontend assets
+        env:
+          TAURI_BUILD: "true"
         run: |
           npm ci --prefix frontend
           npm run build --prefix frontend
