@@ -6,7 +6,14 @@ import struct
 import pytest
 import torch
 
-from src.infer.gguf_export import GGUF_MAGIC, GGUF_VERSION, GGUFUnsupportedError, export_gguf
+from src.infer.gguf_export import (
+    GGUF_MAGIC,
+    GGUF_TYPE_ARRAY,
+    GGUF_TYPE_INT32,
+    GGUF_VERSION,
+    GGUFUnsupportedError,
+    export_gguf,
+)
 
 
 def test_export_gguf_q8_0_header_and_manifest(tmp_path) -> None:
@@ -25,7 +32,7 @@ def test_export_gguf_q8_0_header_and_manifest(tmp_path) -> None:
     assert kv_count >= 4
     assert manifest["tensor_count"] == 3
     assert manifest["runtime_compatible"] is False
-    assert manifest["tensor_types"] == {"Q8_0": 1, "F16": 2}
+    assert manifest["tensor_types"] == {"Q8_0": 1, "F16": 1, "F32": 1}
     assert manifest["sha256"] == __import__("hashlib").sha256(raw).hexdigest()
     sidecar = json.loads((tmp_path / "model.gguf.json").read_text(encoding="utf-8"))
     assert sidecar["quantization"] == "Q8_0"
@@ -78,6 +85,13 @@ def test_llama_compatible_export_has_llama_layout_and_tokenizer(tmp_path) -> Non
     assert manifest["runtime_compatible"] is True
     assert manifest["tokenizer_embedded"] is True
     assert manifest["tokenizer_exact"] is True
+    # llama.cpp rejects token_type unless it is an int32 array; keep the
+    # metadata type pinned rather than relying on a byte-substring check.
+    marker = b"tokenizer.ggml.token_type"
+    marker_end = raw.index(marker) + len(marker)
+    assert struct.unpack_from("<I", raw, marker_end)[0] == GGUF_TYPE_ARRAY
+    assert struct.unpack_from("<I", raw, marker_end + 4)[0] == GGUF_TYPE_INT32
+    assert manifest["tensor_types"] == {"Q8_0": 9, "F32": 3}
     for name in (
         b"token_embd.weight",
         b"blk.0.attn_q.weight",

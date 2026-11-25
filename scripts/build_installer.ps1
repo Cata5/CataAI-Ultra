@@ -5,10 +5,18 @@
 param(
     [Parameter(Mandatory = $true)][string]$PythonArchive,
     [Parameter(Mandatory = $true)][string]$PythonSha256,
-    [string]$Configuration = "release"
+    [string]$RustToolchain = ""
 )
 
 $ErrorActionPreference = "Stop"
+if ($RustToolchain) {
+    $env:RUSTUP_TOOLCHAIN = $RustToolchain
+}
+if (-not $env:CARGO_TARGET_DIR) {
+    # Git for Windows' windres mishandles spaces in the default target path.
+    # Keep the target directory outside the project tree.
+    $env:CARGO_TARGET_DIR = Join-Path $env:LOCALAPPDATA "LLMMaker\cargo-target"
+}
 $root = Split-Path -Parent $PSScriptRoot
 $resources = Join-Path $root "src-tauri\resources"
 $pythonDir = Join-Path $resources "python"
@@ -29,7 +37,16 @@ try {
     if ($PythonArchive.EndsWith(".zip")) {
         Expand-Archive -Path $PythonArchive -DestinationPath $extract -Force
     } else {
-        tar -xf $PythonArchive -C $extract
+        # Git for Windows ships GNU tar, which reads "C:\..." as a remote host.
+        # Extract from the archive's directory so the path has no drive colon.
+        $archivePath = (Resolve-Path $PythonArchive).Path
+        Push-Location (Split-Path -Parent $archivePath)
+        try {
+            tar -xf (Split-Path -Leaf $archivePath) -C $extract
+            if ($LASTEXITCODE -ne 0) { throw "Python archive extraction failed" }
+        } finally {
+            Pop-Location
+        }
     }
     $entries = @(Get-ChildItem -Force $extract)
     $source = if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) { $entries[0].FullName } else { $extract }
@@ -75,4 +92,11 @@ try {
 } finally {
     Pop-Location
 }
-Write-Host "Installer written under src-tauri/target/release/bundle/nsis"
+$bundleDir = Join-Path $env:CARGO_TARGET_DIR "release\bundle\nsis"
+Write-Host "Installer written under $bundleDir"
+$installer = Get-ChildItem (Join-Path $bundleDir "*.exe") | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if ($installer) {
+    $hash = (Get-FileHash -Algorithm SHA256 $installer.FullName).Hash.ToLowerInvariant()
+    "$hash  $($installer.Name)" | Set-Content "$($installer.FullName).sha256" -Encoding ascii
+    Write-Host "SHA-256: $hash"
+}

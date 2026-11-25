@@ -1,8 +1,9 @@
 # Installing LLM Maker
 
 LLM Maker is a Windows-first desktop application (Tauri shell + Python training
-engine + Next.js UI). This page describes the supported portable install. A
-signed one-click installer is **not** shipped yet; see "Current limits".
+engine + Next.js UI). This page describes the supported portable install and the
+unsigned per-user installer. No Authenticode-signed installer is published; see
+"Current limits".
 
 ## Requirements
 
@@ -126,13 +127,32 @@ final loss and one checkpoint.
   install. To replace an existing CUDA build, uninstall `torch` and
   `torchvision` from `.venv`, then re-run with `-CpuOnly`.
 
+## Unsigned installer
+
+The per-user NSIS build bundles a private CPython runtime and the app sources:
+
+```powershell
+npm ci --prefix frontend
+.\scripts\build_installer.ps1 `
+  -PythonArchive C:\downloads\cpython-3.11-install_only.tar.gz `
+  -PythonSha256 <sha256>
+```
+
+It writes to
+`%LOCALAPPDATA%\LLMMaker\cargo-target\release\bundle\nsis`, writes a
+`.sha256` beside it, and installs per-user into
+`%LOCALAPPDATA%\LLM Maker`, with `uninstall.exe` beside the app.
+The installer is unsigned, so SmartScreen warns on a downloaded copy; verify the
+artifact SHA-256 before running it. PyTorch is still installed by the first-run
+wizard, not by NSIS.
+
 ## Current limits
 
-- There is no signed installer or auto-updater yet; the build is a local
-  portable install. See `docs/INSTALLER.md` for the packaging design.
-- Python is not bundled. `.cargo/config.toml` still contains
-  machine-specific toolchain paths (tracked as AUD-022); remove or override
-  them for other machines.
+- No Authenticode-signed installer or auto-updater is published. The unsigned
+  installer is reproducible locally and from the release workflow; see
+  `docs/INSTALLER.md` for the packaging design and signing fallback.
+- The portable `.venv` flow still needs a system Python. Only the NSIS payload
+  bundles CPython.
 - CI (`.github/workflows/ci.yml`) has not been executed on GitHub-hosted
   runners yet.
 - Linux and macOS packaging is untested. The detector uses the same CUDA

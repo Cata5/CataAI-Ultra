@@ -58,7 +58,7 @@ AUD-034. Details below; see `audit/pillar_1_2_status.md` for the tests that cove
 | Gap | Consequence |
 | --- | --- |
 | No interactive GUI automation | Click-through behaviour verified by code + build only; see `test_results.md` |
-| Debug build only, no installer | Packaging/upgrade path unverified |
+| Installer validated only on this machine | Silent install, launch and uninstall pass locally; clean-machine, upgrade and no-system-Python paths are still unverified |
 | 48.5 M-parameter benchmark not run | Throughput numbers apply to the 1.9 M smoke configuration |
 | Multi-GPU not exercised | Cluster/multi-GPU code paths are code-reviewed only |
 | Legacy dataset directory fallback retained | `D:\proiecte\LLM from Scratch\data` remains a last-resort search path; it is logged, not silent |

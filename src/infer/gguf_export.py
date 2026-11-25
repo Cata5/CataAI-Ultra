@@ -27,6 +27,7 @@ GGUF_VERSION = 3
 GGUF_DEFAULT_ALIGNMENT = 32
 
 GGUF_TYPE_UINT32 = 4
+GGUF_TYPE_INT32 = 5
 GGUF_TYPE_FLOAT32 = 6
 GGUF_TYPE_BOOL = 7
 GGUF_TYPE_STRING = 8
@@ -70,9 +71,16 @@ def _kv(key: str, value: Any) -> bytes:
             for item in value:
                 out += struct.pack("<?", item)
         elif all(isinstance(v, int) for v in value):
-            out += struct.pack("<I", GGUF_TYPE_UINT32) + struct.pack("<Q", len(value))
-            for item in value:
-                out += struct.pack("<I", item)
+            # llama.cpp reads tokenizer.ggml.token_type as int32; every other
+            # integer metadata array we emit is unsigned.
+            if key == "tokenizer.ggml.token_type":
+                out += struct.pack("<I", GGUF_TYPE_INT32) + struct.pack("<Q", len(value))
+                for item in value:
+                    out += struct.pack("<i", item)
+            else:
+                out += struct.pack("<I", GGUF_TYPE_UINT32) + struct.pack("<Q", len(value))
+                for item in value:
+                    out += struct.pack("<I", item)
         elif all(isinstance(v, (int, float)) for v in value):
             out += struct.pack("<I", GGUF_TYPE_FLOAT32) + struct.pack("<Q", len(value))
             for item in value:
@@ -104,11 +112,14 @@ def _encode_tensor(name: str, tensor: np.ndarray, quant: str) -> Tuple[int, Tupl
     reversed_dims = tuple(int(d) for d in reversed(arr.shape))
     if quant == "F32":
         return GGML_TYPE_F32, reversed_dims, np.ascontiguousarray(arr, dtype=np.float32).tobytes()
+    # llama.cpp applies RMSNorm weights to an F32 activation buffer. Keep 1-D
+    # norm vectors F32; storing them as F16 makes the CPU backend abort during
+    # the first binary op even though the file parses.
+    if arr.ndim == 1:
+        return GGML_TYPE_F32, reversed_dims, np.ascontiguousarray(arr, dtype=np.float32).tobytes()
     if quant == "F16":
         return GGML_TYPE_F16, reversed_dims, np.ascontiguousarray(arr, dtype=np.float16).tobytes()
     if quant == "Q8_0":
-        # Norms and other 1-D vectors stay at F16; quantizing them buys almost
-        # nothing and breaks exact Llama-style RMSNorm loading expectations.
         if arr.ndim != 2 or arr.shape[-1] % 32 != 0:
             return GGML_TYPE_F16, reversed_dims, np.ascontiguousarray(arr, dtype=np.float16).tobytes()
         return GGML_TYPE_Q8_0, reversed_dims, quantize_q8_0(arr).tobytes()

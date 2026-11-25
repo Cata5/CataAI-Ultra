@@ -134,9 +134,9 @@ run with `STOPPED` status, proving both layers agree on the version table.
 
 | Item | Why / next step |
 | --- | --- |
-| Signed installer and auto-update | Needs a code-signing certificate and a release pipeline; cannot be produced or validated in this environment. Do not ship a placeholder updater. |
-| Bundled Python/CUDA runtime | Hardware detection and per-driver PyTorch installation now live in `installer/` and run from `scripts/bootstrap.ps1`. A packaged app still needs a pinned standalone Python, first-run wizard, and Tauri resource wiring; see `docs/INSTALLER.md`. |
-| Portable release data directory | Debug/source installs keep data in the project root. A release build should use `%LOCALAPPDATA%` with explicit migration; that is a product decision because it moves existing user data. |
-| Machine-specific Cargo config (AUD-022) | CI overrides it; local clones still depend on `.cargo/config.toml`. |
-| Frontend component tests (AUD-027) | `tsc` and `next build` cover types and rendering, not interaction. Vitest/Playwright remain to be added. |
+| Installer and auto-update | The unsigned per-user NSIS build installs, launches and uninstalls successfully on this machine. Auto-update, clean-machine proof and optional signing remain; do not ship a placeholder updater. |
+| Bundled Python/CUDA runtime | Implemented: the installer stages a pinned standalone CPython and the first-run wizard creates the venv and installs PyTorch. A clean-machine PyTorch download has not been exercised here. |
+| Portable release data directory | Implemented: release builds use `%LOCALAPPDATA%\LLMMaker` for data and `%LOCALAPPDATA%\LLM Maker` for program files. Migration from old project-root data remains manual. |
+| Machine-specific Cargo config (AUD-022) | Closed: `.cargo/config.toml` is intentionally empty; local overrides live in the user's global Cargo config. |
+| Frontend component tests (AUD-027) | Vitest component tests pass. Playwright flow tests have not been re-run in this pass. |
 | CI execution | The workflows have not run on GitHub-hosted runners; only their YAML and the underlying commands were validated locally. |

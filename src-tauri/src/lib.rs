@@ -100,6 +100,9 @@ pub fn log_trace(msg: &str) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Keep Python from writing __pycache__ into the read-only packaged resource
+    // tree; NSIS cannot remove files it did not install.
+    std::env::set_var("PYTHONDONTWRITEBYTECODE", "1");
     let root = worker::project_root();
     let run_data_dir = data_dir();
     let _ = std::fs::create_dir_all(run_data_dir.join("logs"));

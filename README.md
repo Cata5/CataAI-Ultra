@@ -156,22 +156,59 @@ Open **[http://localhost:8080](http://localhost:8080)** in your browser. All req
 
 ---
 
+## 🪟 Unsigned Windows Installer
+
+The NSIS installer is per-user, does not need admin rights, and is intentionally
+unsigned: no Authenticode certificate is purchased or required for local use.
+Windows SmartScreen will warn on a downloaded copy; verify the SHA-256 published
+next to the artifact before running it.
+
+Build it with a pinned `python-build-standalone` archive (the archive must
+contain `python.exe`, `venv` and `pip`):
+
+```powershell
+npm ci --prefix frontend
+.\scripts\build_installer.ps1 `
+  -PythonArchive C:\downloads\cpython-3.11-install_only.tar.gz `
+  -PythonSha256 <sha256>
+```
+
+The script stages the private Python runtime and app sources, builds the static
+frontend, and writes the installer under
+`%LOCALAPPDATA%\LLMMaker\cargo-target\release\bundle\nsis` and writes a
+`.sha256` beside it. It installs
+per-user into `%LOCALAPPDATA%\LLM Maker`; `uninstall.exe` is written there. Run
+`scripts\verify_installer.ps1` first if you only want to check the staged
+payload. The release workflow uses the same build and publishes an explicitly
+unsigned installer when signing secrets are absent.
+
+---
+
 ## 📦 Model Export
 
 - **Safetensors**: `src/infer/export.py` writes portable PyTorch weights.
 - **GGUF (Q8_0 / F16 / F32)**: `GET /api/models/{id}/export_gguf?quant=Q8_0&arch=auto`
-  writes a GGUF v3 container with a SHA-256 manifest next to it. Q8_0 falls back
-  to F16 for tensors whose last dimension is not divisible by 32; the manifest
-  reports the exact tensor-type counts.
+  writes a GGUF v3 container with a SHA-256 manifest next to it. Q8_0 quantizes
+  2-D tensors whose last dimension is divisible by 32; 1-D norm vectors stay
+  F32 because llama.cpp applies them to F32 activations. Other tensors fall
+  back to F16. The manifest reports the exact tensor-type counts.
 - `arch=llama` writes the standard Llama tensor layout and metadata. It refuses
   Canon depthwise convolutions and tokenizer/embedding-vocabulary mismatches
   instead of producing a file that will not load. `arch=rocanon` keeps the
   Canon tensors in a lossless custom layout.
 
-> **Honest limit:** the llama-compatible writer and API are covered end to end,
-> but a foreign-runtime load has not been verified here because neither
-> llama.cpp nor Ollama is installed. Ollama export still returns HTTP 400 for a
-> RoCanon checkpoint, and Q4_K_M is rejected rather than silently downgraded.
+> **Verified runtime:** llama.cpp build `b12723` (CPU, Windows x64) loaded and
+> generated from test exports in Q8_0, F16 and F32. The repeatable smoke test is
+> `scripts/verify_gguf_runtime.ps1 -LlamaCli <path> -Gguf <file>`. Ollama is
+> still unverified because it is not installed here. A RoCanon GGUF is a
+> lossless custom container, not a llama.cpp-executable model, and Q4_K_M is
+> rejected rather than silently downgraded.
+>
+> **Tokenizer limit:** GGUF reports `tokenizer_exact` per checkpoint. When it
+> is false, LLM Maker's custom normalizer/pre-tokenizer cannot be expressed
+> exactly in GGUF, so llama.cpp may split prompts differently. The tensor
+> container and generation are still valid; do not claim tokenizer parity from
+> an approximate export.
 
 ## 🧪 Running the Test Suite
 

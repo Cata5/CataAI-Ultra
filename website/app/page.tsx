@@ -17,8 +17,8 @@ const phases = [
     name: "Adoptable",
     status: "In progress",
     body: "A clean Windows laptop, an NVIDIA driver, a download, a training run — no terminal.",
-    shipped: "Bootstrap script, CI, one shared schema, portable data root, setup wizard, bundled-Python staging.",
-    open: "Signed installer, auto-update with rollback, clean-machine install proof.",
+    shipped: "Bootstrap script, CI, one shared schema, portable data root, setup wizard, bundled-Python staging and an unsigned NSIS installer build.",
+    open: "Public unsigned installer artifact, auto-update with rollback, clean-machine install proof and optional signing.",
   },
   {
     name: "Trustworthy",
@@ -31,8 +31,8 @@ const phases = [
     name: "Capable",
     status: "Next",
     body: "Scale past a single consumer GPU without pretending the plumbing is the product.",
-    shipped: "Single-GPU and DataParallel training, real DDP, checkpoint resume, evaluation hooks, plugin API, GGUF export, hyperparameter sweeps and dataset quality audits.",
-    open: "Foreign-runtime GGUF load verification, desktop-owned sweep orchestration, larger dataset pipelines, a reproducible evaluation harness and hardware-validated cluster runs.",
+    shipped: "Single-GPU and DataParallel training, real DDP, checkpoint resume, evaluation hooks, plugin API, GGUF export verified in llama.cpp, hyperparameter sweeps and dataset quality audits.",
+    open: "Ollama import verification, desktop-owned sweep orchestration, larger dataset pipelines, a reproducible evaluation harness and hardware-validated cluster runs.",
   },
   {
     name: "Standard",
@@ -168,27 +168,30 @@ export default function Home() {
             <div className="note">
               <strong>What stays open</strong>
               The machine-specific Cargo target and the missing frontend test runner are
-              closed (Vitest component tests and Playwright flow tests now run). Runtime GGUF
-              loading is still unverified: the writer and API path are tested end to end, but
-              neither llama.cpp nor Ollama is installed here. The desktop shell also needs to
-              supervise the local dashboard before its sweep panel works without a separately
-              started backend.
+              closed (Vitest component tests and Playwright flow tests now run). Test exports
+              of the llama-compatible GGUF load and generate in llama.cpp b12723 for Q8_0, F16
+              and F32; tokenizer metadata remains approximate, and Ollama is unverified because
+              it is not installed. The NSIS build is unsigned, so SmartScreen warns until a
+              certificate is available. The desktop shell
+              also needs to supervise the local dashboard before its sweep panel works without a
+              separately started backend.
             </div>
             <div className="note">
               <strong>How it was checked</strong>
               368 Python tests, a 15-file static frontend export (13 routes), a production
-              website build, Rust <code>cargo check</code>, and a real GGUF export test. No
-              unexecuted test is claimed.
+              website build, Rust <code>cargo check</code>, a real GGUF export test and a
+              llama.cpp load/generation smoke test. No unexecuted test is claimed.
             </div>
             <div className="note">
               <strong>Since the audit</strong>
               One versioned schema shared by Rust and Python, pre-migration backups with
               retention, safe mode, encrypted notification secrets, startup integrity checks,
               versioned workspace archives, downgrade refusal, a bootstrap script and CI.
-              Portable data paths, real DDP, the setup wizard, GGUF export, hyperparameter
-              sweeps, dataset quality audits and the plugin API landed after the audit was
-              written. Frontend component and end-to-end flow tests (Vitest plus Playwright)
-              now run on the UI side as well.
+              Portable data paths, real DDP, the setup wizard, GGUF export verified in
+              llama.cpp, hyperparameter sweeps, dataset quality audits, the plugin API and an
+              unsigned NSIS installer build landed after the audit was written. Frontend
+              component and end-to-end flow tests (Vitest plus Playwright) now run on the UI side
+              as well.
             </div>
           </div>
         </section>

@@ -6,9 +6,9 @@ installer. The detection and PyTorch installation engine exists in
 verified by `scripts/verify_installer.ps1`. The first-run wizard is wired in
 `src-tauri/src/commands.rs` and `frontend/src/components/onboarding/RuntimeSetupGate.tsx`.
 
-**Shipped status:** no signed installer or auto-updater is published. Building
-one requires a pinned CPython archive URL + SHA-256 and a code-signing
-certificate; neither is committed to this repository.
+**Shipped status:** an unsigned, per-user NSIS installer builds locally from a
+pinned CPython archive and SHA-256; no signed installer or auto-updater is
+published. Signing is optional and is skipped when no certificate is configured.
 
 ## Decision: two phases, not one NSIS script
 
@@ -19,7 +19,7 @@ cannot start its own repair UI.
 
 Split the work:
 
-1. **OS installer** — small, signed, per-user. Installs the Tauri executable,
+1. **OS installer** — small, unsigned by default, per-user. Installs the Tauri executable,
    the static frontend, the Python sources and a pinned standalone CPython.
 2. **First-run wizard** — runs inside the app. Detects the GPU, shows the
    selected CUDA runtime and download size, installs PyTorch into an
@@ -33,7 +33,7 @@ the CUDA install resumable/retryable without reinstalling the application.
 Per-user install (`currentUser`, no UAC):
 
 ```text
-%LOCALAPPDATA%\Programs\LLMMaker\
+%LOCALAPPDATA%\LLM Maker\
   llm-maker.exe
   resources\
     app\src\...                Python worker sources
@@ -104,7 +104,7 @@ which the wizard uses to create the venv.
    the working directory (or `PYTHONPATH`), so `-m installer` resolves:
 
    ```text
-   cd %LOCALAPPDATA%\Programs\LLMMaker\resources\app
+   cd %LOCALAPPDATA%\LLM Maker\resources\app
    ..\python\python.exe -m installer plan --json
    ```
 
@@ -193,8 +193,9 @@ reset; the app never deletes it on uninstall.
 
 ## Security and operations
 
-- Sign both `llm-maker.exe` and the NSIS installer; unsigned installers trigger
-  SmartScreen and make GPU downloads look suspicious.
+- The installer is unsigned by default: publish its SHA-256 and document the
+  SmartScreen warning. Sign both `llm-maker.exe` and the NSIS installer only if a
+  certificate becomes available.
 - Install per-user; the wizard needs no administrator rights.
 - Download only from `https://download.pytorch.org/whl/<channel>` and PyPI over
   HTTPS. Do not accept an arbitrary index URL from the UI.
@@ -216,7 +217,7 @@ fallback, CSV parsing and manifest round-trips. Before shipping:
 - Interrupted download, disk full, proxy failure, and cancel mid-install.
 - Re-run setup with an existing valid runtime and with a corrupted venv.
 - Confirm the installed app starts with no system Python on `PATH`.
-- Confirm uninstall removes `%LOCALAPPDATA%\Programs\LLMMaker` but keeps
+- Confirm uninstall removes `%LOCALAPPDATA%\LLM Maker` but keeps
   `%LOCALAPPDATA%\LLMMaker` (models, runs, runtime, logs).
 
 ## Implemented vs. release blockers
@@ -231,12 +232,16 @@ Implemented in this repository:
 5. `scripts/verify_installer.ps1` checks the staged payload, and
    `.github/workflows/release.yml` builds/uploads the NSIS artifact and signs it
    when signing secrets are configured.
+6. `scripts/build_installer.ps1` writes the bundle under
+   `%LOCALAPPDATA%\LLMMaker\cargo-target\release\bundle\nsis` so Git for
+   Windows' `windres` never sees a space in the target path.
 
 External prerequisites still required for a shipped build:
 
 1. A pinned `python-build-standalone` URL + SHA-256 in repository variables.
-2. An Authenticode certificate and password in repository secrets; without
-   them the release workflow publishes an explicitly **unsigned** installer.
+2. Optional: an Authenticode certificate and password in repository secrets.
+   Without them the release workflow publishes an explicitly **unsigned**
+   installer, which is the supported path for this repository.
 3. An end-to-end run on clean Windows 10/11 machines, including no-GPU and
    no-system-Python cases.
 4. A per-channel requirements lock and the offline CPU-wheel ZIP.
