@@ -44,6 +44,7 @@ class InferenceEngine:
         if not meta_p.exists() and (chk_path.parent / "metadata.json").exists():
             meta_p = chk_path.parent / "metadata.json"
         arch_cfg = None
+        meta: Dict[str, Any] = {}
         if meta_p.exists():
             try:
                 with open(meta_p, "r", encoding="utf-8") as mf:
@@ -53,6 +54,8 @@ class InferenceEngine:
                         or meta.get("arch")
                         or meta.get("training_config", {}).get("arch")
                     )
+                    if not isinstance(arch_cfg, dict):
+                        arch_cfg = None
                     net_id = meta.get("network_id") or meta.get("model_id")
                     if not arch_cfg and net_id:
                         from ..networks.registry import NetworkRegistry
@@ -69,6 +72,7 @@ class InferenceEngine:
                 logger.warning("Could not instantiate custom architecture for inference: %s", e)
 
         # Inspect checkpoint state_dict directly to verify and auto-adapt model dimensions
+        payload = None
         try:
             if chk_path.suffix == ".safetensors":
                 from safetensors.torch import load_file
@@ -114,6 +118,15 @@ class InferenceEngine:
 
                     conv_w = clean_keys.get("layers.0.canon_a.conv.weight")
                     chk_kernel_size = conv_w.shape[-1] if conv_w is not None and len(conv_w.shape) >= 3 else 4
+                    chk_canon = conv_w is not None
+                    chk_qk_norm = q_norm_w is not None
+                    payload_cfg = payload.get("training_config") if isinstance(payload, dict) else None
+                    if not isinstance(payload_cfg, dict) or not payload_cfg:
+                        payload_cfg = meta.get("training_config") if isinstance(meta, dict) else None
+                    if isinstance(payload_cfg, dict) and payload_cfg.get("d_h") and not chk_qk_norm:
+                        chk_d_h = int(payload_cfg["d_h"])
+                        chk_n_q = int(payload_cfg.get("n_q", chk_n_q))
+                        chk_n_kv = int(payload_cfg.get("n_kv", chk_n_kv))
 
                     # Check if currently active model has matching architecture
                     curr_cfg = getattr(self.model, "config", None)
@@ -124,6 +137,8 @@ class InferenceEngine:
                         or getattr(curr_cfg, "d_ff", None) != chk_d_ff
                         or getattr(curr_cfg, "n_q", None) != chk_n_q
                         or getattr(curr_cfg, "n_kv", None) != chk_n_kv
+                        or getattr(curr_cfg, "canon_enabled", True) != chk_canon
+                        or getattr(curr_cfg, "qk_norm", True) != chk_qk_norm
                     )
                     if needs_rebuild:
                         new_cfg = RoCanonConfig()
@@ -135,6 +150,10 @@ class InferenceEngine:
                         new_cfg.n_q = chk_n_q
                         new_cfg.n_kv = chk_n_kv
                         new_cfg.kernel_size = chk_kernel_size
+                        new_cfg.canon_enabled = chk_canon
+                        new_cfg.qk_norm = chk_qk_norm
+                        new_cfg.residual_scale = chk_canon
+                        new_cfg.architecture = "rocanon" if chk_canon else "llama"
                         self.model = RoCanonForCausalLM(new_cfg).to(device=self.device)
                         self.model.eval()
                         logger.info("Auto-adapted InferenceEngine model architecture to match checkpoint tensors: d_model=%d, n_layers=%d, d_ff=%d", chk_d_model, chk_n_layers, chk_d_ff)

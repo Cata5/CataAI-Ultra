@@ -135,6 +135,13 @@ class CheckpointManager:
         Atomically saves training state to disk.
         Writes to a temporary file first, flushes, and renames atomically to prevent corrupted files.
         """
+        if training_config is None:
+            model_cfg = getattr(model, "config", None)
+            if model_cfg is not None:
+                try:
+                    training_config = dict(vars(model_cfg))
+                except TypeError:
+                    training_config = None
         timestamp = time.time()
         chk_id = f"{filename_prefix}_step_{step}" if not is_best else "best_model"
         target_name = f"{chk_id}.pt"
@@ -235,6 +242,7 @@ class CheckpointManager:
                 "file_size_bytes": file_size,
                 "sha256": digest,
                 "total_params": sum(p.numel() for p in model.parameters()),
+                "training_config": training_config or {},
                 "network_id": (training_config or {}).get("network_id"),
                 "config_arch": (training_config or {}).get("arch") or (training_config or {}).get("config_arch"),
             }
@@ -697,6 +705,22 @@ class CheckpointManager:
         train_loss = payload_to_use.get("train_loss")
         config = payload_to_use.get("training_config") or training_config or {}
 
+        # state_dict includes tied weights twice (embed_tokens and lm_head share
+        # the same tensor). Count storage once, matching model.parameters().
+        if active_model is not None:
+            unique_params = sum(p.numel() for p in unwrap_model(active_model).parameters())
+        else:
+            unique_params = 0
+            seen_storage = set()
+            for tensor in model_sd.values():
+                if not isinstance(tensor, torch.Tensor):
+                    continue
+                key = (tensor.data_ptr(), tuple(tensor.shape))
+                if key in seen_storage:
+                    continue
+                seen_storage.add(key)
+                unique_params += tensor.numel()
+
         # 2. Save Full Keep-Training Weights ({target_name}_full.pt)
         full_pt_name = f"{target_name}_full.pt"
         full_pt_path = out_folder / full_pt_name
@@ -737,7 +761,7 @@ class CheckpointManager:
             "step": step,
             "val_loss": val_loss,
             "train_loss": train_loss,
-            "total_params": sum(p.numel() for p in model_sd.values() if isinstance(p, torch.Tensor)),
+            "total_params": unique_params,
             "model_state_dict": stripped_sd,
             "training_config": config,
             "timestamp": time.time(),
@@ -790,7 +814,8 @@ class CheckpointManager:
             "val_loss": val_loss,
             "train_loss": train_loss,
             "tokens_seen": tokens_seen,
-            "total_parameters": sum(p.numel() for p in model_sd.values() if isinstance(p, torch.Tensor)),
+            "total_parameters": unique_params,
+            "config_arch": config,
             "files": {
                 "full_weights": {
                     "file_name": full_pt_name,

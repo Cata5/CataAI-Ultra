@@ -50,6 +50,10 @@ frontend/node_modules/
 frontend/.next/
 frontend/out/
 frontend/build/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/coverage/
 .next/
 *.tsbuildinfo
 
@@ -63,6 +67,7 @@ frontend/build/
 .test-run/
 .pytest-tmp/
 .run-tmp-*/
+/test_tmp/
 
 # Website build output
 website/node_modules/

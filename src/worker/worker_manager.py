@@ -33,6 +33,9 @@ class WorkerManager:
         self._listener_thread: Optional[threading.Thread] = None
         self._running = False
         self._lock = threading.Lock()
+        # Incremented whenever a new run is dispatched. A pending stop-reaper
+        # only kills the process if no newer run has taken ownership of it.
+        self._reap_token = 0
 
         # State tracking on control plane
         self.current_state: RunState = RunState.IDLE
@@ -172,6 +175,8 @@ class WorkerManager:
         if self.current_state in (RunState.RUNNING, RunState.STARTING):
             logger.warning("Cannot start run: worker is already %s", self.current_state.value)
             return False
+        with self._lock:
+            self._reap_token += 1
         cmd = WorkerCommand(command_type=CommandType.START_RUN, payload=payload)
         return self.send_command(cmd)
 
@@ -190,9 +195,17 @@ class WorkerManager:
             self.current_state = RunState.STOPPING
 
         # Ensure worker process exits cleanly and CUDA context is completely released back to the OS
+        with self._lock:
+            reap_token = self._reap_token
+
         def _reap_worker_process():
             time.sleep(2.5)
             with self._lock:
+                # A sweep stops one trial and immediately starts the next on the
+                # same long-lived worker. Do not let the old stop's reaper kill
+                # the process that now owns a newer run.
+                if reap_token != self._reap_token:
+                    return
                 if self._process and self._process.is_alive():
                     try:
                         logger.info("Reaping worker process to guarantee 100%% CUDA context release.")

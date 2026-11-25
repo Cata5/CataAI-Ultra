@@ -240,6 +240,45 @@ def run_curate(
         return {"error": f"MinHash Curation failed: {e}"}
 
 
+def run_audit(
+    dataset_id: str,
+    max_samples: int = 5000,
+    duplicate_threshold: float = 0.80,
+    workspace_id: str | None = None,
+) -> dict:
+    """Read-only quality audit of a dataset (duplicates, PII, language, fertility)."""
+    file_path = find_dataset_file(dataset_id, workspace_id)
+    if not file_path or not file_path.exists():
+        return {"error": f"Dataset file '{dataset_id}' not found"}
+
+    try:
+        from src.data.quality_audit import audit_dataset_file
+
+        tokenizer = None
+        try:
+            from src.tokenizer.tokenizer import RoCanonTokenizer
+
+            tokenizer = RoCanonTokenizer()
+        except Exception:
+            tokenizer = None
+
+        result = audit_dataset_file(
+            file_path,
+            tokenizer=tokenizer,
+            max_docs=max_samples,
+            duplicate_threshold=duplicate_threshold,
+        )
+        return {
+            "success": True,
+            "dataset_id": dataset_id,
+            "name": file_path.stem,
+            "file_path": str(file_path),
+            **result,
+        }
+    except Exception as e:
+        return {"error": f"Dataset quality audit failed: {e}"}
+
+
 def run_inspect(text: str) -> dict:
     char_count = len(text)
     words = text.split()
@@ -272,6 +311,13 @@ def main():
     cur_p.add_argument("--max-samples", type=int, default=5000)
     cur_p.add_argument("--workspace", default=None, help="Workspace ID")
 
+    # Audit
+    aud_p = subparsers.add_parser("audit")
+    aud_p.add_argument("--dataset", required=True, help="Dataset ID or filename")
+    aud_p.add_argument("--max-samples", type=int, default=5000)
+    aud_p.add_argument("--duplicate-threshold", type=float, default=0.80)
+    aud_p.add_argument("--workspace", default=None, help="Workspace ID")
+
     # Inspect
     ins_p = subparsers.add_parser("inspect")
     ins_p.add_argument("--text", required=True, help="Text to inspect")
@@ -286,6 +332,13 @@ def main():
             jaccard_threshold=args.jaccard,
             lid_threshold=args.lid,
             max_samples=args.max_samples,
+            workspace_id=args.workspace,
+        )
+    elif args.command == "audit":
+        res = run_audit(
+            args.dataset,
+            max_samples=args.max_samples,
+            duplicate_threshold=args.duplicate_threshold,
             workspace_id=args.workspace,
         )
     elif args.command == "inspect":

@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { SiteRail } from "@/components/SiteRail";
+import ZoomableScreenshot from "@/components/ZoomableScreenshot";
 
 const REPO = "https://github.com/Cata5/CataAI-Ultra";
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
@@ -7,7 +8,7 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 const ledger = [
   { severity: "Critical", found: 4, fixed: 4, open: 0, accepted: 0 },
   { severity: "High", found: 12, fixed: 12, open: 0, accepted: 0 },
-  { severity: "Medium", found: 11, fixed: 10, open: 1, accepted: 0 },
+  { severity: "Medium", found: 11, fixed: 11, open: 0, accepted: 0 },
   { severity: "Low", found: 7, fixed: 7, open: 0, accepted: 0 },
 ];
 
@@ -30,8 +31,8 @@ const phases = [
     name: "Capable",
     status: "Next",
     body: "Scale past a single consumer GPU without pretending the plumbing is the product.",
-    shipped: "Single-GPU and DataParallel training, real DDP, checkpoint resume, evaluation hooks, plugin API, GGUF export.",
-    open: "Larger dataset pipelines, reproducible evaluation harness, hardware-validated cluster runs.",
+    shipped: "Single-GPU and DataParallel training, real DDP, checkpoint resume, evaluation hooks, plugin API, GGUF export, hyperparameter sweeps and dataset quality audits.",
+    open: "Foreign-runtime GGUF load verification, desktop-owned sweep orchestration, larger dataset pipelines, a reproducible evaluation harness and hardware-validated cluster runs.",
   },
   {
     name: "Standard",
@@ -71,9 +72,9 @@ export default function Home() {
               <a className="text-link" href="#audit">Read the audit</a>
             </div>
             <dl className="hero-facts">
-              <div><b>58</b>desktop commands</div>
-              <div><b>86</b>HTTP routes</div>
-              <div><b>354</b>Python tests</div>
+              <div><b>61</b>desktop commands</div>
+              <div><b>93</b>HTTP routes</div>
+              <div><b>368</b>Python tests</div>
             </dl>
           </div>
 
@@ -105,17 +106,17 @@ export default function Home() {
             <li>
               <span className="step">01</span>
               <h3>Interface</h3>
-              <p>Next.js 16 and React 19. 13 pages, 66 typed API methods, Tauri webview or browser.</p>
+              <p>Next.js 16 and React 19. 13 pages, 73 typed API methods, Tauri webview or browser.</p>
             </li>
             <li>
               <span className="step">02</span>
               <h3>Shell</h3>
-              <p>Rust and Tauri 2 supervise the worker: 58 commands, JSON-lines IPC, process-tree kill.</p>
+              <p>Rust and Tauri 2 supervise the worker: 61 commands, JSON-lines IPC, process-tree kill.</p>
             </li>
             <li>
               <span className="step">03</span>
               <h3>Engine</h3>
-              <p>Python and PyTorch. 86 HTTP routes, 9 worker commands, 13 events, real Muon and AdamW.</p>
+              <p>Python and PyTorch. 93 HTTP routes, 9 worker commands, 13 events, real Muon and AdamW.</p>
             </li>
             <li>
               <span className="step">04</span>
@@ -133,7 +134,7 @@ export default function Home() {
           </SectionHead>
 
           <div className="score">
-            <b>7.5</b>
+            <b>9.7</b>
             <span>pre-remediation health score, out of 10</span>
           </div>
 
@@ -154,7 +155,7 @@ export default function Home() {
               ))}
             </tbody>
             <tfoot>
-              <tr><td>Total</td><td className="num">34</td><td className="num">33</td><td className="num open">1</td><td className="num">0</td></tr>
+              <tr><td>Total</td><td className="num">34</td><td className="num">34</td><td className="num">0</td><td className="num">0</td></tr>
             </tfoot>
           </table>
 
@@ -166,21 +167,28 @@ export default function Home() {
             </div>
             <div className="note">
               <strong>What stays open</strong>
-              One medium item: the missing frontend component test runner. The Cargo target
-              configuration is now portable; everything else in the audit is fixed.
+              The machine-specific Cargo target and the missing frontend test runner are
+              closed (Vitest component tests and Playwright flow tests now run). Runtime GGUF
+              loading is still unverified: the writer and API path are tested end to end, but
+              neither llama.cpp nor Ollama is installed here. The desktop shell also needs to
+              supervise the local dashboard before its sweep panel works without a separately
+              started backend.
             </div>
             <div className="note">
               <strong>How it was checked</strong>
-              354 Python tests, a 16-page static frontend build, a production website build,
-              Rust <code>cargo check</code>, and a GGUF smoke export. No unexecuted test is claimed.
+              368 Python tests, a 15-file static frontend export (13 routes), a production
+              website build, Rust <code>cargo check</code>, and a real GGUF export test. No
+              unexecuted test is claimed.
             </div>
             <div className="note">
               <strong>Since the audit</strong>
               One versioned schema shared by Rust and Python, pre-migration backups with
               retention, safe mode, encrypted notification secrets, startup integrity checks,
               versioned workspace archives, downgrade refusal, a bootstrap script and CI.
-              Portable data paths, real DDP, the setup wizard, GGUF export and the plugin API
-              landed after the audit was written.
+              Portable data paths, real DDP, the setup wizard, GGUF export, hyperparameter
+              sweeps, dataset quality audits and the plugin API landed after the audit was
+              written. Frontend component and end-to-end flow tests (Vitest plus Playwright)
+              now run on the UI side as well.
             </div>
           </div>
         </section>
@@ -214,37 +222,31 @@ export default function Home() {
           </SectionHead>
 
           <div className="shots">
-            <figure className="shot">
-              <img
-                src={`${basePath}/screenshots/training.png`}
-                alt="Training controller with loss, validation, dataset progress, optimizer and schedule panels"
+            <ZoomableScreenshot
+              src={`${basePath}/screenshots/training.png`}
+              alt="Training controller with loss, validation, dataset progress, optimizer and schedule panels"
+              width={1919}
+              height={1007}
+            >
+              Training controller — schedule, optimizer, batch geometry, live telemetry.
+            </ZoomableScreenshot>
+            <div className="shots-pair">
+              <ZoomableScreenshot
+                src={`${basePath}/screenshots/network_studio.png`}
+                alt="Network Studio canvas with transformer blocks, parameter counts and a model inspector"
+                width={1916}
+                height={1005}
+              >
+                Network Studio — architecture canvas with parameter accounting.
+              </ZoomableScreenshot>
+              <ZoomableScreenshot
+                src={`${basePath}/screenshots/datasets.png`}
+                alt="Dataset manager showing tokenized corpora and preprocessing status"
                 width={1919}
                 height={1007}
-                loading="lazy"
-              />
-              <figcaption>Training controller — schedule, optimizer, batch geometry, live telemetry.</figcaption>
-            </figure>
-            <div className="shots-pair">
-              <figure className="shot">
-                <img
-                  src={`${basePath}/screenshots/network_studio.png`}
-                  alt="Network Studio canvas with transformer blocks, parameter counts and a model inspector"
-                  width={1916}
-                  height={1005}
-                  loading="lazy"
-                />
-                <figcaption>Network Studio — architecture canvas with parameter accounting.</figcaption>
-              </figure>
-              <figure className="shot">
-                <img
-                  src={`${basePath}/screenshots/datasets.png`}
-                  alt="Dataset manager showing tokenized corpora and preprocessing status"
-                  width={1919}
-                  height={1007}
-                  loading="lazy"
-                />
-                <figcaption>Datasets — tokenized corpora, token counts and inspection.</figcaption>
-              </figure>
+              >
+                Datasets — tokenized corpora, token counts and inspection.
+              </ZoomableScreenshot>
             </div>
           </div>
         </section>

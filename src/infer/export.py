@@ -52,6 +52,10 @@ def export_to_safetensors(
         "rope_theta": model.config.rope_theta,
         "max_seq_len": model.config.max_seq_len,
         "tie_word_embeddings": model.config.tie_word_embeddings,
+        "canon_enabled": getattr(model.config, "canon_enabled", True),
+        "qk_norm": getattr(model.config, "qk_norm", True),
+        "residual_scale": getattr(model.config, "residual_scale", True),
+        "architecture": getattr(model.config, "architecture", "rocanon"),
         "torch_dtype": "bfloat16",
     }
     with open(out_path / "config.json", "w", encoding="utf-8") as f:

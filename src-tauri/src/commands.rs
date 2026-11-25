@@ -3,7 +3,7 @@
 
 use crate::database::{DatabaseManager, RunSummary, WorkspaceItem};
 use crate::hardware::{HardwareMonitor, HardwareTelemetry};
-use crate::worker::{WorkerStatus, WorkerSupervisor};
+use crate::worker::{project_root, WorkerStatus, WorkerSupervisor};
 use base64::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -475,6 +475,187 @@ pub async fn curate_dataset(
     })
     .await
     .map_err(|e| format!("Curate task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn list_models(state: State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let python = state.supervisor.python_path();
+    let project = project_root();
+    let data_dir = state.supervisor.data_dir();
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = Command::new(&python);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.current_dir(&project);
+        cmd.env("PYTHONPATH", &project);
+        cmd.env("PYTHONIOENCODING", "utf-8");
+        cmd.env("PYTHONUNBUFFERED", "1");
+        cmd.env("LLMMAKER_DATA_DIR", &data_dir);
+        cmd.args(["-m", "src.worker.model_ops", "list"]);
+        let output = cmd
+            .output()
+            .map_err(|err| format!("Could not launch {:?}: {err}", python))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    return Ok(parsed);
+                }
+            }
+        }
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    })
+    .await
+    .map_err(|e| format!("Model listing task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn export_gguf(
+    state: State<'_, AppState>,
+    id: String,
+    quant: Option<String>,
+    arch: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let python = state.supervisor.python_path();
+    let project = project_root();
+    let data_dir = state.supervisor.data_dir();
+    let quant = quant.unwrap_or_else(|| "Q8_0".to_string());
+    let arch = arch.unwrap_or_else(|| "auto".to_string());
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = Command::new(&python);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.current_dir(&project);
+        cmd.env("PYTHONPATH", &project);
+        cmd.env("PYTHONIOENCODING", "utf-8");
+        cmd.env("PYTHONUNBUFFERED", "1");
+        cmd.env("LLMMAKER_DATA_DIR", &data_dir);
+        cmd.args([
+            "-m",
+            "src.worker.model_ops",
+            "export-gguf",
+            "--model",
+            &id,
+            "--quant",
+            &quant,
+            "--arch",
+            &arch,
+        ]);
+        let output = cmd
+            .output()
+            .map_err(|err| format!("Could not launch {:?}: {err}", python))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for line in stdout.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
+                        return Err(err.to_string());
+                    }
+                    if !output.status.success() {
+                        return Err(format!(
+                            "GGUF export exited with {}: {}",
+                            output.status,
+                            stderr.trim()
+                        ));
+                    }
+                    return Ok(parsed);
+                }
+            }
+        }
+        let detail = stderr.trim();
+        Err(if detail.is_empty() {
+            "GGUF export produced no result".to_string()
+        } else {
+            format!("GGUF export failed: {detail}")
+        })
+    })
+    .await
+    .map_err(|e| format!("GGUF export task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn audit_dataset_quality(
+    state: State<'_, AppState>,
+    id: String,
+    options: Option<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let python = state.supervisor.python_path();
+    let project = project_root();
+    let data_dir = state.supervisor.data_dir();
+    tokio::task::spawn_blocking(move || {
+        let max_samples = options
+            .as_ref()
+            .and_then(|o| o.get("max_samples"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(5000);
+        let duplicate_threshold = options
+            .as_ref()
+            .and_then(|o| o.get("duplicate_threshold"))
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.80);
+        let workspace_id = options
+            .as_ref()
+            .and_then(|o| o.get("workspace_id"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("default");
+
+        let mut cmd = Command::new(&python);
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+        cmd.current_dir(&project);
+        cmd.env("PYTHONPATH", &project);
+        cmd.env("PYTHONIOENCODING", "utf-8");
+        cmd.env("PYTHONUNBUFFERED", "1");
+        cmd.env("LLMMAKER_DATA_DIR", &data_dir);
+        cmd.args(&[
+            "-m",
+            "src.worker.dataset_ops",
+            "audit",
+            "--dataset",
+            &id,
+            "--max-samples",
+            &max_samples.to_string(),
+            "--duplicate-threshold",
+            &duplicate_threshold.to_string(),
+            "--workspace",
+            workspace_id,
+        ]);
+
+        let output = cmd
+            .output()
+            .map_err(|err| format!("Could not launch {:?}: {err}", python))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for line in stdout.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
+                        return Err(err.to_string());
+                    }
+                    if !output.status.success() {
+                        return Err(format!(
+                            "Dataset quality audit exited with {}: {}",
+                            output.status,
+                            stderr.trim()
+                        ));
+                    }
+                    return Ok(parsed);
+                }
+            }
+        }
+        let detail = stderr.trim();
+        Err(if detail.is_empty() {
+            "Dataset quality audit produced no result".to_string()
+        } else {
+            format!("Dataset quality audit failed: {detail}")
+        })
+    })
+    .await
+    .map_err(|e| format!("Audit task failed: {}", e))?
 }
 
 #[tauri::command]

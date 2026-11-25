@@ -145,8 +145,38 @@ CONV1D_NETWORK_TEMPLATE: Dict[str, Any] = {
     "version": "1.0",
 }
 
+# Template 7: Llama-compatible 48.5M (deployable GGUF)
+LLAMA_COMPAT_48M_TEMPLATE: Dict[str, Any] = {
+    "id": "llama_compat_48m",
+    "name": "Llama-Compatible 48.5M",
+    "description": "Standard Llama-style decoder (no Canon convolutions, no QK-Norm, no residual scaling) whose GGUF export loads in stock llama.cpp.",
+    "architecture_family": "rocanon_native",
+    "architecture": "llama",
+    "vocab_size": 12288,
+    "max_seq_len": 2048,
+    "d_model": 512,
+    "n_layers": 16,
+    "n_q": 8,
+    "n_kv": 2,
+    "d_h": 64,
+    "d_ff": 1280,
+    "norm_type": "rmsnorm",
+    "activation": "swiglu",
+    "pos_encoding": "rope",
+    "has_conv1d": False,
+    "canon_enabled": False,
+    "conv_kernel_size": 1,
+    "qk_norm": False,
+    "residual_scale": False,
+    "pre_norm": True,
+    "tie_word_embeddings": True,
+    "supported_tasks": ["causal_lm"],
+    "version": "1.0",
+}
+
 ALL_TEMPLATES: List[Dict[str, Any]] = [
     ROCANON_48M_TEMPLATE,
+    LLAMA_COMPAT_48M_TEMPLATE,
     MINI_GPT_15M_TEMPLATE,
     BERT_ENCODER_25M_TEMPLATE,
     HYBRID_CNN_TRANSFORMER_TEMPLATE,

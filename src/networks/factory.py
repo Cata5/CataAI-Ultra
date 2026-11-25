@@ -136,6 +136,9 @@ class GenericModularNetwork(nn.Module):
                     pre_norm=bool(config.get("pre_norm", True)),
                     residual_scale=residual_scale,
                     has_conv1d=b_has_conv,
+                    conv_kernel_size=int(
+                        layer_spec.get("conv_kernel_size", config.get("conv_kernel_size", 4))
+                    ),
                     qk_norm=b_qk_norm,
                     use_rope=b_use_rope,
                     max_seq_len=self.max_seq_len,

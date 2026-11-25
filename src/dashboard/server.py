@@ -48,6 +48,7 @@ from ..security.secrets import SecretsKeyError
 from ..telemetry.hardware import HardwareMonitor
 from ..telemetry.profiles import HardwareProfile
 from ..training.factory import calculate_analytical_parameters, list_checkpoints
+from ..training.sweeps import SweepError, SweepManager
 from ..training.tasks.registry import TaskRegistry
 from ..utils.paths import models_dir
 from ..worker.protocol import CommandType, EventType, RunState, WorkerCommand, WorkerEvent
@@ -62,6 +63,7 @@ DB = StudioDatabase()
 WORKSPACE_MGR = WorkspaceManager(db=DB)
 PLUGIN_MGR = PluginManager(db=DB)
 WORKER_MGR = WorkerManager(db=DB)
+SWEEP_MGR = SweepManager(WORKER_MGR)
 CHECKPOINT_MGR = CheckpointManager(db=DB)
 DATASET_MGR = DatasetManager(db=DB)
 PIPELINE_MGR = PipelineManager(db=DB)
@@ -228,12 +230,83 @@ async def handle_create_run(request: web.Request) -> web.Response:
     ws_id = get_request_workspace_id(request)
     if "workspace_id" not in data:
         data["workspace_id"] = ws_id
+    # The worker would generate a run id internally, but callers need the same
+    # id to stop/poll the run. Allocate it here and pass it through.
+    if not data.get("run_id"):
+        data["run_id"] = f"run_{uuid.uuid4().hex[:12]}"
 
     success = WORKER_MGR.start_run(data)
     if success:
         return web.json_response({"status": "started", "payload": data})
     else:
         return web.json_response({"error": "Failed to start run; worker busy or invalid state"}, status=409)
+
+
+async def handle_list_sweeps(request: web.Request) -> web.Response:
+    return web.json_response(SWEEP_MGR.list_sweeps())
+
+
+async def handle_create_sweep(request: web.Request) -> web.Response:
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "Invalid JSON"}, status=400)
+    try:
+        max_trials = int(data.get("max_trials", 50))
+        early_stop_ratio = float(data.get("early_stop_ratio", 0.05))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "max_trials must be an integer and early_stop_ratio a number"}, status=400)
+    try:
+        sweep = SWEEP_MGR.create_sweep(
+            name=str(data.get("name") or ""),
+            base_payload=data.get("base_payload") or {},
+            axes=data.get("axes") or {},
+            max_trials=max_trials,
+            early_stop=bool(data.get("early_stop", True)),
+            early_stop_ratio=early_stop_ratio,
+            workspace_id=get_request_workspace_id(request),
+        )
+        return web.json_response({"success": True, "sweep": sweep})
+    except SweepError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    except Exception as exc:
+        logger.exception("Could not create sweep")
+        return web.json_response({"error": str(exc)}, status=500)
+
+
+async def handle_get_sweep(request: web.Request) -> web.Response:
+    sweep = SWEEP_MGR.get_sweep(str(request.match_info.get("id")))
+    if not sweep:
+        return web.json_response({"error": "Sweep not found"}, status=404)
+    return web.json_response(sweep)
+
+
+async def handle_start_sweep(request: web.Request) -> web.Response:
+    sweep_id = str(request.match_info.get("id"))
+    if not SWEEP_MGR.get_sweep(sweep_id):
+        return web.json_response({"error": "Sweep not found"}, status=404)
+    try:
+        started = SWEEP_MGR.start_sweep(sweep_id)
+    except SweepError as exc:
+        return web.json_response({"error": str(exc)}, status=409)
+    return web.json_response({"success": True, "started": started})
+
+
+async def handle_stop_sweep(request: web.Request) -> web.Response:
+    success = SWEEP_MGR.stop_sweep(str(request.match_info.get("id")))
+    if not success:
+        return web.json_response({"error": "Sweep not found"}, status=404)
+    return web.json_response({"success": True})
+
+
+async def handle_delete_sweep(request: web.Request) -> web.Response:
+    try:
+        success = SWEEP_MGR.delete_sweep(str(request.match_info.get("id")))
+    except SweepError as exc:
+        return web.json_response({"error": str(exc)}, status=409)
+    if not success:
+        return web.json_response({"error": "Sweep not found"}, status=404)
+    return web.json_response({"success": True})
 
 
 async def handle_run_pause(request: web.Request) -> web.Response:
@@ -592,6 +665,61 @@ async def handle_format_sft_dataset(request: web.Request) -> web.Response:
     except Exception as exc:
         logger.exception("SFT formatting failed for %s: %s", ds_id, exc)
         return web.json_response({"error": f"SFT formatting failed: {exc}"}, status=500)
+
+async def handle_dataset_quality(request: web.Request) -> web.Response:
+    """Read-only preflight: quality, PII, duplicates, contamination, fertility."""
+    from ..data.quality_audit import audit_dataset_file
+
+    ds_id = request.match_info.get("id")
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not ds_id:
+        ds_id = data.get("dataset_id") or data.get("id")
+    if not ds_id:
+        return web.json_response({"error": "No dataset_id provided"}, status=400)
+    info = DATASET_MGR.get_dataset_details(str(ds_id))
+    source = info.get("file_path") if info else None
+    if not source or not Path(source).is_file():
+        return web.json_response({"error": f"Dataset file not found for {ds_id}"}, status=404)
+
+    eval_ids = data.get("eval_dataset_ids") or []
+    if isinstance(eval_ids, str):
+        eval_ids = [eval_ids]
+    if not isinstance(eval_ids, list):
+        return web.json_response({"error": "eval_dataset_ids must be a list"}, status=400)
+    eval_paths = []
+    for eval_id in eval_ids[:10]:
+        eval_info = DATASET_MGR.get_dataset_details(str(eval_id))
+        if eval_info and eval_info.get("file_path"):
+            eval_paths.append(eval_info["file_path"])
+    try:
+        max_docs = int(data.get("max_samples", data.get("max_docs", 5000)))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "max_samples must be an integer"}, status=400)
+    try:
+        duplicate_threshold = float(data.get("duplicate_threshold", 0.80))
+    except (TypeError, ValueError):
+        return web.json_response({"error": "duplicate_threshold must be a number"}, status=400)
+    try:
+        # Auditing is CPU-bound; keep the aiohttp event loop responsive.
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: audit_dataset_file(
+                source,
+                eval_paths=eval_paths,
+                tokenizer=DATASET_MGR.tokenizer,
+                max_docs=max_docs,
+                duplicate_threshold=duplicate_threshold,
+            ),
+        )
+        return web.json_response({"success": True, "dataset_id": ds_id, "name": info.get("name", ds_id), **result})
+    except Exception as exc:
+        logger.exception("Dataset quality audit failed for %s", ds_id)
+        return web.json_response({"error": str(exc)}, status=500)
+
 
 async def handle_curate_dataset(request: web.Request) -> web.Response:
     ds_id = request.match_info.get("id")
@@ -1586,33 +1714,26 @@ async def handle_export_ollama(request: web.Request) -> web.Response:
 
 
 async def handle_export_gguf(request: web.Request) -> web.Response:
-    """Writes a lossless custom-architecture GGUF plus a JSON manifest."""
-    from ..infer.gguf_export import GGUFUnsupportedError, export_gguf
-    from ..utils.paths import models_dir
+    """Exports a llama-compatible or lossless custom-layout GGUF with a manifest."""
+    from ..infer.gguf_export import GGUFUnsupportedError
+    from ..worker.model_ops import export_saved_model_gguf
 
     model_id = request.match_info.get("id") or "model"
-    safe_id = re.sub(r"[^\w\-_.]", "_", model_id).strip(".")
-    if not safe_id:
-        return web.json_response({"error": "Invalid model id"}, status=400)
     quant = str(request.query.get("quant", "Q8_0")).upper()
-    folder = models_dir() / safe_id
-    candidates = [folder / f"{safe_id}_stripped.pt", folder / f"{safe_id}_full.pt"]
-    checkpoint = next((path for path in candidates if path.is_file()), None)
-    if checkpoint is None:
-        return web.json_response({"error": f"No saved model package found for {model_id}"}, status=404)
+    requested_arch = str(request.query.get("arch", "auto")).lower()
     try:
-        payload = torch.load(checkpoint, map_location="cpu", weights_only=True)
-        metadata = {
-            "general.name": safe_id,
-            "rocanon.source_checkpoint": str(checkpoint),
-        }
-        manifest = export_gguf(
-            payload,
-            folder / f"{safe_id}-{quant}.gguf",
-            quant=quant,
-            metadata=metadata,
+        loop = asyncio.get_running_loop()
+        manifest = await loop.run_in_executor(
+            None,
+            lambda: export_saved_model_gguf(
+                model_id,
+                quant=quant,
+                arch=requested_arch,
+            ),
         )
         return web.json_response({"success": True, **manifest})
+    except FileNotFoundError:
+        return web.json_response({"error": f"No saved model package found for {model_id}"}, status=404)
     except GGUFUnsupportedError as exc:
         return web.json_response({"error": str(exc)}, status=400)
     except Exception as exc:
@@ -1837,6 +1958,13 @@ def create_app() -> web.Application:
     app.router.add_get("/api/logs", handle_get_logs)
     app.router.add_post("/api/logs/clear", handle_clear_logs)
 
+    app.router.add_get("/api/sweeps", handle_list_sweeps)
+    app.router.add_post("/api/sweeps", handle_create_sweep)
+    app.router.add_get("/api/sweeps/{id}", handle_get_sweep)
+    app.router.add_post("/api/sweeps/{id}/start", handle_start_sweep)
+    app.router.add_post("/api/sweeps/{id}/stop", handle_stop_sweep)
+    app.router.add_delete("/api/sweeps/{id}", handle_delete_sweep)
+
     app.router.add_get("/api/runs", handle_list_runs)
     app.router.add_post("/api/runs", handle_create_run)
     app.router.add_post("/api/runs/{id}/start", handle_create_run)
@@ -1870,6 +1998,7 @@ def create_app() -> web.Application:
     app.router.add_post("/api/datasets/tokenize", handle_tokenize_dataset)
     app.router.add_post("/api/datasets/{id}/format", handle_format_sft_dataset)
     app.router.add_post("/api/datasets/format", handle_format_sft_dataset)
+    app.router.add_post("/api/datasets/{id}/quality", handle_dataset_quality)
     app.router.add_post("/api/datasets/{id}/curate", handle_curate_dataset)
     app.router.add_post("/api/datasets/curate", handle_curate_dataset)
     app.router.add_delete("/api/datasets/{id}", handle_delete_dataset)

@@ -65,6 +65,12 @@ class RoCanonConfig:
     max_seq_len: int = 2048
     initializer_range: float = 0.02
     tie_word_embeddings: bool = True
+    # Compatibility switches. A standard Llama-style model disables Canon-A..D,
+    # QK-Norm and residual scaling so its tensors map 1:1 to a llama.cpp GGUF.
+    canon_enabled: bool = True
+    qk_norm: bool = True
+    residual_scale: bool = True
+    architecture: str = "rocanon"
 
 
 class RMSNorm(nn.Module):
@@ -193,7 +199,7 @@ class RoCanonAttention(nn.Module):
         self.n_kv = config.n_kv
         self.d_h = config.d_h
         self.num_key_value_groups = config.n_q // config.n_kv
-        self.scale = 1.0 / math.sqrt(2 * config.n_layers)
+        self.scale = (1.0 / math.sqrt(2 * config.n_layers)) if config.residual_scale else 1.0
 
         self.q_proj = nn.Linear(config.d_model, config.n_q * config.d_h, bias=False)
         self.k_proj = nn.Linear(config.d_model, config.n_kv * config.d_h, bias=False)
@@ -202,14 +208,16 @@ class RoCanonAttention(nn.Module):
         self.o_proj._is_residual_proj = True
 
         # Canon-B channels: 512 (Q) + 128 (K) + 128 (V) = 768
-        self.canon_b = CausalDepthwiseConv1d(
-            channels=config.d_model + 2 * config.n_kv * config.d_h,
-            kernel_size=config.kernel_size,
-        )
+        if config.canon_enabled:
+            self.canon_b = CausalDepthwiseConv1d(
+                channels=config.d_model + 2 * config.n_kv * config.d_h,
+                kernel_size=config.kernel_size,
+            )
 
         # QK-Norm learnable scales per head dimension (64 each)
-        self.q_norm = RMSNorm(config.d_h, eps=config.rms_norm_eps)
-        self.k_norm = RMSNorm(config.d_h, eps=config.rms_norm_eps)
+        if config.qk_norm:
+            self.q_norm = RMSNorm(config.d_h, eps=config.rms_norm_eps)
+            self.k_norm = RMSNorm(config.d_h, eps=config.rms_norm_eps)
 
     def forward(
         self,
@@ -226,16 +234,22 @@ class RoCanonAttention(nn.Module):
         v = self.v_proj(x)
 
         # Canon-B: causal depthwise conv on concatenated [Q, K, V]
-        qkv = self.canon_b(torch.cat([q, k, v], dim=-1))
-        q, k, v = torch.split(
-            qkv,
-            [self.n_q * self.d_h, self.n_kv * self.d_h, self.n_kv * self.d_h],
-            dim=-1,
-        )
+        if self.config.canon_enabled:
+            qkv = self.canon_b(torch.cat([q, k, v], dim=-1))
+            q, k, v = torch.split(
+                qkv,
+                [self.n_q * self.d_h, self.n_kv * self.d_h, self.n_kv * self.d_h],
+                dim=-1,
+            )
 
-        # Reshape to [B, S, H, d_h] and apply QK-Norm per head dimension
-        q = self.q_norm(q.view(b_sz, seq_len, self.n_q, self.d_h)).transpose(1, 2)
-        k = self.k_norm(k.view(b_sz, seq_len, self.n_kv, self.d_h)).transpose(1, 2)
+        # Reshape to [B, S, H, d_h] and apply optional QK-Norm per head dimension
+        q = q.view(b_sz, seq_len, self.n_q, self.d_h)
+        k = k.view(b_sz, seq_len, self.n_kv, self.d_h)
+        if self.config.qk_norm:
+            q = self.q_norm(q)
+            k = self.k_norm(k)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
         v = v.view(b_sz, seq_len, self.n_kv, self.d_h).transpose(1, 2)
 
         # Apply RoPE to normalized query and key representations
@@ -305,7 +319,7 @@ class RoCanonMLP(nn.Module):
         self.config = config
         self.d_model = config.d_model
         self.d_ff = config.d_ff
-        self.scale = 1.0 / math.sqrt(2 * config.n_layers)
+        self.scale = (1.0 / math.sqrt(2 * config.n_layers)) if config.residual_scale else 1.0
 
         self.gate_proj = nn.Linear(config.d_model, config.d_ff, bias=False)
         self.up_proj = nn.Linear(config.d_model, config.d_ff, bias=False)
@@ -313,17 +327,19 @@ class RoCanonMLP(nn.Module):
         self.down_proj._is_residual_proj = True
 
         # Canon-D channels: 1280 (Gate) + 1280 (Up) = 2560
-        self.canon_d = CausalDepthwiseConv1d(
-            channels=2 * config.d_ff,
-            kernel_size=config.kernel_size,
-        )
+        if config.canon_enabled:
+            self.canon_d = CausalDepthwiseConv1d(
+                channels=2 * config.d_ff,
+                kernel_size=config.kernel_size,
+            )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Project gate and up, concatenate for Canon-D convolution
+        # Project gate and up, concatenate for optional Canon-D convolution
         gate = self.gate_proj(x)
         up = self.up_proj(x)
-        gu = self.canon_d(torch.cat([gate, up], dim=-1))
-        gate, up = torch.split(gu, [self.d_ff, self.d_ff], dim=-1)
+        if self.config.canon_enabled:
+            gu = self.canon_d(torch.cat([gate, up], dim=-1))
+            gate, up = torch.split(gu, [self.d_ff, self.d_ff], dim=-1)
 
         # SwiGLU activation and down projection
         hidden = F.silu(gate) * up
@@ -351,11 +367,13 @@ class RoCanonBlock(nn.Module):
         super().__init__()
         self.config = config
         self.attn_norm = RMSNorm(config.d_model, eps=config.rms_norm_eps)
-        self.canon_a = CausalDepthwiseConv1d(config.d_model, config.kernel_size)
+        if config.canon_enabled:
+            self.canon_a = CausalDepthwiseConv1d(config.d_model, config.kernel_size)
         self.attn = RoCanonAttention(config)
 
         self.ffn_norm = RMSNorm(config.d_model, eps=config.rms_norm_eps)
-        self.canon_c = CausalDepthwiseConv1d(config.d_model, config.kernel_size)
+        if config.canon_enabled:
+            self.canon_c = CausalDepthwiseConv1d(config.d_model, config.kernel_size)
         self.mlp = RoCanonMLP(config)
 
     def forward(
@@ -367,13 +385,13 @@ class RoCanonBlock(nn.Module):
     ) -> torch.Tensor:
         # Attention sublayer
         norm_attn = self.attn_norm(x)
-        in_attn = self.canon_a(norm_attn)
+        in_attn = self.canon_a(norm_attn) if self.config.canon_enabled else norm_attn
         attn_out = self.attn(in_attn, cos, sin, cu_seqlens=cu_seqlens)
         x = x + attn_out
 
         # MLP sublayer
         norm_ffn = self.ffn_norm(x)
-        in_mlp = self.canon_c(norm_ffn)
+        in_mlp = self.canon_c(norm_ffn) if self.config.canon_enabled else norm_ffn
         mlp_out = self.mlp(in_mlp)
         x = x + mlp_out
 
@@ -420,7 +438,7 @@ class RoCanonForCausalLM(nn.Module):
         """
         if isinstance(module, nn.Linear):
             std = self.config.initializer_range
-            if hasattr(module, "_is_residual_proj") and module._is_residual_proj:
+            if self.config.residual_scale and hasattr(module, "_is_residual_proj") and module._is_residual_proj:
                 std = std / math.sqrt(2 * self.config.n_layers)
             nn.init.trunc_normal_(module.weight, mean=0.0, std=std, a=-2 * std, b=2 * std)
             if module.bias is not None:

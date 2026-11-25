@@ -134,14 +134,18 @@ def create_model_from_dict(cfg: Dict[str, Any]) -> nn.Module:
         n_layers=int(cfg.get("n_layers", 16)),
         n_q=int(cfg.get("n_q", 8)),
         n_kv=int(cfg.get("n_kv", 2)),
-        d_h=int(cfg.get("d_model", 512)) // int(cfg.get("n_q", 8)),
+        d_h=int(cfg.get("d_h", int(cfg.get("d_model", 512)) // int(cfg.get("n_q", 8)))),
         d_ff=int(cfg.get("d_ff", 1280)),
-        kernel_size=int(cfg.get("kernel_size", 4)),
+        kernel_size=int(cfg.get("kernel_size", cfg.get("conv_kernel_size", 4))),
         rms_norm_eps=float(cfg.get("rms_norm_eps", 1e-6)),
         rope_theta=float(cfg.get("rope_theta", 10000.0)),
         max_seq_len=int(cfg.get("max_seq_len", 2048)),
         initializer_range=float(cfg.get("initializer_range", 0.02)),
         tie_word_embeddings=bool(cfg.get("tie_word_embeddings", True)),
+        canon_enabled=bool(cfg.get("canon_enabled", cfg.get("has_conv1d", True))),
+        qk_norm=bool(cfg.get("qk_norm", True)),
+        residual_scale=bool(cfg.get("residual_scale", cfg.get("scale_residual_with_layers", True))),
+        architecture=str(cfg.get("architecture", "rocanon")),
     )
     return RoCanonForCausalLM(model_cfg)
 

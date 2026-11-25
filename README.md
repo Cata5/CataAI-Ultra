@@ -8,7 +8,7 @@
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat&logo=rust)](https://rust-lang.org)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black.svg?style=flat&logo=next.js)](https://nextjs.org)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Tests](<https://img.shields.io/badge/Tests-354%20Passed-brightgreen.svg>)]()
+[![Tests](<https://img.shields.io/badge/Tests-368%20Passed-brightgreen.svg>)]()
 
 **LLM Maker** is an end-to-end, local-first research platform designed to democratize pretraining, post-training alignment, and architectural experimentation for Large Language Models. Built for consumer hardware (from 6GB VRAM laptop GPUs up to multi-node distributed clusters), it combines a **native desktop workstation** (Rust + Tauri 2.0), **visual node-based neural architecture studio**, **WDDM-aware zero-paging VRAM protection**, **hybrid Muon + AdamW optimizers**, **percentage-based WSD scheduling**, and **Hugging Face Hub foundation imports**.
 
@@ -159,20 +159,23 @@ Open **[http://localhost:8080](http://localhost:8080)** in your browser. All req
 ## 📦 Model Export
 
 - **Safetensors**: `src/infer/export.py` writes portable PyTorch weights.
-- **GGUF (Q8_0 / F16 / F32)**: `GET /api/models/{id}/export_gguf?quant=Q8_0`
-  writes a GGUF v3 container with the real RoCanon tensors and a SHA-256
-  manifest next to it. Q8_0 falls back to F16 for tensors whose last dimension
-  is not divisible by 32; the manifest reports the exact tensor-type counts.
+- **GGUF (Q8_0 / F16 / F32)**: `GET /api/models/{id}/export_gguf?quant=Q8_0&arch=auto`
+  writes a GGUF v3 container with a SHA-256 manifest next to it. Q8_0 falls back
+  to F16 for tensors whose last dimension is not divisible by 32; the manifest
+  reports the exact tensor-type counts.
+- `arch=llama` writes the standard Llama tensor layout and metadata. It refuses
+  Canon depthwise convolutions and tokenizer/embedding-vocabulary mismatches
+  instead of producing a file that will not load. `arch=rocanon` keeps the
+  Canon tensors in a lossless custom layout.
 
-> **Honest limit:** the produced GGUF uses the custom `rocanon` architecture.
-> Stock llama.cpp/Ollama cannot execute its Canon depthwise convolutions, so
-> Ollama export returns HTTP 400 instead of generating a Modelfile that points
-> at an unloadable `.pt`. Q4_K_M is also rejected rather than silently shipping
-> a different quantization.
+> **Honest limit:** the llama-compatible writer and API are covered end to end,
+> but a foreign-runtime load has not been verified here because neither
+> llama.cpp nor Ollama is installed. Ollama export still returns HTTP 400 for a
+> RoCanon checkpoint, and Q4_K_M is rejected rather than silently downgraded.
 
 ## 🧪 Running the Test Suite
 
-LLM Maker includes 354 automated tests verifying neural layer arithmetic, tokenizer parity, dataset pipelines, VRAM estimators, checkpoint resumption, and IPC commands:
+LLM Maker includes 368 automated tests verifying neural layer arithmetic, tokenizer parity, dataset pipelines, VRAM estimators, checkpoint resumption, GGUF export, and IPC commands:
 
 ```bash
 # Run the complete test suite
@@ -254,7 +257,7 @@ llm-maker/
 │
 ├── networks/registry/         # Exported model architecture configs (JSON)
 ├── datasets/                  # Datasets & pre-tokenized memmap binaries (.bin/.meta.json)
-└── tests/                     # 354 unit and end-to-end tests
+└── tests/                     # 368 unit and end-to-end tests
 ```
 
 ---

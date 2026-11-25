@@ -1,0 +1,32 @@
+{
+  "id": "llama_compat_48m",
+  "name": "Llama-Compatible 48.5M",
+  "description": "Standard Llama-style decoder (no Canon convolutions, no QK-Norm, no residual scaling) whose GGUF export loads in stock llama.cpp.",
+  "architecture_family": "rocanon_native",
+  "architecture": "llama",
+  "vocab_size": 12288,
+  "max_seq_len": 2048,
+  "d_model": 512,
+  "n_layers": 16,
+  "n_q": 8,
+  "n_kv": 2,
+  "d_h": 64,
+  "d_ff": 1280,
+  "norm_type": "rmsnorm",
+  "activation": "swiglu",
+  "pos_encoding": "rope",
+  "has_conv1d": false,
+  "canon_enabled": false,
+  "conv_kernel_size": 1,
+  "qk_norm": false,
+  "residual_scale": false,
+  "pre_norm": true,
+  "tie_word_embeddings": true,
+  "supported_tasks": [
+    "causal_lm"
+  ],
+  "version": "1.0",
+  "total_parameters": 48251392,
+  "created_at": 1795610345.400922,
+  "updated_at": 1795610345.4009225
+}

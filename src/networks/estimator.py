@@ -117,10 +117,15 @@ class ParameterCalculator:
             b_dim = int(layer_spec.get("d_model", d_model))
             b_nq = int(layer_spec.get("n_q", config.get("n_q", 8)))
             b_nkv = int(layer_spec.get("n_kv", config.get("n_kv", 2)))
-            b_dh = int(layer_spec.get("d_h", b_dim // b_nq))
+            b_dh = int(layer_spec.get("d_h", config.get("d_h", b_dim // b_nq)))
             b_dff = int(layer_spec.get("d_ff", config.get("d_ff", 1280)))
             b_act = layer_spec.get("activation", config.get("activation", "swiglu")).lower()
-            has_conv = bool(layer_spec.get("has_conv1d", config.get("has_conv1d", False)))
+            has_conv = bool(
+                layer_spec.get(
+                    "has_conv1d",
+                    config.get("canon_enabled", config.get("has_conv1d", False)),
+                )
+            )
             k_size = int(layer_spec.get("conv_kernel_size", config.get("conv_kernel_size", 4)))
             b_qk_norm = bool(layer_spec.get("qk_norm", config.get("qk_norm", False)))
 
@@ -150,7 +155,10 @@ class ParameterCalculator:
                 else:
                     ffn_p = (b_dim * b_dff) + (b_dff * b_dim)
 
-                conv_p = (b_dim * 4) if has_conv else 0
+                # Generic/hybrid blocks get one depthwise convolution on
+                # d_model (the four-Canon layout is handled by the RoCanon
+                # baseline special case above).
+                conv_p = (b_dim * k_size) if has_conv else 0
                 norm_p = 2 * b_dim * norm_mult  # norm1 + norm2
 
             # Custom module parameter calculation if present
@@ -191,7 +199,7 @@ class ParameterCalculator:
             num_classes = int(head_spec.get("num_classes", 2))
             head_params = (d_model * num_classes) + num_classes
         else:
-            if tie_embeddings and family in ("decoder_only", "hybrid"):
+            if tie_embeddings and family in ("decoder_only", "hybrid", "rocanon_native"):
                 head_params = 0  # Tied with token embeddings
             else:
                 head_params = d_model * vocab_size

@@ -46,12 +46,12 @@ export const ModelsView: React.FC = () => {
     load();
   }, [load]);
 
-  const exportGguf = async (model: SavedModel, quant: "Q8_0" | "F16") => {
-    setExporting(`${model.id}:${quant}`);
+  const exportGguf = async (model: SavedModel, quant: "Q8_0" | "F16", arch: "auto" | "llama" | "rocanon" = "auto") => {
+    setExporting(`${model.id}:${arch}:${quant}`);
     setError(null);
     setResult(null);
     try {
-      const response = await api.exportGguf(model.id, quant);
+      const response = await api.exportGguf(model.id, quant, arch);
       setResult(response);
       await load();
     } catch (exportError: any) {
@@ -90,7 +90,10 @@ export const ModelsView: React.FC = () => {
         <div className="panel p-3 bg-[#202020] border-[#333333] space-y-1">
           <div className="text-[#4ade80] font-semibold">GGUF WRITTEN</div>
           <div className="text-[#F2F2F2] break-all">{result.path}</div>
-          <div className="text-[#A3A3A3]">{mb(result.bytes)} · {result.tensor_count} tensors · {result.quantization}</div>
+          <div className="text-[#A3A3A3]">{mb(result.bytes)} · {result.tensor_count} tensors · {result.quantization} · {result.architecture}</div>
+          <div className={result.runtime_compatible ? "text-[#4ade80]" : "text-amber-300"}>
+            {result.runtime_compatible ? "Runtime-compatible layout (llama.cpp)" : "Custom container (not stock llama.cpp)"}
+          </div>
           <div className="text-[#737373] break-all">sha256 {result.sha256}</div>
           <div className="text-amber-300/90 text-[10px] leading-relaxed">{result.note}</div>
         </div>
@@ -128,16 +131,29 @@ export const ModelsView: React.FC = () => {
                   </span>
                 ))}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {(["Q8_0", "F16"] as const).map((quant) => (
                   <button
-                    key={quant}
-                    onClick={() => exportGguf(model, quant)}
+                    key={`llama-${quant}`}
+                    onClick={() => exportGguf(model, quant, "llama")}
                     disabled={exporting !== null}
+                    title="Requires the Llama-Compatible preset; Canon checkpoints refuse honestly"
                     className="px-2.5 py-1.5 rounded bg-[#262626] border border-[#333333] hover:border-[#525252] text-[#A3A3A3] hover:text-[#F2F2F2] transition-colors flex items-center gap-1.5 text-[10px] disabled:opacity-50"
                   >
                     <Download className="w-3 h-3" />
-                    {exporting === `${model.id}:${quant}` ? "Exporting…" : `GGUF ${quant}`}
+                    {exporting === `${model.id}:llama:${quant}` ? "Exporting…" : `llama.cpp ${quant}`}
+                  </button>
+                ))}
+                {(["Q8_0", "F16"] as const).map((quant) => (
+                  <button
+                    key={`rocanon-${quant}`}
+                    onClick={() => exportGguf(model, quant, "rocanon")}
+                    disabled={exporting !== null}
+                    title="Lossless custom RoCanon container (not runnable in stock llama.cpp)"
+                    className="px-2.5 py-1.5 rounded bg-[#1B1B1B] border border-[#333333] hover:border-[#525252] text-[#737373] hover:text-[#F2F2F2] transition-colors flex items-center gap-1.5 text-[10px] disabled:opacity-50"
+                  >
+                    <Download className="w-3 h-3" />
+                    {exporting === `${model.id}:rocanon:${quant}` ? "Exporting…" : `RoCanon ${quant}`}
                   </button>
                 ))}
               </div>

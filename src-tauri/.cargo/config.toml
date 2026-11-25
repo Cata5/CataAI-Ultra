@@ -1,3 +1,6 @@
 [build]
-target = "x86_64-pc-windows-gnu"
-target-dir = "C:/Users/Cata/.cargo/target_llm_maker"
+# Use the host toolchain (MSVC on stock Windows, GNU only if that is the
+# installed host). Pinning the GNU triple made a clean Windows checkout fail
+# unless MinGW was installed.
+# target-dir is intentionally unset so builds use the portable default
+# (src-tauri/target); CI overrides CARGO_TARGET_DIR explicitly.

@@ -18,6 +18,7 @@ import {
   Filter,
   Wand2,
   AlertTriangle,
+  ShieldCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +27,8 @@ export const DatasetsView: React.FC = () => {
   const [isUploading, setIsUploading] = useState(false);
   const [tokenizingDatasetId, setTokenizingDatasetId] = useState<string | null>(null);
   const [curatingDatasetId, setCuratingDatasetId] = useState<string | null>(null);
+  const [qualityDatasetId, setQualityDatasetId] = useState<string | null>(null);
+  const [qualityResult, setQualityResult] = useState<any | null>(null);
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
   const [selectedDataset, setSelectedDataset] = useState<any | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<DatasetItem | null>(null);
@@ -257,6 +260,30 @@ export const DatasetsView: React.FC = () => {
           </button>
           <button
             onClick={async () => {
+              setQualityDatasetId(item.id);
+              setQualityResult(null);
+              try {
+                const res = await api.auditDatasetQuality(item.id, { max_samples: 5000 });
+                setQualityResult(res);
+              } catch (e: any) {
+                alert(`Quality audit failed: ${e.message}`);
+              } finally {
+                setQualityDatasetId(null);
+              }
+            }}
+            disabled={qualityDatasetId === item.id}
+            className="btn btn-secondary btn-sm px-2 text-[10px]"
+            title="Read-only audit: duplicates, PII, contamination, language, tokenizer fertility"
+          >
+            {qualityDatasetId === item.id ? (
+              <RefreshCw className="w-3 h-3 animate-spin" />
+            ) : (
+              <ShieldCheck className="w-3 h-3 text-[#737373]" />
+            )}
+            Quality
+          </button>
+          <button
+            onClick={async () => {
               try {
                 const stats = await api.getDatasetStats(item.id);
                 setSelectedDataset(stats);
@@ -415,6 +442,52 @@ export const DatasetsView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {qualityResult && (
+        <div className="panel p-3 bg-[#202020] border-[#333333] space-y-2">
+          <div className="flex items-center justify-between pb-1.5 border-b border-[#262626]">
+            <h3 className="panel-title">
+              <ShieldCheck className="w-3.5 h-3.5 text-[#737373]" /> Quality Audit · {qualityResult.name}
+            </h3>
+            <button onClick={() => setQualityResult(null)} className="text-[10px] text-[#737373] hover:text-[#F2F2F2]">close</button>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 text-[10px]">
+            {[
+              ["ANALYZED", qualityResult.documents_analyzed],
+              ["TRAINABLE", qualityResult.accepted_for_training],
+              ["QUALITY DROP", qualityResult.quality_rejected],
+              ["DUPLICATES", qualityResult.duplicates],
+              ["CONTAMINATED", qualityResult.contaminated],
+              ["PII DOCS", qualityResult.pii_documents],
+              ["TOKENS/WORD", qualityResult.tokens_per_word ?? "—"],
+            ].map(([label, value]) => (
+              <div key={String(label)} className="p-2 rounded bg-[#1B1B1B] border border-[#262626]">
+                <div className="text-[#737373]">{label}</div>
+                <div className="text-[#F2F2F2] text-sm">{String(value ?? "—")}</div>
+              </div>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-[#A3A3A3]">
+            <span>language rejected <strong>{qualityResult.language_rejected}</strong></span>
+            <span>unknown tokens <strong>{qualityResult.unknown_token_rate_pct ?? "—"}%</strong></span>
+            <span>eval docs indexed <strong>{qualityResult.eval_documents}</strong></span>
+            <span className="text-amber-300/90">PII is masked in previews; audit never rewrites the source file.</span>
+          </div>
+          {qualityResult.flagged_preview?.length ? (
+            <div className="space-y-1">
+              <div className="text-[10px] text-[#737373]">FLAGGED PREVIEW ({qualityResult.flagged_preview.length}{qualityResult.flagged_preview_truncated ? "+" : ""})</div>
+              {qualityResult.flagged_preview.slice(0, 8).map((row: any) => (
+                <div key={row.index} className="p-2 rounded bg-[#1B1B1B] border border-[#262626] text-[10px]">
+                  <div className="flex gap-2 text-amber-300"><strong>#{row.index}</strong> {row.reasons.join(", ")}</div>
+                  <div className="text-[#737373] truncate">{row.snippet}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-[10px] text-[#4ade80]">No flagged documents in the analyzed sample.</div>
+          )}
+        </div>
+      )}
 
       {/* Dataset Table */}
       <div className="space-y-1.5">

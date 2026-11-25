@@ -3,8 +3,7 @@
   One-command development/portable setup for LLM Maker.
 .DESCRIPTION
   Creates .venv, installs Python dependencies, builds the frontend, and compiles
-  the desktop shell. Safe to re-run; nothing outside the repository is modified
-  except the Cargo target directory configured in .cargo/config.toml.
+  the desktop shell. Safe to re-run; nothing outside the repository is modified.
 .PARAMETER Check
   Only verify prerequisites; do not install or build anything.
 .PARAMETER CpuOnly
@@ -32,6 +31,14 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+
+# Keep Rust build artifacts out of paths containing spaces. Windres (used by the
+# GNU toolchain) fails when its output path contains a space, which the checkout
+# path often does. Preserve an explicit user override.
+if (-not $env:CARGO_TARGET_DIR) {
+    $cargoBase = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { $env:TEMP }
+    $env:CARGO_TARGET_DIR = Join-Path $cargoBase "LLMMaker\cargo-target"
+}
 
 function Fail([string]$Message) {
     Write-Host "ERROR: $Message" -ForegroundColor Red

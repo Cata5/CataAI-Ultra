@@ -9,6 +9,7 @@ import { ChartPanel } from "@/components/ui/ChartPanel";
 import { StatusIndicator } from "@/components/ui/StatusIndicator";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SaveModelModal } from "@/components/ui/SaveModelModal";
+import { SweepsPanel } from "@/features/training/SweepsPanel";
 import { DatasetItem, NetworkConfig, CheckpointItem } from "@/types/api";
 import {
   Play,
@@ -726,6 +727,8 @@ export const TrainingView: React.FC = () => {
           <CheckCircle2 className="w-3.5 h-3.5 text-[#4ade80]" /> {feedback}
         </div>
       )}
+
+      <SweepsPanel />
 
       {/* Live Telemetry & Progress Strip */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 select-none font-mono">

@@ -499,6 +499,24 @@ export const api = {
       body: JSON.stringify(options || {}),
     });
   },
+  auditDatasetQuality: async (
+    id: string,
+    options?: { max_samples?: number; eval_dataset_ids?: string[]; duplicate_threshold?: number }
+  ): Promise<any> => {
+    const inv = await getTauriInvoke();
+    if (inv) {
+      try {
+        return await inv("audit_dataset_quality", { id, options: options || {} });
+      } catch (e: any) {
+        console.warn("Tauri audit_dataset_quality error:", e);
+        throw new Error(typeof e === "string" ? e : e?.message || "Quality audit failed");
+      }
+    }
+    return request<any>(`/api/datasets/${encodeURIComponent(id)}/quality`, {
+      method: "POST",
+      body: JSON.stringify(options || {}),
+    });
+  },
   formatSftDataset: async (
     id: string,
     options?: { template?: string; max_records?: number; register?: boolean }
@@ -903,10 +921,28 @@ export const api = {
     return request<any>("/api/compute/topology");
   },
   listModels: async (): Promise<any> => {
+    const inv = await getTauriInvoke();
+    if (inv) {
+      try {
+        return await inv("list_models");
+      } catch (e: any) {
+        console.warn("Tauri list_models error:", e);
+        throw new Error(typeof e === "string" ? e : e?.message || "Could not list saved models");
+      }
+    }
     return request<any>("/api/models");
   },
-  exportGguf: async (modelId: string, quant: "Q8_0" | "F16" = "Q8_0"): Promise<any> => {
-    return request<any>(`/api/models/${encodeURIComponent(modelId)}/export_gguf?quant=${quant}`, {
+  exportGguf: async (modelId: string, quant: "Q8_0" | "F16" = "Q8_0", arch: "auto" | "llama" | "rocanon" = "auto"): Promise<any> => {
+    const inv = await getTauriInvoke();
+    if (inv) {
+      try {
+        return await inv("export_gguf", { id: modelId, quant, arch });
+      } catch (e: any) {
+        console.warn("Tauri export_gguf error:", e);
+        throw new Error(typeof e === "string" ? e : e?.message || "GGUF export failed");
+      }
+    }
+    return request<any>(`/api/models/${encodeURIComponent(modelId)}/export_gguf?quant=${quant}&arch=${arch}`, {
       method: "GET",
     });
   },
@@ -1012,6 +1048,41 @@ export const api = {
       throw new Error(body?.error || `Import failed: ${response.status}`);
     }
     return body;
+  },
+  // Hyperparameter sweeps
+  listSweeps: async (): Promise<any[]> => {
+    return request<any[]>("/api/sweeps");
+  },
+  getSweep: async (id: string): Promise<any> => {
+    return request<any>(`/api/sweeps/${encodeURIComponent(id)}`);
+  },
+  createSweep: async (payload: {
+    name?: string;
+    base_payload: Record<string, any>;
+    axes: Record<string, any[]>;
+    max_trials?: number;
+    early_stop?: boolean;
+    early_stop_ratio?: number;
+  }): Promise<any> => {
+    return request<any>("/api/sweeps", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+  startSweep: async (id: string): Promise<any> => {
+    return request<any>(`/api/sweeps/${encodeURIComponent(id)}/start`, {
+      method: "POST",
+    });
+  },
+  stopSweep: async (id: string): Promise<any> => {
+    return request<any>(`/api/sweeps/${encodeURIComponent(id)}/stop`, {
+      method: "POST",
+    });
+  },
+  deleteSweep: async (id: string): Promise<any> => {
+    return request<any>(`/api/sweeps/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
   },
   deleteWorkspace: async (id: string): Promise<{ success: boolean }> => {
     const inv = await getTauriInvoke();
