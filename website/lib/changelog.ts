@@ -142,6 +142,46 @@ export const releaseChanges: ChangeEntry[] = [
 
 export const experimentalChanges: ChangeEntry[] = [
   {
+    date: "2026-11-25",
+    title: "Runtime-verified GGUF and unsigned Windows installer",
+    summary:
+      "Loaded and generated from Q8_0, F16 and F32 exports in llama.cpp b12723, fixed GGUF token and norm metadata, and built a tested unsigned per-user NSIS installer with bundled CPython.",
+    kind: "Feature",
+    sha: "d9cb19b",
+  },
+  {
+    date: "2026-11-25",
+    title: "CI, Playwright and GGUF architecture options",
+    summary:
+      "Added the CI/CD pipeline, Playwright end-to-end coverage, GGUF export architecture options and the remaining frontend UI components.",
+    kind: "Feature",
+    sha: "543a59a",
+  },
+  {
+    date: "2026-11-24",
+    title: "Desktop workstation and installer pipeline",
+    summary:
+      "Added the Rust/Tauri workstation, the training engine and the first Windows installer pipeline.",
+    kind: "Feature",
+    sha: "9722b77",
+  },
+  {
+    date: "2026-11-24",
+    title: "Installer automation and migration safety",
+    summary:
+      "Added automated installer workflows, database migration safety and CI checks.",
+    kind: "Feature",
+    sha: "00dd012",
+  },
+  {
+    date: "2026-11-24",
+    title: "Webpage deployment workflow",
+    summary:
+      "Added the GitHub Actions workflow that publishes the static website.",
+    kind: "Chore",
+    sha: "7ac4066",
+  },
+  {
     date: "2026-11-24",
     title: "Dashboard logging and hardware monitoring",
     summary:
