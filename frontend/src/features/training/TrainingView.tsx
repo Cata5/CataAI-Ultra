@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useWebSocket } from "@/hooks/useWebSocket";
 import { useSystemStatus } from "@/hooks/useSystemStatus";
 import { useHardwareTelemetry } from "@/hooks/useHardwareTelemetry";
@@ -280,6 +280,9 @@ export const TrainingView: React.FC = () => {
   const [isSaveModalOpen, setIsSaveModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const autoResumeRequestedRef = useRef(false);
+  const autoResumeStartedRef = useRef(false);
+  const startTrainingRef = useRef<() => Promise<void>>(async () => {});
 
   // Load configuration from localStorage on mount and check URL params
   useEffect(() => {
@@ -289,6 +292,15 @@ export const TrainingView: React.FC = () => {
       const netParam = params.get("network") || params.get("model");
       if (netParam) {
         saved.selectedNetwork = netParam;
+      }
+      const resumeParam = params.get("resume_checkpoint");
+      if (resumeParam) {
+        // RunsView links to /training?resume_checkpoint=<path>; previously the
+        // query string was ignored and the form silently started from scratch.
+        saved.resumeCheckpoint = resumeParam;
+      }
+      if (params.get("auto_resume") === "1" && resumeParam) {
+        autoResumeRequestedRef.current = true;
       }
     }
     setForm(saved);
@@ -338,12 +350,14 @@ export const TrainingView: React.FC = () => {
     api.getComputeTopology().then(setComputeTopology).catch(console.error);
   }, []);
 
-  // Sync historical telemetry across tabs if buffer was empty
+  // Reload the full SQLite history whenever the active run or its state
+  // changes. On a resume the run id is intentionally reused, so RUN_STARTED
+  // trims stale points and this refresh restores the complete chart from 0.
   useEffect(() => {
-    if (status?.run_id && metricsHistory.length === 0) {
+    if (status?.run_id) {
       loadRunHistory(status.run_id);
     }
-  }, [status?.run_id, metricsHistory.length, loadRunHistory]);
+  }, [status?.run_id, currentState, loadRunHistory]);
 
   const currentDataset = useMemo(
     () => datasets.find((d) => d.id === form.selectedDataset),
@@ -528,6 +542,52 @@ export const TrainingView: React.FC = () => {
     }
   };
 
+  // Keep a stable reference so the auto-resume effect always calls the latest
+  // handler with the current form values without re-triggering every render.
+  useEffect(() => {
+    startTrainingRef.current = handleStartTraining;
+  }, [handleStartTraining]);
+
+  useEffect(() => {
+    if (!autoResumeRequestedRef.current || autoResumeStartedRef.current) return;
+    if (!status) return;
+
+    const activeStates = ["RUNNING", "STARTING", "PAUSING", "PAUSED", "STOPPING"];
+    if (activeStates.includes(status.state) || activeStates.includes(currentState)) {
+      // Never silently replace a run that is already alive. Keep the manual
+      // Start button available instead.
+      autoResumeRequestedRef.current = false;
+      if (typeof window !== "undefined") {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("auto_resume");
+        window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+      }
+      return;
+    }
+
+    if (isSubmitting || isRunning || isPaused) return;
+    if (!form.resumeCheckpoint || datasets.length === 0 || !form.selectedDataset) return;
+
+    autoResumeRequestedRef.current = false;
+    autoResumeStartedRef.current = true;
+    // Drop the one-shot flag so refreshing the page cannot start a second run.
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("auto_resume");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+    void startTrainingRef.current();
+  }, [
+    status,
+    currentState,
+    isSubmitting,
+    isRunning,
+    isPaused,
+    form.resumeCheckpoint,
+    form.selectedDataset,
+    datasets.length,
+  ]);
+
   const handleTogglePause = async () => {
     try {
       if (isRunning) {
@@ -616,12 +676,14 @@ export const TrainingView: React.FC = () => {
   const isHighLr = muonEffLr > 0.04 || adamwEffLr > 0.008;
 
   const activeDurationMode = latestMetric?.duration_mode || form.durationMode;
-  const currentEpoch = latestMetric?.current_epoch || 1;
-  const displayTargetEpochs = latestMetric?.target_epochs || form.targetEpochs;
-  const tokensInEpoch = latestMetric?.tokens_in_epoch || 0;
-  const tokensPerEpoch = latestMetric?.tokens_per_epoch || datasetTokens || 0;
-  const epochPercent = tokensPerEpoch > 0 ? Math.min(100, Math.round((tokensInEpoch / tokensPerEpoch) * 100)) : 0;
   const tokensSeen = latestMetric?.tokens_seen ?? (latestMetric as any)?.tokens ?? status?.latest_metrics?.tokens_seen ?? 0;
+  const tokensPerEpoch = latestMetric?.tokens_per_epoch || datasetTokens || 0;
+  // Historical DB rows do not carry the live epoch fields, so derive them from
+  // the restored token position instead of snapping the UI back to epoch 1.
+  const currentEpoch = latestMetric?.current_epoch ?? (tokensPerEpoch > 0 ? Math.floor(tokensSeen / tokensPerEpoch) + 1 : 1);
+  const displayTargetEpochs = latestMetric?.target_epochs || form.targetEpochs;
+  const tokensInEpoch = latestMetric?.tokens_in_epoch ?? (tokensPerEpoch > 0 ? tokensSeen % tokensPerEpoch : 0);
+  const epochPercent = tokensPerEpoch > 0 ? Math.min(100, Math.round((tokensInEpoch / tokensPerEpoch) * 100)) : 0;
   const tokPerSec = latestMetric?.tokens_per_second ?? (latestMetric as any)?.tok_per_sec ?? status?.latest_metrics?.tokens_per_second ?? 0;
   const stepTimeMs = latestMetric?.step_time_ms ?? ((latestMetric as any)?.dt ? (latestMetric as any).dt * 1000 : 0);
 

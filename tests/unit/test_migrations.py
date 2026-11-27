@@ -90,7 +90,7 @@ def test_migrations_are_idempotent_and_do_not_create_repeat_backups(tmp_path: Pa
     conn = sqlite3.connect(str(db_path))
     try:
         applied = conn.execute("SELECT version FROM schema_migrations ORDER BY version").fetchall()
-        assert [row[0] for row in applied] == [1, 2, 3]
+        assert [row[0] for row in applied] == [1, 2, 3, 4]
     finally:
         conn.close()
 

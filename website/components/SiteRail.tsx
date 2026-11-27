@@ -2,7 +2,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
-type Page = "home" | "changelog";
+type Page = "home" | "guide" | "changelog";
 
 export function SiteRail({ page }: { page: Page }) {
   const home = page === "home" ? "" : `${basePath}/`;
@@ -19,6 +19,9 @@ export function SiteRail({ page }: { page: Page }) {
         <a href={`${home}#audit`}>Audit</a>
         <a href={`${home}#roadmap`}>Roadmap</a>
         <a href={`${home}#screens`}>Screens</a>
+        <a href={`${basePath}/guide/`} aria-current={page === "guide" ? "page" : undefined}>
+          Guide
+        </a>
         <a href={`${basePath}/changelog/`} aria-current={page === "changelog" ? "page" : undefined}>
           Changelog
         </a>

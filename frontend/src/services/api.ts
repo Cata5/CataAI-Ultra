@@ -4,6 +4,7 @@ import {
   BenchmarkResult,
   CheckpointItem,
   DatasetItem,
+  DatasetOperationStatus,
   HardwareTelemetry,
   MetricPoint,
   NetworkConfig,
@@ -229,7 +230,7 @@ export const api = {
       body: JSON.stringify(data),
     });
   },
-  getRunMetrics: async (runId: string, startStep: number = 0, limit: number = 2000): Promise<MetricPoint[]> => {
+  getRunMetrics: async (runId: string, startStep: number = 0, limit: number = 20000): Promise<MetricPoint[]> => {
     const inv = await getTauriInvoke();
     if (inv) {
       try {
@@ -266,6 +267,27 @@ export const api = {
     return request<{ success: boolean; id: string }>(`/api/checkpoints/${encodeURIComponent(id)}`, {
       method: "DELETE",
     });
+  },
+  deleteCheckpoints: async (
+    ids: string[]
+  ): Promise<{ deleted: string[]; failed: Array<{ id: string; error: string }> }> => {
+    const unique = Array.from(new Set(ids));
+    const results = await Promise.all(
+      unique.map(async (id) => {
+        try {
+          await api.deleteCheckpoint(id);
+          return { id, ok: true as const };
+        } catch (e: any) {
+          return { id, ok: false as const, error: e?.message || "Delete failed" };
+        }
+      })
+    );
+    return {
+      deleted: results.filter((r) => r.ok).map((r) => r.id),
+      failed: results
+        .filter((r): r is { id: string; ok: false; error: string } => !r.ok)
+        .map((r) => ({ id: r.id, error: r.error })),
+    };
   },
   saveLocalModel: async (data: { model_id?: string; custom_name?: string; save_mode?: "best" | "current" }): Promise<any> => {
     const inv = await getTauriInvoke();
@@ -414,7 +436,16 @@ export const api = {
     }
     return request<any>(`/api/datasets/${encodeURIComponent(id)}/stats`);
   },
-  uploadDataset: async (file: File): Promise<any> => {
+  uploadDataset: async (
+    file: File,
+    options?: {
+      clean?: boolean;
+      lid_threshold?: number;
+      jaccard_threshold?: number;
+      jobId?: string;
+    }
+  ): Promise<any> => {
+    const clean = options?.clean ?? true;
     const inv = await getTauriInvoke();
     if (inv) {
       try {
@@ -423,6 +454,10 @@ export const api = {
           return await inv("upload_dataset", {
             filename: file.name,
             filePath,
+            clean,
+            lidThreshold: options?.lid_threshold,
+            jaccardThreshold: options?.jaccard_threshold,
+            jobId: options?.jobId,
           });
         }
         // Read as base64 string without huge array conversion
@@ -439,6 +474,10 @@ export const api = {
         return await inv("upload_dataset", {
           filename: file.name,
           base64Data: base64,
+          clean,
+          lidThreshold: options?.lid_threshold,
+          jaccardThreshold: options?.jaccard_threshold,
+          jobId: options?.jobId,
         });
       } catch (e: any) {
         console.warn("Tauri upload_dataset IPC failed, trying fallback:", e);
@@ -447,9 +486,10 @@ export const api = {
     }
     const formData = new FormData();
     formData.append("file", file);
+    const jobQuery = options?.jobId ? `&job_id=${encodeURIComponent(options.jobId)}` : "";
     const backendDirect = typeof window !== "undefined"
-      ? `${window.location.protocol}//${window.location.hostname}:8081/api/datasets/upload`
-      : "http://127.0.0.1:8081/api/datasets/upload";
+      ? `${window.location.protocol}//${window.location.hostname}:8081/api/datasets/upload?clean=${clean ? "1" : "0"}${jobQuery}`
+      : `http://127.0.0.1:8081/api/datasets/upload?clean=${clean ? "1" : "0"}${jobQuery}`;
     const response = await fetch(backendDirect, {
       method: "POST",
       body: formData,
@@ -460,11 +500,11 @@ export const api = {
     }
     return response.json();
   },
-  tokenizeDataset: async (id: string): Promise<any> => {
+  tokenizeDataset: async (id: string, jobId?: string): Promise<any> => {
     const inv = await getTauriInvoke();
     if (inv) {
       try {
-        return await inv("tokenize_dataset", { id });
+        return await inv("tokenize_dataset", { id, jobId });
       } catch (e: any) {
         console.warn("Tauri tokenize_dataset error:", e);
         throw new Error(typeof e === "string" ? e : e?.message || "Tokenization failed");
@@ -479,6 +519,7 @@ export const api = {
       val_tokens: number;
     }>(`/api/datasets/${encodeURIComponent(id)}/tokenize`, {
       method: "POST",
+      body: JSON.stringify({ job_id: jobId }),
     });
   },
   curateDataset: async (
@@ -491,7 +532,7 @@ export const api = {
         return await inv("curate_dataset", { id, options: options || {} });
       } catch (e: any) {
         console.warn("Tauri curate_dataset error:", e);
-        throw new Error(typeof e === "string" ? e : e?.message || "MinHash Deduplication failed");
+        throw new Error(typeof e === "string" ? e : e?.message || "Dataset cleaning failed");
       }
     }
     return request<any>(`/api/datasets/${encodeURIComponent(id)}/curate`, {
@@ -499,14 +540,42 @@ export const api = {
       body: JSON.stringify(options || {}),
     });
   },
-  auditDatasetQuality: async (
+  cleanDataset: async (
     id: string,
-    options?: { max_samples?: number; eval_dataset_ids?: string[]; duplicate_threshold?: number }
+    options?: {
+      quality?: boolean;
+      language?: boolean;
+      deduplicate?: boolean;
+      mask_pii?: boolean;
+      jaccard_threshold?: number;
+      lid_threshold?: number;
+      max_samples?: number;
+    },
+    jobId?: string
   ): Promise<any> => {
     const inv = await getTauriInvoke();
     if (inv) {
       try {
-        return await inv("audit_dataset_quality", { id, options: options || {} });
+        return await inv("clean_dataset", { id, options: options || {}, jobId });
+      } catch (e: any) {
+        console.warn("Tauri clean_dataset error:", e);
+        throw new Error(typeof e === "string" ? e : e?.message || "Dataset cleaning failed");
+      }
+    }
+    return request<any>(`/api/datasets/${encodeURIComponent(id)}/clean`, {
+      method: "POST",
+      body: JSON.stringify({ ...(options || {}), job_id: jobId }),
+    });
+  },
+  auditDatasetQuality: async (
+    id: string,
+    options?: { max_samples?: number; eval_dataset_ids?: string[]; duplicate_threshold?: number },
+    jobId?: string
+  ): Promise<any> => {
+    const inv = await getTauriInvoke();
+    if (inv) {
+      try {
+        return await inv("audit_dataset_quality", { id, options: options || {}, jobId });
       } catch (e: any) {
         console.warn("Tauri audit_dataset_quality error:", e);
         throw new Error(typeof e === "string" ? e : e?.message || "Quality audit failed");
@@ -514,8 +583,21 @@ export const api = {
     }
     return request<any>(`/api/datasets/${encodeURIComponent(id)}/quality`, {
       method: "POST",
-      body: JSON.stringify(options || {}),
+      body: JSON.stringify({ ...(options || {}), job_id: jobId }),
     });
+  },
+  getDatasetOperation: async (jobId: string): Promise<DatasetOperationStatus | null> => {
+    const inv = await getTauriInvoke();
+    if (inv) {
+      try {
+        return await inv("get_dataset_operation", { jobId });
+      } catch (e) {
+        console.warn("Tauri get_dataset_operation fallback:", e);
+      }
+    }
+    return request<DatasetOperationStatus | null>(
+      `/api/datasets/operations/${encodeURIComponent(jobId)}`
+    );
   },
   formatSftDataset: async (
     id: string,

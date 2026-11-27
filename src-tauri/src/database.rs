@@ -181,6 +181,7 @@ impl DatabaseManager {
             (1, "001_baseline.sql", include_str!("../../src/db/migrations/001_baseline.sql")),
             (2, "002_final_loss.sql", include_str!("../../src/db/migrations/002_final_loss.sql")),
             (3, "003_workspace_columns.sql", include_str!("../../src/db/migrations/003_workspace_columns.sql")),
+            (4, "004_metrics_progress.sql", include_str!("../../src/db/migrations/004_metrics_progress.sql")),
         ];
 
         let latest = MIGRATIONS.last().map(|m| m.0).unwrap_or(0);
@@ -600,13 +601,20 @@ impl DatabaseManager {
     pub fn get_metrics(&self, run_id: &str, start_step: i64, limit: i64) -> Result<Vec<serde_json::Value>> {
         let conn = self.open()?;
         let mut stmt = conn.prepare(
-            "SELECT step, tokens, train_loss, val_loss, generalization_gap, grad_norm, muon_lr, adamw_lr, vram_used_gb, tok_per_sec, tflops, timestamp
+            "SELECT step, tokens, train_loss, val_loss, generalization_gap, grad_norm, muon_lr, adamw_lr,
+                    vram_used_gb, tok_per_sec, tflops, timestamp, current_epoch, epoch_pct, tokens_per_epoch,
+                    tokens_in_epoch, step_time_ms, duration_mode, target_epochs, sched_phase, sched_factor,
+                    eval_interval, next_val_step
              FROM metrics WHERE run_id = ?1 AND step >= ?2 ORDER BY step ASC LIMIT ?3",
         )?;
         let rows = stmt.query_map(params![run_id, start_step, limit], |row| {
+            let tokens = row.get::<_, i64>(1)?;
+            let tok_per_sec = row.get::<_, f64>(9).unwrap_or(0.0);
+            let vram = row.get::<_, f64>(8).unwrap_or(0.0);
             Ok(serde_json::json!({
                 "step": row.get::<_, i64>(0)?,
-                "tokens": row.get::<_, i64>(1)?,
+                "tokens": tokens,
+                "tokens_seen": tokens,
                 "loss": row.get::<_, f64>(2)?,
                 "train_loss": row.get::<_, f64>(2)?,
                 "val_loss": row.get::<_, Option<f64>>(3)?,
@@ -615,10 +623,23 @@ impl DatabaseManager {
                 "muon_lr": row.get::<_, f64>(6).unwrap_or(0.0),
                 "adamw_lr": row.get::<_, f64>(7).unwrap_or(0.0),
                 "learning_rate": row.get::<_, f64>(6).unwrap_or(0.0),
-                "vram_used_gb": row.get::<_, f64>(8).unwrap_or(0.0),
-                "tok_per_sec": row.get::<_, f64>(9).unwrap_or(0.0),
+                "vram_used_gb": vram,
+                "memory_allocated_mb": vram * 1024.0,
+                "tok_per_sec": tok_per_sec,
+                "tokens_per_second": tok_per_sec,
                 "tflops": row.get::<_, f64>(10).unwrap_or(0.0),
                 "timestamp": row.get::<_, f64>(11)?,
+                "current_epoch": row.get::<_, Option<i64>>(12)?,
+                "epoch_pct": row.get::<_, Option<f64>>(13)?,
+                "tokens_per_epoch": row.get::<_, Option<i64>>(14)?,
+                "tokens_in_epoch": row.get::<_, Option<i64>>(15)?,
+                "step_time_ms": row.get::<_, Option<f64>>(16)?.unwrap_or(0.0),
+                "duration_mode": row.get::<_, Option<String>>(17)?,
+                "target_epochs": row.get::<_, Option<i64>>(18)?,
+                "sched_phase": row.get::<_, Option<String>>(19)?,
+                "sched_factor": row.get::<_, Option<f64>>(20)?,
+                "eval_interval": row.get::<_, Option<i64>>(21)?,
+                "next_val_step": row.get::<_, Option<i64>>(22)?,
             }))
         })?;
 
@@ -688,17 +709,43 @@ impl DatabaseManager {
             params![id, token_count, stats.to_string(), now],
         )?;
 
-        // Also write file marker in data/cache/{id}.tokenized for instant zero-DB redundancy
-        let _ = fs::create_dir_all("data/cache");
-        let cache_marker = format!("data/cache/{}.tokenized", id);
-        let _ = fs::write(&cache_marker, stats.to_string());
+        // Also write a marker under the writable data root for instant
+        // zero-DB redundancy. Never use a path relative to the executable:
+        // packaged builds do not run from the project directory.
+        let cache_dir = crate::data_dir().join("data").join("cache");
+        let _ = fs::create_dir_all(&cache_dir);
+        let cache_marker = cache_dir.join(format!("{}.tokenized", id));
+        let _ = fs::write(cache_marker, stats.to_string());
 
         Ok(())
     }
 
     pub fn get_dataset_meta(&self, id: &str) -> Option<(i64, String)> {
-        // Fast disk cache check
-        let cache_marker = format!("data/cache/{}.tokenized", id);
+        let cache_dir = crate::data_dir().join("data").join("cache");
+        let cache_marker = cache_dir.join(format!("{}.tokenized", id));
+        let cache_bin = cache_dir.join(format!("{}_full_tokens.bin", id));
+
+        // The binary shard is authoritative. A stale marker used to say
+        // 1,144,246 tokens for every dataset; heal it from the real shard size.
+        if let Ok(meta) = fs::metadata(&cache_bin) {
+            let actual = (meta.len() / 8) as i64;
+            if actual > 0 {
+                let mut stats = fs::read_to_string(&cache_marker)
+                    .ok()
+                    .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+                    .filter(|value| value.is_object())
+                    .unwrap_or_else(|| serde_json::json!({}));
+                let train = (actual as f64 * 0.9) as i64;
+                stats["is_tokenized"] = serde_json::json!(true);
+                stats["token_count"] = serde_json::json!(actual);
+                stats["train_tokens"] = serde_json::json!(train);
+                stats["val_tokens"] = serde_json::json!(actual - train);
+                let content = stats.to_string();
+                let _ = fs::write(&cache_marker, &content);
+                return Some((actual, content));
+            }
+        }
+
         if let Ok(content) = fs::read_to_string(&cache_marker) {
             if let Ok(val) = serde_json::from_str::<serde_json::Value>(&content) {
                 if let Some(tc) = val.get("token_count").and_then(|v| v.as_i64()) {

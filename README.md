@@ -1,4 +1,4 @@
-# LLM Maker 🧠⚡
+# LLM Maker
 
 > **High-Performance Local Neural Architecture Studio & Distributed LLM Training Platform**
 
@@ -8,13 +8,14 @@
 [![Rust](https://img.shields.io/badge/Rust-1.80+-DEA584.svg?style=flat&logo=rust)](https://rust-lang.org)
 [![Next.js](https://img.shields.io/badge/Next.js-16-black.svg?style=flat&logo=next.js)](https://nextjs.org)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Tests](<https://img.shields.io/badge/Tests-368%20Passed-brightgreen.svg>)]()
+[![Tests](<https://img.shields.io/badge/Tests-412%20Passed-brightgreen.svg>)]()
+[![Website](https://img.shields.io/badge/Website-cata5.github.io%2FCataAI--Ultra-0f766e.svg)](https://cata5.github.io/CataAI-Ultra/)
 
 **LLM Maker** is an end-to-end, local-first research platform designed to democratize pretraining, post-training alignment, and architectural experimentation for Large Language Models. Built for consumer hardware (from 6GB VRAM laptop GPUs up to multi-node distributed clusters), it combines a **native desktop workstation** (Rust + Tauri 2.0), **visual node-based neural architecture studio**, **WDDM-aware zero-paging VRAM protection**, **hybrid Muon + AdamW optimizers**, **percentage-based WSD scheduling**, and **Hugging Face Hub foundation imports**.
 
 ---
 
-## 📸 Platform Tour
+## Platform Tour
 
 ### 1. Visual Neural Architecture Studio
 
@@ -34,7 +35,7 @@ Real-time loss telemetry, percentage-based Warmup-Stable-Decay scheduling curve 
 
 ### 3. Evaluation & Interactive Inference Lab
 
-Test model checkpoints with full sampling controls (temperature, top-p, top-k, min-p, min new tokens, repetition penalties, chat templates), multi-model comparison matrix, and automated benchmark suites.
+Test model checkpoints with full sampling controls (temperature, top-p, top-k, min-p, min new tokens, repetition penalties, chat templates), multi-model comparison matrix, and automated benchmark suites. Select one or more saved checkpoints to delete them in bulk from the checkpoint manager.
 
 ![Evaluation & Inference Lab](screenshots/evaluation.png)
 
@@ -42,13 +43,13 @@ Test model checkpoints with full sampling controls (temperature, top-p, top-k, m
 
 ### 4. Dataset Manager & Binary Memmap Tokenization
 
-Inspect, curate, and tokenize datasets into high-speed binary memmaps (`.bin` + `.meta.json`). Guarantees zero runtime tokenization overhead and constant memory consumption.
+Inspect, clean, and tokenize datasets into high-speed binary memmaps (`.bin` + `.meta.json`). Imports are cleaned by default: block-aware `.txt` handling that preserves ChatML, format-aware JSONL/CSV/Parquet/Arrow parsing, quality and lenient language filtering, PII masking, UTF-8/cp1252 mojibake repair, removal of standalone NaN lines and missing/NaN fields, and exact/near-duplicate removal through a vectorized MinHash LSH index that is substantially faster on long documents. The original upload is retained under `raw/`, while the cleaned file becomes the visible dataset. Existing datasets can be cleaned into a `_clean` copy from the dataset row action. Uploads, cleaning, tokenization and quality audits report live counts and keep running when you change views. Cleaning, tokenization and quality status also survives a page reload for the current session; an upload interrupted by a reload is marked as such. Tokenization guarantees zero runtime tokenization overhead and constant memory consumption.
 
 ![Dataset Manager](screenshots/datasets.png)
 
 ---
 
-## 🚀 Key Capabilities
+## Key Capabilities
 
 ### 1. Native Desktop Workstation (Rust + Tauri 2.0)
 
@@ -92,6 +93,8 @@ Unlike rigid step-count schedulers, LLM Maker schedules training by percentage r
 - **Stable Plateau ($\text{Warmup} \to \text{Stable}$)**: Constant maximum learning rate where the bulk of token representations are learned.
 - **Decay Phase ($\text{Stable} \to \text{Total}$)**: Cosine annealing condensing representations down to the minimum learning rate floor.
 
+Resuming a checkpoint continues the original `run_id`; the LR schedule is evaluated relative to the current phase start (stored in the checkpoint), so resuming inside a phase stays continuous without restarting warmup, while a new phase such as SFT gets its own full warmup/stable/decay window instead of inheriting the pretraining decay tail. Epoch and token counters continue from the checkpoint, and the full SQLite metric history for loss, learning rate, gradient norm, throughput and progress stays attached to the same run. Resuming from an older checkpoint truncates metric points after that step, keeping the chart consistent with the restored branch. Epoch targets are measured from the start of the current phase, so starting SFT from a pretrained checkpoint gets its full SFT epoch budget instead of inheriting millions of pretraining tokens. The **Resume** action starts training immediately, the checkpoint manager keeps exactly one `best_model.pt`, and Settings controls how many rolling step checkpoints are retained. Each completed phase also keeps its latest checkpoint as a protected anchor, so starting SFT can no longer prune the last pretrain checkpoint.
+
 ### 5. Hugging Face Pretrained Model Import
 
 - Load pretrained foundation models directly from the Hugging Face Hub (e.g. `meta-llama/Llama-3.2-1B`, `Qwen/Qwen2.5-0.5B`, `mistralai/Mistral-7B`, `gpt2`).
@@ -112,7 +115,7 @@ Unlike rigid step-count schedulers, LLM Maker schedules training by percentage r
 
 ---
 
-## 💻 Hardware Requirements & Batches
+## Hardware Requirements & Batches
 
 | Hardware Tier                                                   | Recommended Model Size  | Context Length      | Batch Configuration                 | Compute Mode                             |
 | :-------------------------------------------------------------- | :---------------------- | :------------------ | :---------------------------------- | :--------------------------------------- |
@@ -123,7 +126,7 @@ Unlike rigid step-count schedulers, LLM Maker schedules training by percentage r
 
 ---
 
-## ⚡ Quickstart
+## Quickstart
 
 > **Platform scope:** the packaged desktop app is Windows 10/11 x64 only. The
 > Python backend and web studio run on Linux/macOS, but those desktop bundles
@@ -156,7 +159,7 @@ Open **[http://localhost:8080](http://localhost:8080)** in your browser. All req
 
 ---
 
-## 🪟 Unsigned Windows Installer
+## Unsigned Windows Installer
 
 The NSIS installer is per-user, does not need admin rights, and is intentionally
 unsigned: no Authenticode certificate is purchased or required for local use.
@@ -184,7 +187,7 @@ unsigned installer when signing secrets are absent.
 
 ---
 
-## 📦 Model Export
+## Model Export
 
 - **Safetensors**: `src/infer/export.py` writes portable PyTorch weights.
 - **GGUF (Q8_0 / F16 / F32)**: `GET /api/models/{id}/export_gguf?quant=Q8_0&arch=auto`
@@ -210,9 +213,9 @@ unsigned installer when signing secrets are absent.
 > container and generation are still valid; do not claim tokenizer parity from
 > an approximate export.
 
-## 🧪 Running the Test Suite
+## Running the Test Suite
 
-LLM Maker includes 368 automated tests verifying neural layer arithmetic, tokenizer parity, dataset pipelines, VRAM estimators, checkpoint resumption, GGUF export, and IPC commands:
+LLM Maker includes 412 automated tests verifying neural layer arithmetic, tokenizer parity, dataset pipelines, VRAM estimators, checkpoint resumption, GGUF export, and IPC commands:
 
 ```bash
 # Run the complete test suite
@@ -226,9 +229,11 @@ pytest tests/e2e/test_product_generalization.py
 
 ---
 
-## 🌐 Website
+## Website
 
-The public site lives in `website/` and is a separate static Next.js export, so its
+The public site is live at **[cata5.github.io/CataAI-Ultra](https://cata5.github.io/CataAI-Ultra/)**.
+
+The site lives in `website/` and is a separate static Next.js export, so its
 dependencies and build do not affect the desktop app:
 
 ```bash
@@ -249,7 +254,7 @@ workflow.
 
 ---
 
-## 🏛 Architecture & Project Layout
+## Architecture & Project Layout
 
 ```
 llm-maker/
@@ -294,11 +299,11 @@ llm-maker/
 │
 ├── networks/registry/         # Exported model architecture configs (JSON)
 ├── datasets/                  # Datasets & pre-tokenized memmap binaries (.bin/.meta.json)
-└── tests/                     # 368 unit and end-to-end tests
+└── tests/                     # 412 unit and end-to-end tests
 ```
 
 ---
 
-## 📄 License
+## License
 
 This project is open-source under the Apache License 2.0.

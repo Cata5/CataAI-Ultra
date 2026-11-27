@@ -201,6 +201,22 @@ export interface DatasetItem {
   is_uploaded?: boolean;
 }
 
+export interface DatasetOperationStatus {
+  job_id: string;
+  kind: "tokenize" | "clean" | "quality" | string;
+  dataset_id?: string | null;
+  dataset_name?: string | null;
+  status: "queued" | "running" | "completed" | "failed" | "unknown" | string;
+  phase?: string;
+  message?: string;
+  current?: number;
+  total?: number | null;
+  percent?: number | null;
+  result?: any;
+  error?: string;
+  updated_at?: string;
+}
+
 export interface RuntimeStatus {
   ready: boolean;
   python: string;

@@ -17,11 +17,25 @@ export function useWebSocket() {
   const loadRunHistory = useCallback(async (runId: string) => {
     if (!runId) return;
     try {
-      const history = await api.getRunMetrics(runId, 0, 2000);
-      if (Array.isArray(history) && history.length > 0) {
-        wsService.setMetricsHistory(history);
-        setMetricsHistory(history);
-        setLatestMetric(history[history.length - 1]);
+      const history = await api.getRunMetrics(runId, 0, 20000);
+      if (!Array.isArray(history)) return;
+
+      // The DB flush is batched, so merge any live points that arrived while
+      // the request was in flight instead of dropping the newest steps.
+      const existing = wsService.getMetricsHistory();
+      const sameRun = wsService.getMetricsRunId() === runId;
+      let combined = history;
+      if (sameRun && existing.length > 0) {
+        const byStep = new Map<number, MetricPoint>();
+        history.forEach((point) => byStep.set(point.step, point));
+        existing.forEach((point) => byStep.set(point.step, point));
+        combined = Array.from(byStep.values()).sort((a, b) => a.step - b.step);
+      }
+
+      if (combined.length > 0 || !sameRun) {
+        wsService.setMetricsHistory(combined, runId);
+        setMetricsHistory(combined);
+        setLatestMetric(combined.length > 0 ? combined[combined.length - 1] : null);
         setValState(wsService.getValidationState());
       }
     } catch {
@@ -61,6 +75,11 @@ export function useWebSocket() {
 
     const unsubState = wsService.onState((state) => {
       setCurrentState(state);
+      // RUN_STARTED trims the buffer to the resume checkpoint; publish that
+      // trimmed history immediately instead of waiting for the next step.
+      setMetricsHistory(wsService.getMetricsHistory());
+      setLatestMetric(wsService.getLatestMetric());
+      setValState(wsService.getValidationState());
     });
 
     const unsubAlert = (alert: Alert) => {

@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { api } from "@/services/api";
 import { DatasetItem } from "@/types/api";
+import { useDatasetOperations } from "@/features/datasets/DatasetOperations";
 import { DataTable, Column } from "@/components/ui/DataTable";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { formatCompactNumber } from "@/lib/utils";
@@ -15,7 +16,6 @@ import {
   Eye,
   RefreshCw,
   Trash2,
-  Filter,
   Wand2,
   AlertTriangle,
   ShieldCheck,
@@ -24,11 +24,21 @@ import { cn } from "@/lib/utils";
 
 export const DatasetsView: React.FC = () => {
   const [datasets, setDatasets] = useState<DatasetItem[]>([]);
-  const [isUploading, setIsUploading] = useState(false);
-  const [tokenizingDatasetId, setTokenizingDatasetId] = useState<string | null>(null);
-  const [curatingDatasetId, setCuratingDatasetId] = useState<string | null>(null);
-  const [qualityDatasetId, setQualityDatasetId] = useState<string | null>(null);
-  const [qualityResult, setQualityResult] = useState<any | null>(null);
+  const {
+    operations,
+    startOperation,
+    dismissOperation,
+    clearFinished,
+    activeOperation,
+    latestCompleted,
+    latestQualityOperation,
+  } = useDatasetOperations();
+  const isUploading = operations.some(
+    (operation) =>
+      operation.kind === "upload" &&
+      (operation.status === "running" || operation.status === "queued")
+  );
+  const [cleanOnImport, setCleanOnImport] = useState(true);
   const [uploadFeedback, setUploadFeedback] = useState<string | null>(null);
   const [selectedDataset, setSelectedDataset] = useState<any | null>(null);
   const [datasetToDelete, setDatasetToDelete] = useState<DatasetItem | null>(null);
@@ -60,6 +70,44 @@ export const DatasetsView: React.FC = () => {
     fetchDatasets();
   }, []);
 
+  const completedOperations = useRef<Map<string, number>>(new Map());
+  useEffect(() => {
+    const finished = operations.filter(
+      (operation) => operation.status === "completed" || operation.status === "failed"
+    );
+    const newlyFinished = finished.filter(
+      (operation) =>
+        completedOperations.current.get(operation.jobId) !== (operation.finishedAt ?? 0)
+    );
+    if (newlyFinished.length === 0) return;
+    finished.forEach((operation) =>
+      completedOperations.current.set(operation.jobId, operation.finishedAt ?? 0)
+    );
+    if (newlyFinished.some((operation) => operation.status === "completed")) {
+      void fetchDatasets();
+    }
+  }, [operations]);
+
+  const displayDatasets = useMemo(() => {
+    return datasets.map((item) => {
+      const operation = latestCompleted("tokenize", item.id);
+      const result = operation?.result;
+      if (!result) return item;
+      const tokenCount = result.token_count || result.train_tokens || item.total_tokens || 0;
+      return {
+        ...item,
+        status: "Tokenized",
+        total_tokens: tokenCount,
+        train_tokens: result.train_tokens || Math.round(tokenCount * 0.9),
+        val_tokens: result.val_tokens || Math.round(tokenCount * 0.1),
+      };
+    });
+  }, [datasets, latestCompleted]);
+
+  const qualityOperation = latestQualityOperation;
+  const qualityResult =
+    qualityOperation?.status === "completed" ? qualityOperation.result : null;
+
   const handleInspectTokenizer = async () => {
     if (!tokenizerText.trim()) return;
     setIsTokenizing(true);
@@ -79,26 +127,70 @@ export const DatasetsView: React.FC = () => {
 
   const handleFilesUpload = async (files: FileList | File[]) => {
     const fileArray = Array.from(files);
-    if (fileArray.length === 0) return;
-    setIsUploading(true);
-    let successCount = 0;
-    try {
-      for (let i = 0; i < fileArray.length; i++) {
-        const file = fileArray[i];
-        setUploadFeedback(`Uploading file ${i + 1} of ${fileArray.length}: ${file.name}...`);
-        await api.uploadDataset(file);
-        successCount++;
-      }
-      setUploadFeedback(`Successfully uploaded ${successCount} dataset${successCount > 1 ? "s" : ""}.`);
-      await fetchDatasets();
-      setTimeout(() => setUploadFeedback(null), 5000);
-    } catch (e: any) {
-      alert(`Upload error: ${e.message}`);
-      setUploadFeedback(null);
-      await fetchDatasets();
-    } finally {
-      setIsUploading(false);
-    }
+    if (fileArray.length === 0 || isUploading) return;
+    const batchName =
+      fileArray.length === 1 ? fileArray[0].name : `${fileArray.length} files`;
+    void startOperation({
+      kind: "upload",
+      datasetId: `upload-${Date.now()}`,
+      datasetName: batchName,
+      run: async (jobId, update) => {
+        let successCount = 0;
+        const cleanings: any[] = [];
+        for (let i = 0; i < fileArray.length; i++) {
+          const file = fileArray[i];
+          update({
+            progress: Math.round((i / fileArray.length) * 100),
+            current: i,
+            total: fileArray.length,
+            stage: "uploading",
+            message: `Uploading ${i + 1} of ${fileArray.length}: ${file.name}`,
+          });
+          const res = await api.uploadDataset(file, {
+            clean: cleanOnImport,
+            jobId: fileArray.length === 1 ? jobId : undefined,
+          });
+          successCount++;
+          if (res?.cleaning && typeof res.cleaning === "object") {
+            cleanings.push(res.cleaning);
+          }
+        }
+        update({
+          progress: 100,
+          current: fileArray.length,
+          total: fileArray.length,
+          stage: "finalizing",
+          message: `Uploaded ${successCount} dataset${successCount > 1 ? "s" : ""}`,
+        });
+        const failures = cleanings.filter((item) => item.success === false);
+        const cleaning =
+          cleanings.length === 0
+            ? undefined
+            : cleanings.length === 1
+              ? cleanings[0]
+              : {
+                  success: failures.length === 0,
+                  records_in: cleanings.reduce(
+                    (sum, item) => sum + Number(item.records_in || 0),
+                    0
+                  ),
+                  records_out: cleanings.reduce(
+                    (sum, item) => sum + Number(item.records_out || 0),
+                    0
+                  ),
+                  error: failures.length
+                    ? `${failures.length} of ${cleanings.length} files failed cleaning: ${failures
+                        .map((item) => item.error || "unknown error")
+                        .join("; ")}`
+                    : undefined,
+                };
+        return {
+          success: true,
+          uploaded: successCount,
+          cleaning,
+        };
+      },
+    });
   };
 
   const handleDeleteDataset = async () => {
@@ -191,96 +283,86 @@ export const DatasetsView: React.FC = () => {
       cell: (item) => (
         <div className="flex items-center gap-1">
           <button
-            onClick={async () => {
-              setTokenizingDatasetId(item.id);
-              try {
-                const res = await api.tokenizeDataset(item.id);
-                const tokenCount = res.token_count || res.train_tokens || 1000;
-                setDatasets((prev) =>
-                  prev.map((d) =>
-                    d.id === item.id
-                      ? {
-                          ...d,
-                          status: "Tokenized",
-                          total_tokens: tokenCount,
-                          train_tokens: res.train_tokens || Math.round(tokenCount * 0.9),
-                          val_tokens: res.val_tokens || Math.round(tokenCount * 0.1),
-                        }
-                      : d
-                  )
-                );
-                setUploadFeedback(
-                  `Dataset "${item.name}" tokenized: ${tokenCount.toLocaleString()} tokens.`
-                );
-                await fetchDatasets();
-                setTimeout(() => setUploadFeedback(null), 5000);
-              } catch (e: any) {
-                alert(`Tokenization error: ${e.message}`);
-              } finally {
-                setTokenizingDatasetId(null);
-              }
+            onClick={() => {
+              if (activeOperation("tokenize", item.id)) return;
+              void startOperation({
+                kind: "tokenize",
+                datasetId: item.id,
+                datasetName: item.name,
+                run: (jobId) => api.tokenizeDataset(item.id, jobId),
+              });
             }}
-            disabled={tokenizingDatasetId === item.id}
+            disabled={Boolean(activeOperation("tokenize", item.id))}
             className="btn btn-secondary btn-sm px-2 text-[10px]"
             title="Pre-tokenize dataset"
           >
-            {tokenizingDatasetId === item.id ? (
+            {activeOperation("tokenize", item.id) ? (
               <RefreshCw className="w-3 h-3 animate-spin" />
             ) : (
               <Sparkles className="w-3 h-3 text-[#737373]" />
             )}
-            {item.status === "Tokenized" ? "Re-tokenize" : "Tokenize"}
+            {activeOperation("tokenize", item.id)
+              ? activeOperation("tokenize", item.id)?.progress !== null
+                ? `${Math.round(activeOperation("tokenize", item.id)?.progress || 0)}%`
+                : "…"
+              : item.status === "Tokenized"
+                ? "Re-tokenize"
+                : "Tokenize"}
           </button>
           <button
-            onClick={async () => {
-              setCuratingDatasetId(item.id);
-              try {
-                const res = await api.curateDataset(item.id, { jaccard_threshold: 0.80, max_samples: 5000 });
-                setUploadFeedback(
-                  `MinHash LSH Dedup: ${res.duplicates_purged ?? 0} duplicates removed (${res.accepted_samples_count ?? res.accepted_count ?? "all"} unique kept).`
-                );
-                await fetchDatasets();
-                setTimeout(() => setUploadFeedback(null), 6000);
-              } catch (e: any) {
-                alert(`MinHash Deduplication failed: ${e.message}`);
-              } finally {
-                setCuratingDatasetId(null);
-              }
+            onClick={() => {
+              if (activeOperation("clean", item.id)) return;
+              void startOperation({
+                kind: "clean",
+                datasetId: item.id,
+                datasetName: item.name,
+                run: (jobId) =>
+                  api.cleanDataset(
+                    item.id,
+                    { jaccard_threshold: 0.80, lid_threshold: 0.80 },
+                    jobId
+                  ),
+              });
             }}
-            disabled={curatingDatasetId === item.id}
+            disabled={Boolean(activeOperation("clean", item.id))}
             className="btn btn-secondary btn-sm px-2 text-[10px]"
-            title="Run MinHash LSH deduplication (0.80 Jaccard threshold)"
+            title="Clean quality, language, PII, and near-duplicates"
           >
-            {curatingDatasetId === item.id ? (
+            {activeOperation("clean", item.id) ? (
               <RefreshCw className="w-3 h-3 animate-spin" />
             ) : (
-              <Filter className="w-3 h-3 text-[#737373]" />
+              <Wand2 className="w-3 h-3 text-[#737373]" />
             )}
-            MinHash
+            {activeOperation("clean", item.id)
+              ? activeOperation("clean", item.id)?.progress !== null
+                ? `${Math.round(activeOperation("clean", item.id)?.progress || 0)}%`
+                : "Cleaning"
+              : "Clean"}
           </button>
           <button
-            onClick={async () => {
-              setQualityDatasetId(item.id);
-              setQualityResult(null);
-              try {
-                const res = await api.auditDatasetQuality(item.id, { max_samples: 5000 });
-                setQualityResult(res);
-              } catch (e: any) {
-                alert(`Quality audit failed: ${e.message}`);
-              } finally {
-                setQualityDatasetId(null);
-              }
+            onClick={() => {
+              if (activeOperation("quality", item.id)) return;
+              void startOperation({
+                kind: "quality",
+                datasetId: item.id,
+                datasetName: item.name,
+                run: (jobId) => api.auditDatasetQuality(item.id, { max_samples: 5000 }, jobId),
+              });
             }}
-            disabled={qualityDatasetId === item.id}
+            disabled={Boolean(activeOperation("quality", item.id))}
             className="btn btn-secondary btn-sm px-2 text-[10px]"
             title="Read-only audit: duplicates, PII, contamination, language, tokenizer fertility"
           >
-            {qualityDatasetId === item.id ? (
+            {activeOperation("quality", item.id) ? (
               <RefreshCw className="w-3 h-3 animate-spin" />
             ) : (
               <ShieldCheck className="w-3 h-3 text-[#737373]" />
             )}
-            Quality
+            {activeOperation("quality", item.id)
+              ? activeOperation("quality", item.id)?.progress !== null
+                ? `${Math.round(activeOperation("quality", item.id)?.progress || 0)}%`
+                : "Auditing"
+              : "Quality"}
           </button>
           <button
             onClick={async () => {
@@ -333,6 +415,18 @@ export const DatasetsView: React.FC = () => {
             }
           }}
         />
+        <label
+          onClick={(e) => e.stopPropagation()}
+          className="mb-2 inline-flex items-center gap-1.5 text-[10px] text-[#A3A3A3] cursor-pointer select-none"
+        >
+          <input
+            type="checkbox"
+            checked={cleanOnImport}
+            onChange={(e) => setCleanOnImport(e.target.checked)}
+            className="accent-[#D4D4D4]"
+          />
+          Clean on import
+        </label>
         <div className="p-2.5 bg-[#1B1B1B] rounded-full border border-[#333333] text-[#A3A3A3] mb-2">
           <UploadCloud className="w-5 h-5" />
         </div>
@@ -340,7 +434,7 @@ export const DatasetsView: React.FC = () => {
           Upload Training Dataset
         </h4>
         <p className="text-[11px] text-[#737373] max-w-md mb-1.5 leading-relaxed">
-          Supports .parquet, .arrow, .jsonl, .txt, .csv with zero-copy memory mapping, MinHash deduplication, and Jinja2 chat templates.
+          Supports .parquet, .arrow, .jsonl, .txt, .csv with block-aware quality and language filtering, PII masking, near-duplicate removal, and Jinja2 chat templates.
         </p>
         <span className="px-2 py-0.5 rounded bg-[#1B1B1B] border border-[#262626] text-[10px] text-[#525252] uppercase">
           Click or drop files (.parquet, .arrow, .jsonl, .txt, .csv)
@@ -350,6 +444,136 @@ export const DatasetsView: React.FC = () => {
       {uploadFeedback && (
         <div className="p-2 rounded bg-[#262626] border border-[#333333] text-[#F2F2F2] font-mono text-xs flex items-center gap-2">
           <CheckCircle2 className="w-3.5 h-3.5 text-[#4ade80]" /> {uploadFeedback}
+        </div>
+      )}
+
+      {operations.length > 0 && (
+        <div className="panel p-3 bg-[#202020] border-[#333333] space-y-2">
+          <div className="flex items-center justify-between pb-1.5 border-b border-[#262626]">
+            <h3 className="panel-title">
+              <RefreshCw className="w-3.5 h-3.5 text-[#737373]" /> Dataset Operations
+            </h3>
+            <div className="flex items-center gap-3 text-[10px] text-[#737373]">
+              <span>{operations.filter((operation) => operation.status === "running" || operation.status === "queued").length} active</span>
+              {operations.some((operation) => operation.status !== "running" && operation.status !== "queued") && (
+                <button onClick={clearFinished} className="hover:text-[#F2F2F2]">
+                  clear finished
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="space-y-2">
+            {operations.slice(0, 6).map((operation) => {
+              const active = operation.status === "running" || operation.status === "queued";
+              const percent = operation.progress;
+              const cleaningResult =
+                operation.result &&
+                typeof operation.result === "object" &&
+                operation.result.cleaning &&
+                typeof operation.result.cleaning === "object"
+                  ? operation.result.cleaning
+                  : null;
+              const statusTone =
+                operation.status === "completed"
+                  ? "text-[#4ade80]"
+                  : operation.status === "failed"
+                    ? "text-[#f87171]"
+                    : "text-[#D4D4D4]";
+              return (
+                <div
+                  key={operation.jobId}
+                  className="p-2 rounded bg-[#1B1B1B] border border-[#262626] space-y-1.5"
+                >
+                  <div className="flex items-center justify-between gap-2 text-[10px]">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {operation.kind === "tokenize" ? (
+                        <Sparkles className="w-3 h-3 text-[#737373] shrink-0" />
+                      ) : operation.kind === "clean" ? (
+                        <Wand2 className="w-3 h-3 text-[#737373] shrink-0" />
+                      ) : operation.kind === "quality" ? (
+                        <ShieldCheck className="w-3 h-3 text-[#737373] shrink-0" />
+                      ) : (
+                        <UploadCloud className="w-3 h-3 text-[#737373] shrink-0" />
+                      )}
+                      <span className="uppercase tracking-wide text-[#A3A3A3]">
+                        {operation.kind === "tokenize"
+                          ? "Tokenize"
+                          : operation.kind === "clean"
+                            ? "Clean"
+                            : operation.kind === "quality"
+                              ? "Quality"
+                              : "Upload"}
+                      </span>
+                      <span className="text-[#525252] truncate">· {operation.datasetName}</span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className={cn("font-mono uppercase", statusTone)}>
+                        {operation.status === "running" ? "running" : operation.status}
+                      </span>
+                      {!active && (
+                        <button
+                          onClick={() => dismissOperation(operation.jobId)}
+                          className="text-[#525252] hover:text-[#F2F2F2]"
+                          title="Dismiss"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-[#262626] overflow-hidden">
+                    {percent !== null ? (
+                      <div
+                        className={cn(
+                          "h-full rounded-full transition-all duration-500",
+                          operation.status === "completed"
+                            ? "bg-[#4ade80]"
+                            : operation.status === "failed"
+                              ? "bg-[#f87171]"
+                              : "bg-[#D4D4D4]"
+                        )}
+                        style={{ width: `${Math.max(0, Math.min(100, percent))}%` }}
+                      />
+                    ) : (
+                      <div className="h-full w-1/3 rounded-full bg-[#D4D4D4] animate-pulse" />
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between gap-2 text-[10px] text-[#737373]">
+                    <span className="truncate">{operation.message || operation.stage}</span>
+                    <span className="font-mono shrink-0">
+                      {percent !== null ? `${Math.round(percent)}%` : ""}
+                      {operation.total &&
+                      !(operation.kind === "tokenize" && operation.total === 100)
+                        ? ` · ${formatCompactNumber(operation.current)} / ${formatCompactNumber(operation.total)}`
+                        : operation.current > 0 &&
+                            !(operation.kind === "tokenize" && operation.total === 100)
+                          ? ` · ${formatCompactNumber(operation.current)} processed`
+                          : ""}
+                    </span>
+                  </div>
+                  {operation.error && (
+                    <div className="flex items-center gap-1.5 text-[10px] text-[#f87171]">
+                      <AlertTriangle className="w-3 h-3 shrink-0" /> {operation.error}
+                    </div>
+                  )}
+                  {operation.kind === "upload" &&
+                    operation.status === "completed" &&
+                    cleaningResult && (
+                      <div
+                        className={cn(
+                          "text-[10px]",
+                          cleaningResult.success ? "text-[#737373]" : "text-[#fbbf24]"
+                        )}
+                      >
+                        {cleaningResult.success
+                          ? `Cleaning kept ${formatCompactNumber(cleaningResult.records_out)} of ${formatCompactNumber(cleaningResult.records_in)} records`
+                          : `Uploaded raw; cleaning failed: ${cleaningResult.error || "unknown error"}`}
+                      </div>
+                    )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -370,7 +594,7 @@ export const DatasetsView: React.FC = () => {
               className="bg-[#1B1B1B] border border-[#333333] rounded px-2 py-1.5 text-xs font-mono text-[#F2F2F2] outline-none focus:border-[#737373]"
             >
               <option value="">Select a dataset…</option>
-              {datasets.filter((d) => d.is_uploaded).map((d) => (
+              {displayDatasets.filter((d) => d.is_uploaded).map((d) => (
                 <option key={d.id} value={d.id}>{d.name}</option>
               ))}
             </select>
@@ -447,9 +671,14 @@ export const DatasetsView: React.FC = () => {
         <div className="panel p-3 bg-[#202020] border-[#333333] space-y-2">
           <div className="flex items-center justify-between pb-1.5 border-b border-[#262626]">
             <h3 className="panel-title">
-              <ShieldCheck className="w-3.5 h-3.5 text-[#737373]" /> Quality Audit · {qualityResult.name}
+              <ShieldCheck className="w-3.5 h-3.5 text-[#737373]" /> Quality Audit · {qualityResult.name || qualityOperation?.datasetName}
             </h3>
-            <button onClick={() => setQualityResult(null)} className="text-[10px] text-[#737373] hover:text-[#F2F2F2]">close</button>
+            <button
+              onClick={() => qualityOperation && dismissOperation(qualityOperation.jobId)}
+              className="text-[10px] text-[#737373] hover:text-[#F2F2F2]"
+            >
+              close
+            </button>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 text-[10px]">
             {[
@@ -493,7 +722,7 @@ export const DatasetsView: React.FC = () => {
       <div className="space-y-1.5">
         <div className="flex items-center justify-between">
           <h3 className="panel-title">
-            <Database className="w-3.5 h-3.5 text-[#737373]" /> Datasets ({datasets.length})
+            <Database className="w-3.5 h-3.5 text-[#737373]" /> Datasets ({displayDatasets.length})
           </h3>
           <button
             onClick={fetchDatasets}
@@ -505,7 +734,7 @@ export const DatasetsView: React.FC = () => {
         </div>
 
         <DataTable
-          data={datasets}
+          data={displayDatasets}
           columns={columns}
           keyExtractor={(d) => d.id}
           searchPlaceholder="Search datasets by name..."

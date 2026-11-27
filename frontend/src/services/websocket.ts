@@ -11,7 +11,8 @@ class WebSocketClient {
   private isConnected = false;
 
   private metricsBuffer: MetricPoint[] = [];
-  private maxBufferSize = 2000;
+  private metricsRunId: string | null = null;
+  private maxBufferSize = 20000;
   private alertsBuffer: Alert[] = [];
   private eventsBuffer: WebSocketEvent[] = [];
   private currentRunState: RunState = "IDLE";
@@ -34,6 +35,10 @@ class WebSocketClient {
 
   public getMetricsHistory(): MetricPoint[] {
     return [...this.metricsBuffer];
+  }
+
+  public getMetricsRunId(): string | null {
+    return this.metricsRunId;
   }
 
   public getLatestMetric(): MetricPoint | null {
@@ -59,10 +64,21 @@ class WebSocketClient {
     return this.cumulativeActiveTime;
   }
 
-  public setMetricsHistory(history: MetricPoint[]): void {
+  public setMetricsHistory(history: MetricPoint[], runId?: string): void {
+    if (runId) {
+      this.metricsRunId = runId;
+    }
     this.metricsBuffer = history.slice(-this.maxBufferSize);
-    if (this.metricsBuffer.length > 0) {
-      this.latestMetric = this.metricsBuffer[this.metricsBuffer.length - 1];
+    const latest = this.metricsBuffer.length > 0
+      ? this.metricsBuffer[this.metricsBuffer.length - 1]
+      : null;
+    this.latestMetric = latest;
+    this.latestValLoss = null;
+    this.latestValStep = null;
+    this.latestValTimestamp = null;
+    this.valStatus = "awaiting";
+    this.cumulativeActiveTime = 0;
+    if (latest) {
       // Scan backwards for last non-null val_loss
       for (let i = this.metricsBuffer.length - 1; i >= 0; i--) {
         const pt = this.metricsBuffer[i];
@@ -74,10 +90,21 @@ class WebSocketClient {
           break;
         }
       }
-      if (this.latestMetric.active_training_time_s !== undefined) {
-        this.cumulativeActiveTime = Number(this.latestMetric.active_training_time_s);
+      if (latest.active_training_time_s !== undefined) {
+        this.cumulativeActiveTime = Number(latest.active_training_time_s);
       }
     }
+  }
+
+  public clearMetricsHistory(runId: string | null = null): void {
+    this.metricsBuffer = [];
+    this.metricsRunId = runId;
+    this.latestMetric = null;
+    this.latestValLoss = null;
+    this.latestValStep = null;
+    this.latestValTimestamp = null;
+    this.valStatus = "awaiting";
+    this.cumulativeActiveTime = 0;
   }
 
   public setValidationState(valLoss: number | null, step: number | null, timestamp?: number | null): void {
@@ -103,6 +130,7 @@ class WebSocketClient {
 
   public clearTelemetry(): void {
     this.metricsBuffer = [];
+    this.metricsRunId = null;
     this.alertsBuffer = [];
     this.eventsBuffer = [];
     this.latestValLoss = null;
@@ -243,6 +271,13 @@ class WebSocketClient {
     }
 
     if (isStepEvent) {
+      const eventRunId = data.run_id ? String(data.run_id) : null;
+      if (eventRunId && this.metricsRunId && eventRunId !== this.metricsRunId) {
+        // A new/resumed run must not inherit the previous run's chart points.
+        this.clearMetricsHistory(eventRunId);
+      } else if (eventRunId && !this.metricsRunId) {
+        this.metricsRunId = eventRunId;
+      }
       const rawStep = Number(payload.step ?? data.step ?? 0);
       const rawLoss = Number(payload.loss ?? payload.train_loss ?? data.loss ?? data.train_loss ?? 0);
       const rawValLoss =
@@ -364,6 +399,16 @@ class WebSocketClient {
         eventType === "RUN_FAILED" ? "FAILED" :
         (payload.new_state || payload.state || "IDLE");
       this.currentRunState = newState;
+      if (eventType === "RUN_STARTED") {
+        // Keep history up to the resume checkpoint and drop any stale future
+        // points from the previous branch; a fresh run starts at step 0.
+        const startStep = Number(payload.start_step ?? data.start_step ?? 0);
+        const eventRunId = data.run_id ? String(data.run_id) : undefined;
+        this.setMetricsHistory(
+          this.metricsBuffer.filter((point) => point.step <= startStep),
+          eventRunId
+        );
+      }
       this.stateListeners.forEach((fn) => fn(newState));
     } else if (eventType === "ALERT" || eventType === "LOSS_SPIKE" || eventType === "GRADIENT_WARNING") {
       const alert: Alert = {

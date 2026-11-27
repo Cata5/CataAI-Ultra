@@ -31,7 +31,7 @@ const phases = [
     name: "Capable",
     status: "Next",
     body: "Scale past a single consumer GPU without pretending the plumbing is the product.",
-    shipped: "Single-GPU and DataParallel training, real DDP, checkpoint resume, evaluation hooks, plugin API, GGUF export verified in llama.cpp, hyperparameter sweeps and dataset quality audits.",
+    shipped: "Single-GPU and DataParallel training, real DDP, one-click checkpoint resume that starts training directly and continues the original run and full SQLite chart history, phase-relative LR schedules and epoch budgets so SFT gets its own full warmup/decay window and budget, a single best checkpoint plus the rolling window configured in Settings with one protected anchor per completed phase so pretrain survives SFT, evaluation hooks, plugin API, GGUF export verified in llama.cpp, hyperparameter sweeps, bulk checkpoint selection and deletion, format-aware dataset cleaning that repairs mojibake and removes standalone or field-level NaN values, vectorized MinHash deduplication and quality audits, and live upload, cleaning, tokenization and audit progress that survives tab changes.",
     open: "Ollama import verification, desktop-owned sweep orchestration, larger dataset pipelines, a reproducible evaluation harness and hardware-validated cluster runs.",
   },
   {
@@ -68,13 +68,14 @@ export default function Home() {
               and checkpoints, and telemetry you can trace back to the code.
             </p>
             <div className="actions">
-              <a className="button" href={REPO}>View repository</a>
+              <a className="button" href={`${basePath}/guide/`}>Read the user guide</a>
+              <a className="text-link" href={REPO}>View repository</a>
               <a className="text-link" href="#audit">Read the audit</a>
             </div>
             <dl className="hero-facts">
               <div><b>61</b>desktop commands</div>
               <div><b>93</b>HTTP routes</div>
-              <div><b>368</b>Python tests</div>
+              <div><b>412</b>Python tests</div>
             </dl>
           </div>
 
@@ -178,7 +179,7 @@ export default function Home() {
             </div>
             <div className="note">
               <strong>How it was checked</strong>
-              368 Python tests, a 15-file static frontend export (13 routes), a production
+              412 Python tests, a 15-file static frontend export (13 routes), a production
               website build, Rust <code>cargo check</code>, a real GGUF export test and a
               llama.cpp load/generation smoke test. No unexecuted test is claimed.
             </div>
@@ -244,11 +245,12 @@ export default function Home() {
               </ZoomableScreenshot>
               <ZoomableScreenshot
                 src={`${basePath}/screenshots/datasets.png`}
-                alt="Dataset manager showing tokenized corpora and preprocessing status"
+                alt="Dataset manager with clean-on-import, live operation progress and tokenized corpora"
                 width={1919}
                 height={1007}
               >
-                Datasets — tokenized corpora, token counts and inspection.
+                Datasets — clean imports, live upload, cleaning, tokenization and audit
+                progress, token counts and inspection. Progress keeps running when you change tabs.
               </ZoomableScreenshot>
             </div>
           </div>

@@ -23,8 +23,17 @@ import math
 import os
 import re
 import unicodedata
+import zlib
 from collections import Counter
 from collections.abc import Iterable, Iterator
+from typing import Any
+
+from .text_repair import normalize_training_text
+
+try:  # NumPy is already shipped with the PyTorch worker; keep a pure-Python fallback.
+    import numpy as np
+except Exception:  # pragma: no cover - exercised only in minimal installs
+    np = None  # type: ignore[assignment]
 
 # ============================================================================
 # PII REGEX PATTERNS & ROMANIAN CNP VALIDATOR
@@ -105,18 +114,27 @@ def is_valid_cnp(candidate: str) -> bool:
     return 1 <= county <= 52
 
 
-def mask_pii_in_text(text: str) -> str:
-    """Masks emails, phone numbers, Romanian CNP, and API keys with canonical tokens."""
+def _mask_pii(
+    text: str, counts: dict[str, int] | None = None
+) -> str:
+    """Single-pass PII detection and masking helper.
+
+    When counts is provided it is incremented in place. Keeping detection and
+    replacement together avoids scanning every document twice (the cleaner
+    used to count first and mask afterwards).
+    """
     if not text:
         return text
 
     # Mask emails
-    text = EMAIL_REGEX.sub("[EMAIL]", text)
+    text, matches = EMAIL_REGEX.subn("[EMAIL]", text)
+    if counts is not None and matches:
+        counts["email"] = counts.get("email", 0) + matches
 
     # Mask API keys
     for pattern in API_KEY_PATTERNS:
         if "Bearer" in pattern.pattern:
-            text = pattern.sub("Bearer [API_KEY]", text)
+            text, matches = pattern.subn("Bearer [API_KEY]", text)
         elif "api[_-]?key" in pattern.pattern:
 
             def _replace_kv(m: re.Match) -> str:
@@ -125,23 +143,44 @@ def mask_pii_in_text(text: str) -> str:
                 end_in_full = m.end(1) - m.start(0)
                 return full[:start_in_full] + "[API_KEY]" + full[end_in_full:]
 
-            text = pattern.sub(_replace_kv, text)
+            text, matches = pattern.subn(_replace_kv, text)
         else:
-            text = pattern.sub("[API_KEY]", text)
+            text, matches = pattern.subn("[API_KEY]", text)
+        if counts is not None and matches:
+            counts["api_key"] = counts.get("api_key", 0) + matches
 
     # Mask Romanian CNP (validate date and components)
+    valid_cnp = 0
+
     def _replace_cnp(m: re.Match) -> str:
+        nonlocal valid_cnp
         candidate = m.group(0)
         if is_valid_cnp(candidate):
+            valid_cnp += 1
             return "[CNP]"
         return candidate
 
-    text = CNP_REGEX.sub(_replace_cnp, text)
+    text, _ = CNP_REGEX.subn(_replace_cnp, text)
+    if counts is not None and valid_cnp:
+        counts["cnp"] = counts.get("cnp", 0) + valid_cnp
 
     # Mask phone numbers
-    text = PHONE_REGEX.sub("[PHONE]", text)
+    text, matches = PHONE_REGEX.subn("[PHONE]", text)
+    if counts is not None and matches:
+        counts["phone"] = counts.get("phone", 0) + matches
 
     return text
+
+
+def mask_pii_in_text(text: str) -> str:
+    """Masks emails, phone numbers, Romanian CNP, and API keys with canonical tokens."""
+    return _mask_pii(text)
+
+
+def mask_pii_and_count(text: str) -> tuple[str, dict[str, int]]:
+    """Masks PII and returns per-category occurrence counts in one pass."""
+    counts: dict[str, int] = {}
+    return _mask_pii(text, counts), counts
 
 
 # ============================================================================
@@ -350,18 +389,25 @@ NON_TARGET_WORDS = {
 
 
 def classify_language_statistical(
-    text: str, target_languages: tuple[str, ...] = ("ron", "eng", "ro", "en")
+    text: str,
+    target_languages: tuple[str, ...] = ("ron", "eng", "ro", "en"),
+    *,
+    normalized: bool = False,
 ) -> tuple[str, float]:
     """Genuine statistical n-gram and lexicon language identifier.
 
     Returns (detected_language_code, confidence_score in [0.0, 1.0]).
     Language codes: 'ron' (Romanian), 'eng' (English), 'other' (non-target).
+
+    Set normalized=True when the caller already applied NFC normalization and
+    sedila unification (the cleaning pipeline does this while stripping HTML).
     """
     if not text or not text.strip():
         return "other", 0.0
 
     # Ensure canonical Unicode NFC normalization and sedila unification
-    text = unicodedata.normalize("NFC", text).translate(SEDILA_TRANSLATION)
+    if not normalized:
+        text = unicodedata.normalize("NFC", text).translate(SEDILA_TRANSLATION)
 
     # Diacritics count
     diacritic_count = sum(1 for ch in text if ch in RO_DIACRITICS)
@@ -372,9 +418,16 @@ def classify_language_statistical(
         return "other", 0.0
 
     total_words = len(words)
-    ro_matches = sum(1 for w in words if w in RO_STOPWORDS)
-    en_matches = sum(1 for w in words if w in EN_STOPWORDS)
-    non_target_matches = sum(1 for w in words if w in NON_TARGET_WORDS)
+    ro_matches = 0
+    en_matches = 0
+    non_target_matches = 0
+    for word in words:
+        if word in RO_STOPWORDS:
+            ro_matches += 1
+        if word in EN_STOPWORDS:
+            en_matches += 1
+        if word in NON_TARGET_WORDS:
+            non_target_matches += 1
 
     # Diacritic bonus to Romanian
     ro_score = (ro_matches / total_words) * 3.0 + (
@@ -411,23 +464,33 @@ def classify_language_statistical(
 # TEXT QUALITY & BOILERPLATE HEURISTICS
 # ============================================================================
 
-HTML_TAG_REGEX = re.compile(r"<[^>]+>")
+HTML_TAG_REGEX = re.compile(r"<(?!\|)[^>]+>")
 WHITESPACE_REGEX = re.compile(r"[ \t]+")
 EXCESSIVE_NEWLINES_REGEX = re.compile(r"\n{3,}")
+DEFAULT_CHAR_REPETITION_REGEX = re.compile(r"([^\s])\1{7,}")
 
 
 def strip_html_and_boilerplate(text: str) -> str:
     """Strips HTML markup and unescapes entities."""
     if not text:
         return ""
-    # Canonical Unicode NFC normalization and sedila unification
-    text = unicodedata.normalize("NFC", text).translate(SEDILA_TRANSLATION)
-    # Unescape HTML entities
-    text = html.unescape(text)
+    # Repair double-encoded text and drop standalone NaN lines before any
+    # normalization. Doing this first also lets the ASCII fast path apply.
+    text = normalize_training_text(text)
+    # ASCII text cannot contain Romanian sedila characters, non-breaking
+    # spaces, or zero-width spaces, so the Unicode pass is unnecessary.
+    if not text.isascii():
+        # Canonical Unicode NFC normalization and sedila unification
+        text = unicodedata.normalize("NFC", text).translate(SEDILA_TRANSLATION)
+    # Unescape HTML entities only when an entity marker exists
+    if "&" in text:
+        text = html.unescape(text)
     # Convert non-breaking space and zero-width spaces to standard space
-    text = text.replace("\xa0", " ").replace("\u200b", "").replace("\ufeff", "")
-    # Remove HTML tags
-    text = HTML_TAG_REGEX.sub(" ", text)
+    if "\xa0" in text or "\u200b" in text or "\ufeff" in text:
+        text = text.replace("\xa0", " ").replace("\u200b", "").replace("\ufeff", "")
+    # Remove HTML tags only when a tag marker exists
+    if "<" in text:
+        text = HTML_TAG_REGEX.sub(" ", text)
     # Normalize excessive horizontal whitespace
     text = WHITESPACE_REGEX.sub(" ", text)
     # Normalize excessive newlines
@@ -459,9 +522,13 @@ def check_text_quality(
 
     # 1. Character repetition check: e.g. "aaaaaaa"
     # Matches any non-whitespace char repeated max_char_repetition times
-    char_rep_regex = re.compile(rf"([^\s])\1{{{max_char_repetition - 1},}}")
-    if char_rep_regex.search(text):
-        return False
+    if max_char_repetition == 8:
+        if DEFAULT_CHAR_REPETITION_REGEX.search(text):
+            return False
+    else:
+        char_rep_regex = re.compile(rf"([^\s])\1{{{max_char_repetition - 1},}}")
+        if char_rep_regex.search(text):
+            return False
 
     # 2. Consecutive word repetition check: e.g. "cuvant cuvant cuvant cuvant cuvant"
     consec_count = 1
@@ -484,19 +551,24 @@ def check_text_quality(
             return False
 
     # 4. Punctuation / symbol density bound
-    non_space = [ch for ch in text if not ch.isspace()]
-    if non_space:
-        punct_count = sum(1 for ch in non_space if not ch.isalnum())
-        if (punct_count / len(non_space)) > max_punctuation_ratio:
-            return False
+    non_space_count = 0
+    punct_count = 0
+    for ch in text:
+        if not ch.isspace():
+            non_space_count += 1
+            if not ch.isalnum():
+                punct_count += 1
+    if non_space_count and (punct_count / non_space_count) > max_punctuation_ratio:
+        return False
 
     # 5. Duplicate line ratio for multi-line documents
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if len(lines) >= 6:
-        unique_lines = set(lines)
-        dup_ratio = 1.0 - (len(unique_lines) / len(lines))
-        if dup_ratio >= max_duplicate_line_ratio:
-            return False
+    if text.count("\n") >= 5:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(lines) >= 6:
+            unique_lines = set(lines)
+            dup_ratio = 1.0 - (len(unique_lines) / len(lines))
+            if dup_ratio >= max_duplicate_line_ratio:
+                return False
 
     return True
 
@@ -518,6 +590,11 @@ class MinHashLSHDeduplicator:
     """
 
     MERSENNE_PRIME = (1 << 61) - 1
+    # MinHash only needs a field large enough to avoid collisions. A 32-bit
+    # prime keeps a*s+b inside uint64, which lets NumPy compute all shingle
+    # hashes in C instead of running Python big-int modulo per permutation.
+    VECTOR_PRIME = 4_294_967_291
+    VECTOR_CHUNK = 16
 
     def __init__(
         self,
@@ -549,56 +626,93 @@ class MinHashLSHDeduplicator:
             rng.randint(0, self.MERSENNE_PRIME - 1) for _ in range(num_perm)
         ]
 
+        # Vectorized (uint64-safe) coefficients. Values are reduced modulo the
+        # 32-bit prime so a*s+b cannot overflow a uint64 accumulator.
+        if np is not None:
+            self._a_vector = np.array(
+                [value % self.VECTOR_PRIME for value in self.a_coeffs], dtype=np.uint64
+            )
+            self._b_vector = np.array(
+                [value % self.VECTOR_PRIME for value in self.b_coeffs], dtype=np.uint64
+            )
+        else:
+            self._a_vector = None
+            self._b_vector = None
+
         # Exact SHA-256 set for 100% exact match
         self.exact_hashes: set[str] = set()
 
         # LSH hash buckets: band_idx -> bucket_hash -> list of (doc_id, signature)
-        self.buckets: list[dict[int, list[tuple[int, list[int]]]]] = [
+        self.buckets: list[dict[int, list[tuple[int, Any]]]] = [
             {} for _ in range(self.b_bands)
         ]
         self.doc_count = 0
 
     def _get_shingles(self, text: str) -> set[int]:
-        """Extracts 5-gram shingles as 64-bit integer hashes."""
+        """Extracts 5-gram shingles as 64-bit integer hashes.
+
+        Built-in string hashing is implemented in C and is an order of
+        magnitude faster than constructing and digesting an MD5 object for
+        every character shingle. Only equality within this cleaning run
+        matters, so the process-local salt is irrelevant.
+        """
         shingles: set[int] = set()
-        clean = re.sub(r"\s+", " ", text.lower().strip())
+        clean = " ".join(text.lower().split())
 
         if self.shingle_mode == "word":
             words = clean.split()
             if len(words) >= self.k_shingle:
-                for i in range(len(words) - self.k_shingle + 1):
+                last = len(words) - self.k_shingle
+                for i in range(last + 1):
                     gram = " ".join(words[i : i + self.k_shingle])
-                    h = int.from_bytes(
-                        hashlib.md5(gram.encode("utf-8")).digest()[:8], "little"
-                    )
-                    shingles.add(h)
+                    shingles.add(zlib.crc32(gram.encode("utf-8")))
                 return shingles
 
         # Default character 5-grams
         k = min(self.k_shingle, len(clean))
         if k > 0:
             for i in range(len(clean) - k + 1):
-                gram = clean[i : i + k]
-                h = int.from_bytes(
-                    hashlib.md5(gram.encode("utf-8")).digest()[:8], "little"
-                )
-                shingles.add(h)
+                shingles.add(zlib.crc32(clean[i : i + k].encode("utf-8")))
         else:
             shingles.add(0)
         return shingles
 
-    def compute_minhash(self, shingles: set[int]) -> list[int]:
-        """Computes 128-element MinHash signature."""
+    def compute_minhash(self, shingles: set[int]) -> Any:
+        """Computes a MinHash signature, vectorized across permutations when possible."""
+        if np is not None and self._a_vector is not None and shingles:
+            values = np.fromiter(
+                (shingle % self.VECTOR_PRIME for shingle in shingles),
+                dtype=np.uint64,
+                count=len(shingles),
+            )
+            sig = np.full(self.num_perm, self.VECTOR_PRIME, dtype=np.uint64)
+            for start in range(0, self.num_perm, self.VECTOR_CHUNK):
+                end = min(start + self.VECTOR_CHUNK, self.num_perm)
+                candidate = (
+                    self._a_vector[start:end, None] * values[None, :]
+                    + self._b_vector[start:end, None]
+                ) % self.VECTOR_PRIME
+                sig[start:end] = candidate.min(axis=1)
+            return sig
+
+        # Pure-Python fallback for minimal installs without NumPy.
         sig = [self.MERSENNE_PRIME] * self.num_perm
-        for s in shingles:
+        for shingle in shingles:
             for i in range(self.num_perm):
-                val = (self.a_coeffs[i] * s + self.b_coeffs[i]) % self.MERSENNE_PRIME
+                val = (
+                    self.a_coeffs[i] * shingle + self.b_coeffs[i]
+                ) % self.MERSENNE_PRIME
                 sig[i] = min(sig[i], val)
         return sig
 
-    def is_duplicate(self, text: str) -> bool:
-        """Returns True if document is an exact duplicate or near duplicate (>= jaccard_threshold)."""
-        text = unicodedata.normalize("NFC", text).translate(SEDILA_TRANSLATION)
+    def is_duplicate(self, text: str, *, normalized: bool = False) -> bool:
+        """Returns True if document is an exact duplicate or near duplicate (>= jaccard_threshold).
+
+        Set normalized=True when the caller already applied NFC normalization and
+        sedila unification to avoid repeating that work for every document.
+        """
+        if not normalized:
+            text = unicodedata.normalize("NFC", text).translate(SEDILA_TRANSLATION)
 
         # 1. Exact SHA-256 match
         sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -610,7 +724,8 @@ class MinHashLSHDeduplicator:
         sig = self.compute_minhash(shingles)
 
         candidates: set[int] = set()
-        candidate_sigs: dict[int, list[int]] = {}
+        candidate_sigs: dict[int, Any] = {}
+        candidate_bands: dict[int, int] = {}
 
         for band_idx in range(self.b_bands):
             start = band_idx * self.r_rows
@@ -622,14 +737,42 @@ class MinHashLSHDeduplicator:
                 for cand_id, cand_sig in bucket:
                     candidates.add(cand_id)
                     candidate_sigs[cand_id] = cand_sig
+                    candidate_bands[cand_id] = candidate_bands.get(cand_id, 0) + 1
 
-        # Check Jaccard similarity on candidate documents
-        for cand_id in candidates:
-            cand_sig = candidate_sigs[cand_id]
-            match_count = sum(1 for a, b in zip(sig, cand_sig) if a == b)
-            est_jaccard = match_count / self.num_perm
-            if est_jaccard >= self.jaccard_threshold:
-                return True
+        # Safe pre-filter: a candidate that shares only c buckets must differ in
+        # at least one slot of every other bucket, so it can match at most
+        # num_perm - b_bands + c signature slots.
+        required_matches = self.jaccard_threshold * self.num_perm
+        min_shared_bands = max(
+            0, math.ceil(required_matches - (self.num_perm - self.b_bands))
+        )
+        cand_ids = [
+            cand_id for cand_id in candidates
+            if candidate_bands[cand_id] >= min_shared_bands
+        ]
+
+        # Check Jaccard similarity on candidate documents. Comparing all
+        # candidates as one matrix avoids a Python function call per candidate,
+        # which dominates when near-duplicate clusters are large.
+        if cand_ids:
+            if np is not None and isinstance(sig, np.ndarray):
+                # Bound peak memory for pathological duplicate clusters.
+                for start in range(0, len(cand_ids), 4096):
+                    batch = cand_ids[start : start + 4096]
+                    cand_matrix = np.stack(
+                        [candidate_sigs[cand_id] for cand_id in batch]
+                    )
+                    best_matches = int(
+                        np.count_nonzero(cand_matrix == sig, axis=1).max()
+                    )
+                    if best_matches / self.num_perm >= self.jaccard_threshold:
+                        return True
+            else:
+                for cand_id in cand_ids:
+                    cand_sig = candidate_sigs[cand_id]
+                    match_count = sum(1 for a, b in zip(sig, cand_sig) if a == b)
+                    if match_count / self.num_perm >= self.jaccard_threshold:
+                        return True
 
         # Not duplicate: register new document
         self.exact_hashes.add(sha)

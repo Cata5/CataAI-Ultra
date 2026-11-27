@@ -210,6 +210,7 @@ pub async fn list_datasets(state: State<'_, AppState>, workspace_id: Option<Stri
         check_dirs.push(PathBuf::from("data"));
 
         let db = DatabaseManager::new(&db_path).map_err(|e| e.to_string())?;
+        let cache_dir = crate::data_dir().join("data").join("cache");
 
         for dir in check_dirs {
             if !dir.exists() {
@@ -234,9 +235,18 @@ pub async fn list_datasets(state: State<'_, AppState>, workspace_id: Option<Stri
                                 let is_up = dir.to_string_lossy().contains("uploads") || dir.to_string_lossy().contains("workspaces");
 
                                 let db_meta = db.get_dataset_meta(&stem);
-                                let has_cache = Path::new(&format!("data/cache/{}_full_sft.pt", stem)).exists()
-                                    || Path::new(&format!("data/cache/{}_tokens.pt", stem)).exists()
-                                    || Path::new(&format!("data/cache/{}_tokens.bin", stem)).exists();
+                                let has_cache = cache_dir
+                                    .join(format!("{}_full_sft.pt", stem))
+                                    .exists()
+                                    || cache_dir
+                                        .join(format!("{}_tokens.pt", stem))
+                                        .exists()
+                                    || cache_dir
+                                        .join(format!("{}_tokens.bin", stem))
+                                        .exists()
+                                    || cache_dir
+                                        .join(format!("{}_full_tokens.bin", stem))
+                                        .exists();
 
                                 let (is_tokenized, total_tokens) = if let Some((tc, _)) = db_meta {
                                     (tc > 0, Some(tc))
@@ -277,6 +287,132 @@ pub async fn list_datasets(state: State<'_, AppState>, workspace_id: Option<Stri
     .map_err(|e| format!("list_datasets failed: {}", e))?
 }
 
+fn clear_token_cache(stem: &str) {
+    let cache_dir = crate::data_dir().join("data").join("cache");
+    for name in [
+        format!("{stem}.tokenized"),
+        format!("{stem}_full_tokens.bin"),
+        format!("{stem}_full_tokens.pt"),
+        format!("{stem}_sft.pt"),
+    ] {
+        let _ = fs::remove_file(cache_dir.join(name));
+    }
+}
+
+fn run_clean_worker(
+    python: &Path,
+    project: &Path,
+    data_dir: &Path,
+    dataset: &Path,
+    output: Option<&Path>,
+    workspace: &str,
+    options: &serde_json::Value,
+    job_id: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let jaccard = options
+        .get("jaccard_threshold")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.80);
+    let lid = options
+        .get("lid_threshold")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.80);
+
+    let mut cmd = Command::new(python);
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    cmd.current_dir(project);
+    cmd.env("PYTHONPATH", project);
+    cmd.env("PYTHONIOENCODING", "utf-8");
+    cmd.env("PYTHONUNBUFFERED", "1");
+    cmd.env("LLMMAKER_DATA_DIR", data_dir);
+    cmd.args(["-m", "src.worker.dataset_ops", "clean", "--dataset"])
+        .arg(dataset)
+        .arg("--jaccard")
+        .arg(jaccard.to_string())
+        .arg("--lid")
+        .arg(lid.to_string());
+    if let Some(out) = output {
+        cmd.arg("--output").arg(out);
+    }
+    if options.get("quality").and_then(|v| v.as_bool()) == Some(false) {
+        cmd.arg("--no-quality");
+    }
+    if options.get("language").and_then(|v| v.as_bool()) == Some(false) {
+        cmd.arg("--no-language");
+    }
+    if options.get("deduplicate").and_then(|v| v.as_bool()) == Some(false) {
+        cmd.arg("--no-dedup");
+    }
+    if options.get("mask_pii").and_then(|v| v.as_bool()) == Some(false) {
+        cmd.arg("--no-pii");
+    }
+    cmd.arg("--workspace").arg(workspace);
+    if let Some(job_id) = job_id {
+        cmd.arg("--job-id").arg(job_id);
+    }
+
+    let output = cmd
+        .output()
+        .map_err(|err| format!("Could not launch {:?}: {err}", python))?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in stdout.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('{') && trimmed.ends_with('}') {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
+                    return Err(err.to_string());
+                }
+                if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false)
+                    && output.status.success()
+                {
+                    return Ok(parsed);
+                }
+            }
+        }
+    }
+    let detail = stderr.trim();
+    Err(if detail.is_empty() {
+        "Dataset cleaning produced no result".to_string()
+    } else {
+        format!("Dataset cleaning failed: {detail}")
+    })
+}
+
+fn unique_raw_path(raw_dir: &Path, safe_name: &str) -> PathBuf {
+    let candidate = raw_dir.join(safe_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let stem = Path::new(safe_name)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("dataset");
+    let extension = Path::new(safe_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| format!(".{value}"))
+        .unwrap_or_default();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis())
+        .unwrap_or(0);
+    let mut counter = 0u32;
+    loop {
+        let suffix = if counter == 0 {
+            String::new()
+        } else {
+            format!("_{counter}")
+        };
+        let candidate = raw_dir.join(format!("{stem}_{stamp}{suffix}{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        counter += 1;
+    }
+}
+
 #[tauri::command]
 pub async fn upload_dataset(
     state: State<'_, AppState>,
@@ -285,47 +421,118 @@ pub async fn upload_dataset(
     base64_data: Option<String>,
     bytes: Option<Vec<u8>>,
     workspace_id: Option<String>,
+    clean: Option<bool>,
+    lid_threshold: Option<f64>,
+    jaccard_threshold: Option<f64>,
+    job_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    let safe_name = Path::new(&filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .ok_or_else(|| "Invalid dataset filename".to_string())?
+        .to_string();
     let target_dir = resolve_dataset_dir(&state.db, workspace_id.as_deref());
+    let python = state.supervisor.python_path();
+    let project = project_root();
+    let data_dir = state.supervisor.data_dir();
+    let active_workspace = state.db.get_active_workspace().ok().map(|w| w.id);
+    let workspace = workspace_id
+        .or(active_workspace)
+        .unwrap_or_else(|| "default".to_string());
+    let clean_enabled = clean.unwrap_or(true);
+    let options = serde_json::json!({
+        "quality": true,
+        "language": true,
+        "deduplicate": true,
+        "mask_pii": true,
+        "lid_threshold": lid_threshold.unwrap_or(0.80),
+        "jaccard_threshold": jaccard_threshold.unwrap_or(0.80),
+    });
 
     tokio::task::spawn_blocking(move || {
         fs::create_dir_all(&target_dir)
             .map_err(|e| format!("Failed to create dataset directory: {}", e))?;
 
-        let dest_path = target_dir.join(&filename);
+        let write_path = if clean_enabled {
+            let raw_dir = target_dir.join("raw");
+            fs::create_dir_all(&raw_dir)
+                .map_err(|e| format!("Failed to create raw dataset directory: {}", e))?;
+            unique_raw_path(&raw_dir, &safe_name)
+        } else {
+            target_dir.join(&safe_name)
+        };
 
         if let Some(src) = file_path {
             // Direct native file copy: microsecond execution, zero JS memory overhead
-            fs::copy(&src, &dest_path)
+            fs::copy(&src, &write_path)
                 .map_err(|e| format!("Failed to copy dataset file: {}", e))?;
         } else if let Some(b64) = base64_data {
             let decoded = BASE64_STANDARD
                 .decode(b64.as_bytes())
                 .map_err(|e| format!("Base64 decode failed: {}", e))?;
-            fs::write(&dest_path, &decoded)
+            fs::write(&write_path, &decoded)
                 .map_err(|e| format!("Failed to write dataset file: {}", e))?;
         } else if let Some(raw_bytes) = bytes {
-            fs::write(&dest_path, &raw_bytes)
+            fs::write(&write_path, &raw_bytes)
                 .map_err(|e| format!("Failed to write dataset file: {}", e))?;
         } else {
             return Err("No file content or path provided for upload".to_string());
         }
 
+        let dest_path = target_dir.join(&safe_name);
+        let mut cleaning = serde_json::Value::Null;
+        if clean_enabled {
+            let outcome = run_clean_worker(
+                &python,
+                &project,
+                &data_dir,
+                &write_path,
+                Some(&dest_path),
+                &workspace,
+                &options,
+                job_id.as_deref(),
+            );
+            let clean_error = match outcome {
+                Ok(report)
+                    if report
+                        .get("records_out")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                        > 0 =>
+                {
+                    cleaning = report;
+                    None
+                }
+                Ok(_) => Some("Cleaning removed every record".to_string()),
+                Err(error) => Some(error),
+            };
+            if let Some(error) = clean_error {
+                log::warn!("Dataset cleaning failed; keeping raw upload: {}", error);
+                fs::copy(&write_path, &dest_path).map_err(|e| {
+                    format!("Cleaning failed ({error}) and raw restore failed: {e}")
+                })?;
+                cleaning = serde_json::json!({"success": false, "error": error});
+            }
+        }
+
         let size_bytes = dest_path.metadata().map(|m| m.len()).unwrap_or(0);
-        let stem = Path::new(&filename)
+        let stem = dest_path
             .file_stem()
             .and_then(|s| s.to_str())
-            .unwrap_or(&filename)
+            .unwrap_or(&safe_name)
             .to_string();
+        clear_token_cache(&stem);
 
-        log::info!("Dataset '{}' saved ({} bytes) in {:?}", filename, size_bytes, target_dir);
+        log::info!("Dataset '{}' saved ({} bytes) in {:?}", safe_name, size_bytes, target_dir);
 
         Ok(serde_json::json!({
             "success": true,
             "id": stem,
-            "filename": filename,
+            "filename": safe_name,
             "size_bytes": size_bytes,
-            "total_tokens": size_bytes / 4,
+            "total_tokens": serde_json::Value::Null,
+            "cleaning": cleaning,
         }))
     })
     .await
@@ -337,18 +544,29 @@ pub async fn tokenize_dataset(
     state: State<'_, AppState>,
     id: String,
     workspace_id: Option<String>,
+    job_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // Run the worker through the bundled interpreter with the project on
+    // PYTHONPATH. The old path used bare "python", then silently recorded a
+    // hard-coded token count when the process failed.
     let db_path = state.db.get_db_path().to_string();
+    let python = state.supervisor.python_path();
+    let project = project_root();
+    let data_dir = state.supervisor.data_dir();
+    let active_workspace = state.db.get_active_workspace().ok().map(|w| w.id);
+    let workspace = workspace_id
+        .or(active_workspace)
+        .unwrap_or_else(|| "default".to_string());
 
     tokio::task::spawn_blocking(move || {
-        #[cfg(target_os = "windows")]
-        let mut cmd = Command::new("python");
+        let mut cmd = Command::new(&python);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
-
-        #[cfg(not(target_os = "windows"))]
-        let mut cmd = Command::new("python");
-
+        cmd.current_dir(&project);
+        cmd.env("PYTHONPATH", &project);
+        cmd.env("PYTHONIOENCODING", "utf-8");
+        cmd.env("PYTHONUNBUFFERED", "1");
+        cmd.env("LLMMAKER_DATA_DIR", &data_dir);
         cmd.args(&[
             "-m",
             "src.worker.dataset_ops",
@@ -356,49 +574,53 @@ pub async fn tokenize_dataset(
             "--dataset",
             &id,
         ]);
-
-        if let Some(ws) = workspace_id {
-            cmd.args(&["--workspace", &ws]);
+        cmd.arg("--workspace").arg(&workspace);
+        if let Some(job_id) = job_id {
+            cmd.arg("--job-id").arg(job_id);
         }
 
-        let db = DatabaseManager::new(&db_path).map_err(|e| e.to_string())?;
-
-        if let Ok(output) = cmd.output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines().rev() {
-                let trimmed = line.trim();
-                if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                        if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-                            let tc = parsed.get("token_count").and_then(|v| v.as_i64()).unwrap_or(1000);
-                            let tr = parsed.get("train_tokens").and_then(|v| v.as_i64()).unwrap_or((tc as f64 * 0.9) as i64);
-                            let vl = parsed.get("val_tokens").and_then(|v| v.as_i64()).unwrap_or((tc as f64 * 0.1) as i64);
-                            let _ = db.mark_dataset_tokenized(&id, tc, tr, vl);
-                            return Ok(parsed);
-                        }
-                        if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
-                            return Err(err.to_string());
-                        }
+        let output = cmd
+            .output()
+            .map_err(|err| format!("Could not launch {:?}: {err}", python))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for line in stdout.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
+                        return Err(err.to_string());
+                    }
+                    if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false)
+                        && output.status.success()
+                    {
+                        let tc = parsed
+                            .get("token_count")
+                            .and_then(|v| v.as_i64())
+                            .ok_or_else(|| "Tokenization returned no token_count".to_string())?;
+                        let tr = parsed
+                            .get("train_tokens")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or((tc as f64 * 0.9) as i64);
+                        let vl = parsed
+                            .get("val_tokens")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(tc - tr);
+                        let db = DatabaseManager::new(&db_path).map_err(|e| e.to_string())?;
+                        db.mark_dataset_tokenized(&id, tc, tr, vl)
+                            .map_err(|e| format!("Tokenization succeeded but metadata update failed: {e}"))?;
+                        return Ok(parsed);
                     }
                 }
             }
         }
 
-        // Fast fallback calculation
-        let tc = 1_144_246;
-        let tr = (tc as f64 * 0.90) as i64;
-        let vl = (tc as f64 * 0.10) as i64;
-        let _ = db.mark_dataset_tokenized(&id, tc, tr, vl);
-
-        Ok(serde_json::json!({
-            "success": true,
-            "dataset_id": id,
-            "cached": true,
-            "is_tokenized": true,
-            "token_count": tc,
-            "train_tokens": tr,
-            "val_tokens": vl,
-        }))
+        let detail = stderr.trim();
+        Err(if detail.is_empty() {
+            "Tokenization produced no result".to_string()
+        } else {
+            format!("Tokenization failed: {detail}")
+        })
     })
     .await
     .map_err(|e| format!("Tokenize task failed: {}", e))?
@@ -406,11 +628,22 @@ pub async fn tokenize_dataset(
 
 #[tauri::command]
 pub async fn curate_dataset(
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     id: String,
     options: Option<serde_json::Value>,
     workspace_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // Use the same bundled interpreter and environment as tokenization/audit.
+    // The previous implementation invoked bare "python" from the app directory,
+    // so the worker could not import src and every run failed generically.
+    let python = state.supervisor.python_path();
+    let project = project_root();
+    let data_dir = state.supervisor.data_dir();
+    let active_workspace = state.db.get_active_workspace().ok().map(|w| w.id);
+    let workspace = workspace_id
+        .or(active_workspace)
+        .unwrap_or_else(|| "default".to_string());
+
     tokio::task::spawn_blocking(move || {
         let jaccard = options
             .as_ref()
@@ -428,14 +661,14 @@ pub async fn curate_dataset(
             .and_then(|v| v.as_i64())
             .unwrap_or(5000);
 
-        #[cfg(target_os = "windows")]
-        let mut cmd = Command::new("python");
+        let mut cmd = Command::new(&python);
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
-
-        #[cfg(not(target_os = "windows"))]
-        let mut cmd = Command::new("python");
-
+        cmd.current_dir(&project);
+        cmd.env("PYTHONPATH", &project);
+        cmd.env("PYTHONIOENCODING", "utf-8");
+        cmd.env("PYTHONUNBUFFERED", "1");
+        cmd.env("LLMMAKER_DATA_DIR", &data_dir);
         cmd.args(&[
             "-m",
             "src.worker.dataset_ops",
@@ -449,29 +682,35 @@ pub async fn curate_dataset(
             "--max-samples",
             &max_samples.to_string(),
         ]);
+        cmd.arg("--workspace").arg(&workspace);
 
-        if let Some(ws) = workspace_id {
-            cmd.args(&["--workspace", &ws]);
-        }
-
-        if let Ok(output) = cmd.output() {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            for line in stdout.lines().rev() {
-                let trimmed = line.trim();
-                if trimmed.starts_with('{') && trimmed.ends_with('}') {
-                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                        if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-                            return Ok(parsed);
-                        }
-                        if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
-                            return Err(err.to_string());
-                        }
+        let output = cmd
+            .output()
+            .map_err(|err| format!("Could not launch {:?}: {err}", python))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        for line in stdout.lines().rev() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('{') && trimmed.ends_with('}') {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    if let Some(err) = parsed.get("error").and_then(|e| e.as_str()) {
+                        return Err(err.to_string());
+                    }
+                    if parsed.get("success").and_then(|v| v.as_bool()).unwrap_or(false)
+                        && output.status.success()
+                    {
+                        return Ok(parsed);
                     }
                 }
             }
         }
 
-        Err("MinHash deduplication failed to execute".to_string())
+        let detail = stderr.trim();
+        Err(if detail.is_empty() {
+            "MinHash deduplication produced no result".to_string()
+        } else {
+            format!("MinHash deduplication failed: {detail}")
+        })
     })
     .await
     .map_err(|e| format!("Curate task failed: {}", e))?
@@ -577,14 +816,87 @@ pub async fn export_gguf(
 }
 
 #[tauri::command]
-pub async fn audit_dataset_quality(
+pub fn get_dataset_operation(
+    state: State<'_, AppState>,
+    job_id: String,
+) -> Result<serde_json::Value, String> {
+    // The Python worker writes progress under <data>/data/cache/dataset_jobs.
+    // Keep the lookup restricted to that directory: the id comes from the UI.
+    if job_id.is_empty()
+        || job_id.len() > 96
+        || job_id == "."
+        || job_id == ".."
+        || !job_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err("Invalid dataset operation id".to_string());
+    }
+    let path = state
+        .supervisor
+        .data_dir()
+        .join("data")
+        .join("cache")
+        .join("dataset_jobs")
+        .join(format!("{job_id}.json"));
+    if !path.is_file() {
+        return Ok(serde_json::Value::Null);
+    }
+    let raw = fs::read_to_string(&path)
+        .map_err(|e| format!("Could not read dataset operation: {e}"))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| format!("Invalid dataset operation status: {e}"))
+}
+
+
+#[tauri::command]
+pub async fn clean_dataset(
     state: State<'_, AppState>,
     id: String,
     options: Option<serde_json::Value>,
+    workspace_id: Option<String>,
+    job_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let python = state.supervisor.python_path();
     let project = project_root();
     let data_dir = state.supervisor.data_dir();
+    let active_workspace = state.db.get_active_workspace().ok().map(|w| w.id);
+    let workspace = workspace_id
+        .or(active_workspace)
+        .unwrap_or_else(|| "default".to_string());
+    let options = options.unwrap_or_else(|| serde_json::json!({}));
+
+    tokio::task::spawn_blocking(move || {
+        let report = run_clean_worker(
+            &python,
+            &project,
+            &data_dir,
+            Path::new(&id),
+            None,
+            &workspace,
+            &options,
+            job_id.as_deref(),
+        )?;
+        if let Some(stem) = report.get("clean_dataset_id").and_then(|v| v.as_str()) {
+            clear_token_cache(stem);
+        }
+        Ok(report)
+    })
+    .await
+    .map_err(|e| format!("Clean task failed: {}", e))?
+}
+
+#[tauri::command]
+pub async fn audit_dataset_quality(
+    state: State<'_, AppState>,
+    id: String,
+    options: Option<serde_json::Value>,
+    job_id: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let python = state.supervisor.python_path();
+    let project = project_root();
+    let data_dir = state.supervisor.data_dir();
+    let active_workspace = state.db.get_active_workspace().ok().map(|w| w.id);
     tokio::task::spawn_blocking(move || {
         let max_samples = options
             .as_ref()
@@ -600,7 +912,9 @@ pub async fn audit_dataset_quality(
             .as_ref()
             .and_then(|o| o.get("workspace_id"))
             .and_then(|v| v.as_str())
-            .unwrap_or("default");
+            .map(str::to_string)
+            .or(active_workspace)
+            .unwrap_or_else(|| "default".to_string());
 
         let mut cmd = Command::new(&python);
         #[cfg(target_os = "windows")]
@@ -621,8 +935,11 @@ pub async fn audit_dataset_quality(
             "--duplicate-threshold",
             &duplicate_threshold.to_string(),
             "--workspace",
-            workspace_id,
+            &workspace_id,
         ]);
+        if let Some(job_id) = job_id {
+            cmd.arg("--job-id").arg(job_id);
+        }
 
         let output = cmd
             .output()
@@ -749,6 +1066,13 @@ pub fn inspect_tokenizer(text: String) -> serde_json::Value {
     })
 }
 
+fn normalize_checkpoint_path(path: &Path) -> String {
+    let resolved = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let raw = resolved.to_string_lossy();
+    let stripped = raw.strip_prefix(r"\\?\").unwrap_or(&raw);
+    stripped.replace('\\', "/").to_lowercase()
+}
+
 fn scan_checkpoint_entries(
     dir: &Path,
     checkpoints: &mut Vec<CheckpointItem>,
@@ -770,7 +1094,7 @@ fn scan_checkpoint_entries(
                     if filename.starts_with(".tmp") {
                         continue;
                     }
-                    let norm_path = path.to_string_lossy().replace('\\', "/").to_lowercase();
+                    let norm_path = normalize_checkpoint_path(&path);
                     if seen_paths.contains(&norm_path) {
                         continue;
                     }
@@ -859,30 +1183,24 @@ pub fn list_checkpoints(state: State<AppState>, workspace_id: Option<String>) ->
     let mut seen_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     let mut search_dirs = Vec::new();
-    let ws_dir = resolve_checkpoint_dir(&state.db, workspace_id.as_deref());
+    let effective_ws = workspace_id
+        .clone()
+        .or_else(|| state.db.get_active_workspace().ok().map(|w| w.id));
+    let ws_dir = resolve_checkpoint_dir(&state.db, effective_ws.as_deref());
     search_dirs.push(ws_dir);
     search_dirs.push(PathBuf::from("checkpoints"));
     search_dirs.push(PathBuf::from("data/checkpoints"));
     search_dirs.push(PathBuf::from("models"));
-
-    if let Ok(entries) = fs::read_dir("workspaces") {
-        for e in entries.flatten() {
-            let p = e.path().join("checkpoints");
-            if p.exists() {
-                search_dirs.push(p);
-            }
-        }
-    }
 
     for dir in &search_dirs {
         scan_checkpoint_entries(dir, &mut checkpoints, &mut seen_paths);
     }
 
     // Also include SQLite recorded checkpoints
-    if let Ok(db_records) = state.db.list_checkpoints(workspace_id.as_deref()) {
+    if let Ok(db_records) = state.db.list_checkpoints(effective_ws.as_deref()) {
         for rec in db_records {
             let p = Path::new(&rec.file_path);
-            let norm_path = rec.file_path.replace('\\', "/").to_lowercase();
+            let norm_path = normalize_checkpoint_path(p);
             if !seen_paths.contains(&norm_path) && p.exists() {
                 seen_paths.insert(norm_path);
                 let meta = p.metadata().ok();
@@ -926,15 +1244,6 @@ pub fn delete_checkpoint(
     search_dirs.push(ws_dir);
     search_dirs.push(PathBuf::from("checkpoints"));
     search_dirs.push(PathBuf::from("models"));
-
-    if let Ok(entries) = fs::read_dir("workspaces") {
-        for e in entries.flatten() {
-            let p = e.path().join("checkpoints");
-            if p.exists() {
-                search_dirs.push(p);
-            }
-        }
-    }
 
     fn remove_in_dir(dir: &Path, target: &str) {
         if !dir.exists() { return; }
@@ -2022,5 +2331,19 @@ pub fn cancel_setup() -> Result<(), String> {
         child.kill().map_err(|err| err.to_string())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_checkpoint_path;
+    use std::path::Path;
+
+    #[test]
+    fn checkpoint_paths_drop_windows_extended_prefix() {
+        let extended = Path::new(r"\\?\D:\CataAI\checkpoints\Best_Model.PT");
+        let plain = Path::new(r"D:\CataAI\checkpoints\Best_Model.PT");
+        assert_eq!(normalize_checkpoint_path(extended), normalize_checkpoint_path(plain));
+        assert_eq!(normalize_checkpoint_path(plain), "d:/cataai/checkpoints/best_model.pt");
+    }
 }
 

@@ -370,14 +370,19 @@ export const SettingsView: React.FC = () => {
             </label>
             <input
               type="number"
+              min={1}
               value={settings.max_checkpoints_kept}
-              onChange={(e) =>
-                setSettings({ ...settings, max_checkpoints_kept: parseInt(e.target.value) || 4 })
-              }
+              onChange={(e) => {
+                const parsed = parseInt(e.target.value, 10);
+                setSettings({
+                  ...settings,
+                  max_checkpoints_kept: Number.isFinite(parsed) ? Math.max(1, parsed) : 4,
+                });
+              }}
               className="w-full bg-[#1B1B1B] border border-[#333333] rounded px-2.5 py-1.5 text-[#F2F2F2] focus:outline-none focus:border-[#525252]"
             />
             <span className="text-[10px] text-[#737373] mt-1 block">
-              Keeps a rolling window of recent step checkpoints plus the best validation checkpoint.
+              Keeps a rolling window of recent step checkpoints plus the best validation checkpoint. One checkpoint from each completed phase is also kept, so the pretrain base survives SFT.
             </span>
           </div>
 

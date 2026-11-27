@@ -6,7 +6,10 @@ import csv
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Sequence, Tuple
+
+
+ProgressCallback = Callable[[str, int, int | None, str], None]
 
 from .curation import (
     API_KEY_PATTERNS,
@@ -16,11 +19,13 @@ from .curation import (
     MinHashLSHDeduplicator,
     TextCurator,
     check_text_quality,
+    classify_language_statistical,
     extract_13grams,
     is_valid_cnp,
     mask_pii_in_text,
     strip_html_and_boilerplate,
 )
+from .document_io import iter_training_documents
 
 MAX_AUDIT_DOCS = 20000
 MAX_PREVIEW_DOCS = 40
@@ -102,42 +107,9 @@ def _iter_arrow_rows(path: Path, max_docs: int, suffix: str) -> Iterable[Tuple[i
 
 
 def _iter_documents(path: Path, max_docs: int) -> Iterable[Tuple[int, str]]:
-    suffix = path.suffix.lower()
-    delivered = 0
-    if suffix == ".json":
-        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-        items = data if isinstance(data, list) else data.get("data", []) if isinstance(data, dict) else []
-        for index, item in enumerate(items):
-            if delivered >= max_docs:
-                return
-            if isinstance(item, str):
-                yield index, item
-            elif isinstance(item, dict):
-                yield index, _extract_text(json.dumps(item, ensure_ascii=False), True)
-            delivered += 1
-        return
-    if suffix in (".parquet", ".arrow"):
-        yield from _iter_arrow_rows(path, max_docs, suffix)
-        return
-    if suffix == ".csv":
-        with open(path, "r", encoding="utf-8", errors="replace", newline="") as handle:
-            for index, row in enumerate(csv.DictReader(handle)):
-                if delivered >= max_docs:
-                    return
-                delivered += 1
-                yield index, _extract_text(json.dumps(row, ensure_ascii=False), True)
-        return
-    if suffix not in (".txt", ".jsonl"):
-        raise ValueError(f"Unsupported dataset format for quality audit: {suffix or '<none>'}")
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
-        for index, line in enumerate(handle):
-            if delivered >= max_docs:
-                return
-            raw = line.strip()
-            if not raw:
-                continue
-            delivered += 1
-            yield index, _extract_text(raw, suffix == ".jsonl")
+    """Yield logical documents using the same segmentation as cleaning."""
+    for document in iter_training_documents(path, max_docs):
+        yield document.index, document.text
 
 def _pii_counts(text: str) -> Dict[str, int]:
     counts = {
@@ -156,6 +128,7 @@ def audit_documents(
     tokenizer: Any = None,
     duplicate_threshold: float = 0.80,
     max_docs: int = MAX_AUDIT_DOCS,
+    progress: ProgressCallback | None = None,
 ) -> Dict[str, Any]:
     """Audits documents without modifying the source file."""
     max_docs = max(1, min(int(max_docs), MAX_AUDIT_DOCS))
@@ -173,6 +146,7 @@ def audit_documents(
     hard_rejected_docs = 0
     quality_rejected = 0
     language_rejected = 0
+    language_uncertain = 0
     duplicates = 0
     contaminated = 0
     empty_documents = 0
@@ -188,6 +162,18 @@ def audit_documents(
         if total >= max_docs:
             break
         total += 1
+        if progress is not None and (
+            total == 1 or total % 25 == 0 or total >= max_docs
+        ):
+            try:
+                progress(
+                    "auditing",
+                    total,
+                    max_docs,
+                    f"Audited {total:,} of up to {max_docs:,} documents",
+                )
+            except Exception:
+                pass
         text = strip_html_and_boilerplate(raw or "")
         words = re.findall(r"\S+", text)
         char_total += len(text)
@@ -203,10 +189,17 @@ def audit_documents(
             reasons.append("quality")
             quality_rejected += 1
             hard_rejected = True
-        if text and not curator.filter_language(text):
-            reasons.append("language")
-            language_rejected += 1
-            hard_rejected = True
+        if text:
+            language, confidence = classify_language_statistical(
+                text, ("ron", "eng", "ro", "en")
+            )
+            if language not in {"ron", "eng", "ro", "en"}:
+                if confidence >= 0.80:
+                    reasons.append("language")
+                    language_rejected += 1
+                    hard_rejected = True
+                else:
+                    language_uncertain += 1
         if text and not curator.decontaminate(text):
             reasons.append("contamination")
             contaminated += 1
@@ -259,6 +252,7 @@ def audit_documents(
         "hard_rejected": hard_rejected,
         "quality_rejected": quality_rejected,
         "language_rejected": language_rejected,
+        "language_uncertain": language_uncertain,
         "empty_documents": empty_documents,
         "duplicates": duplicates,
         "contaminated": contaminated,
@@ -271,6 +265,7 @@ def audit_documents(
         "unknown_token_rate_pct": round(unk_rate, 4) if unk_rate is not None else None,
         "duplicate_threshold": duplicate_threshold,
         "eval_documents": len(eval_documents or []),
+        "decontamination_enabled": bool(curator.decontamination_13grams),
         "flagged_preview": flagged,
         "flagged_preview_truncated": len(flagged) >= MAX_PREVIEW_DOCS,
     }
@@ -283,6 +278,7 @@ def audit_dataset_file(
     tokenizer: Any = None,
     max_docs: int = MAX_AUDIT_DOCS,
     duplicate_threshold: float = 0.80,
+    progress: ProgressCallback | None = None,
 ) -> Dict[str, Any]:
     source = Path(path)
     if not source.is_file():
@@ -298,4 +294,5 @@ def audit_dataset_file(
         tokenizer=tokenizer,
         duplicate_threshold=duplicate_threshold,
         max_docs=max_docs,
+        progress=progress,
     )

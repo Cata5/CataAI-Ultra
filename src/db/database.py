@@ -221,8 +221,10 @@ class StudioDatabase:
                 """
                 INSERT INTO metrics
                 (run_id, step, tokens, train_loss, val_loss, generalization_gap,
-                 grad_norm, muon_lr, adamw_lr, vram_used_gb, tok_per_sec, tflops, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 grad_norm, muon_lr, adamw_lr, vram_used_gb, tok_per_sec, tflops, timestamp,
+                 current_epoch, epoch_pct, tokens_per_epoch, tokens_in_epoch, step_time_ms,
+                 duration_mode, target_epochs, sched_phase, sched_factor, eval_interval, next_val_step)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -238,6 +240,17 @@ class StudioDatabase:
                     data.get("tok_per_sec", 0.0),
                     data.get("tflops", 0.0),
                     data.get("timestamp", time.time()),
+                    data.get("current_epoch"),
+                    data.get("epoch_pct"),
+                    data.get("tokens_per_epoch", 0),
+                    data.get("tokens_in_epoch", 0),
+                    data.get("step_time_ms", 0.0),
+                    data.get("duration_mode"),
+                    data.get("target_epochs"),
+                    data.get("sched_phase"),
+                    data.get("sched_factor"),
+                    data.get("eval_interval"),
+                    data.get("next_val_step"),
                 ),
             )
 
@@ -259,6 +272,17 @@ class StudioDatabase:
                 d.get("tok_per_sec", 0.0),
                 d.get("tflops", 0.0),
                 d.get("timestamp", time.time()),
+                d.get("current_epoch"),
+                d.get("epoch_pct"),
+                d.get("tokens_per_epoch", 0),
+                d.get("tokens_in_epoch", 0),
+                d.get("step_time_ms", 0.0),
+                d.get("duration_mode"),
+                d.get("target_epochs"),
+                d.get("sched_phase"),
+                d.get("sched_factor"),
+                d.get("eval_interval"),
+                d.get("next_val_step"),
             )
             for d in batch
         ]
@@ -267,11 +291,26 @@ class StudioDatabase:
                 """
                 INSERT INTO metrics
                 (run_id, step, tokens, train_loss, val_loss, generalization_gap,
-                 grad_norm, muon_lr, adamw_lr, vram_used_gb, tok_per_sec, tflops, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 grad_norm, muon_lr, adamw_lr, vram_used_gb, tok_per_sec, tflops, timestamp,
+                 current_epoch, epoch_pct, tokens_per_epoch, tokens_in_epoch, step_time_ms,
+                 duration_mode, target_epochs, sched_phase, sched_factor, eval_interval, next_val_step)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 rows,
             )
+
+    def delete_metrics_after(self, run_id: str, step: int) -> int:
+        """Remove metrics newer than a checkpoint before branching a resume.
+
+        Continuing from an older checkpoint makes the old future points stale;
+        keeping them would interleave two branches under the same run id.
+        """
+        with self._lock, self._get_connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM metrics WHERE run_id = ? AND step > ?",
+                (run_id, step),
+            )
+            return int(cur.rowcount or 0)
 
     def get_metrics(
         self,

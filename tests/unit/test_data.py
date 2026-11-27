@@ -36,6 +36,7 @@ from src.data.curation import (
     check_text_quality,
     classify_language_statistical,
     is_valid_cnp,
+    mask_pii_and_count,
     mask_pii_in_text,
     strip_html_and_boilerplate,
 )
@@ -50,6 +51,8 @@ from src.data.mixer import (
     DataMixer,
     MixingRatios,
 )
+from src.data.text_repair import normalize_training_text, repair_mojibake
+from src.tokenizer.chat_template import ChatTemplateRenderer
 
 # ============================================================================
 # 1. LANGUAGE IDENTIFICATION (LID) & STATISTICAL CLASSIFIER TESTS
@@ -253,6 +256,17 @@ class TestPIIMasking:
         text = "Contactați-ne la contact@universitate.ro sau la admin.office+help@domain.co.uk pentru detalii."
         masked = mask_pii_in_text(text)
         assert masked == "Contactați-ne la [EMAIL] sau la [EMAIL] pentru detalii."
+
+    def test_mask_and_count_single_pass(self):
+        text = (
+            "Contact: ana@example.ro, telefon 0722123456, "
+            "CNP 1850514410015, cheie sk-abc12345def67890ghij12345klmn67890."
+        )
+        masked, counts = mask_pii_and_count(text)
+        assert masked == mask_pii_in_text(text)
+        assert counts == {"email": 1, "phone": 1, "cnp": 1, "api_key": 1}
+        assert "ana@example.ro" not in masked
+        assert "1850514410015" not in masked
 
     def test_romanian_phone_masking(self):
         text = "Sunați la numărul de mobil 0722123456 sau la fix +40 21 234 5678 pentru asistență tehnică."
@@ -696,3 +710,48 @@ class TestBinarySerializationAndDataset:
         )
         # Sum = 8.0, valid count = 3 -> 8.0 / 3 = 2.6666...
         assert loss_with_labels.item() == pytest.approx(8.0 / 3.0, abs=1e-5)
+
+
+class TestTrainingTextRepair:
+    """Regression tests for corrupted instruction data before tokenization."""
+
+    def test_repairs_utf8_decoded_as_cp1252(self):
+        broken = "ClasificaÈ›i urmÄƒtoarele fotografii. Bun venit la jocul â€žPatru la rÃ¢ndâ€\x9d."
+        assert repair_mojibake(broken) == (
+            "Clasificați următoarele fotografii. Bun venit la jocul „Patru la rând”."
+        )
+
+    def test_strips_nan_but_keeps_words_containing_nan(self):
+        assert normalize_training_text("Salut\nnan\n<|end_turn|>") == "Salut\n\n<|end_turn|>"
+        assert "Banană" in normalize_training_text("Banană")
+
+    def test_clean_text_is_unchanged(self):
+        clean = "Clasificați următoarele fotografii. Bun venit la jocul „Patru la rând”."
+        assert repair_mojibake(clean) == clean
+
+    def test_cleaning_pipeline_removes_nan_and_repairs_mojibake(self):
+        cleaned = strip_html_and_boilerplate(
+            "ClasificaÈ›i urmÄƒtoarele fotografii.\nnan\nRezultatul este corect."
+        )
+        assert "Clasificați următoarele fotografii." in cleaned
+        assert "\nnan\n" not in cleaned
+
+
+class TestRoCanonChatTemplate:
+    """The API and evaluation path must use the markers seen during SFT."""
+
+    def test_generation_prompt_matches_sft_layout(self):
+        renderer = ChatTemplateRenderer("rocanon")
+        assert renderer.render(
+            [{"role": "user", "content": "Cine esti?"}], add_generation_prompt=True
+        ) == "<|user|>\nCine esti?\n<|assistant|>\n"
+
+    def test_assistant_history_ends_with_native_turn_token(self):
+        renderer = ChatTemplateRenderer("rocanon")
+        rendered = renderer.render(
+            [
+                {"role": "user", "content": "Salut"},
+                {"role": "assistant", "content": "Salut!"},
+            ]
+        )
+        assert rendered == "<|user|>\nSalut\n<|assistant|>\nSalut!<|end_turn|>\n"

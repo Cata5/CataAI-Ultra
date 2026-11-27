@@ -23,6 +23,7 @@ MIGRATIONS: Tuple[Tuple[int, str], ...] = (
     (1, "001_baseline.sql"),
     (2, "002_final_loss.sql"),
     (3, "003_workspace_columns.sql"),
+    (4, "004_metrics_progress.sql"),
 )
 
 BACKUP_RETENTION = 10

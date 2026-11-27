@@ -220,6 +220,42 @@ async def handle_list_runs(request: web.Request) -> web.Response:
     return web.json_response(runs)
 
 
+def resolve_resume_run_id(data: Dict[str, Any]) -> Optional[str]:
+    """Return the originating run id when a checkpoint belongs to an existing run.
+
+    Resuming must continue the same run instead of allocating a fresh id: the
+    metrics table is keyed by run id, so a new id hides every historical point
+    from the charts and makes the progress/epoch counters look reset.
+    """
+    if data.get("run_id") or data.get("start_fresh"):
+        return None
+    checkpoint_path = data.get("resume_checkpoint")
+    if not checkpoint_path:
+        return None
+
+    try:
+        info = CHECKPOINT_MGR.inspect_checkpoint(checkpoint_path)
+    except Exception as exc:
+        logger.warning("Could not inspect resume checkpoint %s: %s", checkpoint_path, exc)
+        return None
+
+    source_run_id = str(info.get("run_id") or "").strip()
+    if not source_run_id:
+        return None
+
+    request_ws = str(data.get("workspace_id") or "default")
+    source_ws = str(info.get("workspace_id") or "default")
+    if source_ws != request_ws:
+        return None
+
+    existing = DB.get_run(source_run_id)
+    if not existing:
+        return None
+    if str(existing.get("workspace_id") or "default") != request_ws:
+        return None
+    return source_run_id
+
+
 async def handle_create_run(request: web.Request) -> web.Response:
     """Starts a new training session with payload."""
     try:
@@ -230,9 +266,16 @@ async def handle_create_run(request: web.Request) -> web.Response:
     ws_id = get_request_workspace_id(request)
     if "workspace_id" not in data:
         data["workspace_id"] = ws_id
+
+    # A resume continues the original run so its SQLite metrics (loss, LR,
+    # gradient norm, tokens) remain attached to the charts. If the checkpoint
+    # has no originating run, fall back to a fresh id.
+    resume_run_id = resolve_resume_run_id(data)
+    if resume_run_id:
+        data["run_id"] = resume_run_id
     # The worker would generate a run id internally, but callers need the same
     # id to stop/poll the run. Allocate it here and pass it through.
-    if not data.get("run_id"):
+    elif not data.get("run_id"):
         data["run_id"] = f"run_{uuid.uuid4().hex[:12]}"
 
     success = WORKER_MGR.start_run(data)
@@ -351,7 +394,7 @@ async def handle_run_metrics(request: web.Request) -> web.Response:
     if run_id == "current" or not run_id:
         run_id = WORKER_MGR.current_run_id or ""
     start_step = int(request.query.get("start_step", 0))
-    limit = int(request.query.get("limit", 5000))
+    limit = int(request.query.get("limit", 20000))
     metrics = DB.get_metrics(run_id=run_id, start_step=start_step, max_points=limit)
     normalized = []
     for m in metrics:
@@ -549,16 +592,44 @@ async def handle_upload_dataset(request: web.Request) -> web.Response:
     from ..utils.paths import uploads_dir
     temp_dir = uploads_dir() / "temp"
     temp_dir.mkdir(parents=True, exist_ok=True)
-    temp_path = temp_dir / filename
+    temp_path = temp_dir / f"{uuid.uuid4().hex}{Path(filename).suffix}"
 
     with open(temp_path, "wb") as f:
         while chunk := await field.read_chunk():
             f.write(chunk)
 
+    from ..data.dataset_progress import DatasetProgress
+
+    job_id = (request.query.get("job_id") or "").strip() or None
+    progress = DatasetProgress(job_id, "upload", None, filename) if job_id else None
     try:
         ws_id = get_request_workspace_id(request)
-        res = DATASET_MGR.register_uploaded_file(temp_path, name=filename, workspace_id=ws_id)
+        clean = request.query.get("clean", "1").lower() not in {"0", "false", "no"}
+        loop = asyncio.get_running_loop()
+        res = await loop.run_in_executor(
+            None,
+            lambda: DATASET_MGR.import_cleaned_file(
+                temp_path,
+                name=filename,
+                clean=clean,
+                options={
+                    "quality": request.query.get("quality", "1") != "0",
+                    "language": request.query.get("language", "1") != "0",
+                    "deduplicate": request.query.get("deduplicate", "1") != "0",
+                    "mask_pii": request.query.get("mask_pii", "1") != "0",
+                },
+                workspace_id=ws_id,
+                progress=progress,
+            ),
+        )
+        if progress:
+            progress.update("finalizing", 0, None, "Upload complete", force=True)
+            progress.complete(res)
         return web.json_response(res)
+    except Exception as exc:
+        if progress:
+            progress.fail(str(exc))
+        raise
     finally:
         if temp_path.exists():
             temp_path.unlink()
@@ -591,33 +662,59 @@ async def handle_tokenizer_inspect(request: web.Request) -> web.Response:
 
 async def handle_tokenize_dataset(request: web.Request) -> web.Response:
     ds_id = request.match_info.get("id")
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
     if not ds_id:
-        try:
-            data = await request.json()
-            ds_id = data.get("id") or data.get("dataset_id")
-        except Exception:
-            pass
+        ds_id = data.get("id") or data.get("dataset_id")
 
     if not ds_id:
         return web.json_response({"error": "No dataset_id provided"}, status=400)
 
+    from ..data.dataset_progress import DatasetProgress
+
+    job_id = str(data.get("job_id") or "").strip() or None
+    info = DATASET_MGR.get_dataset_details(str(ds_id))
+    name = info.get("name") if info else str(ds_id)
+    progress = DatasetProgress(job_id, "tokenize", str(ds_id), name) if job_id else None
+
+    def _on_progress(message: str, pct: float) -> None:
+        if progress:
+            progress.update(
+                "tokenizing",
+                current=int(max(0, min(100, pct))),
+                total=100,
+                message=message,
+                force=True,
+            )
+
     try:
         from ..data.custom_loader import CustomDatasetEngine
         engine = CustomDatasetEngine(db=DB)
-        train_x, train_y, val_x, val_y = engine.load_dataset(ds_id, device=torch.device("cpu"))
+        train_x, train_y, val_x, val_y = engine.load_dataset(
+            ds_id,
+            device=torch.device("cpu"),
+            progress_callback=_on_progress if progress else None,
+        )
         train_tok = int(train_x.numel())
         val_tok = int(val_x.numel()) if val_x is not None else 0
         total_tok = train_tok + val_tok
-        return web.json_response({
+        result = {
             "success": True,
             "dataset_id": ds_id,
             "cached": True,
             "token_count": total_tok,
             "train_tokens": train_tok,
             "val_tokens": val_tok,
-        })
+        }
+        if progress:
+            progress.complete(result)
+        return web.json_response(result)
     except Exception as e:
         logger.exception("Failed to tokenize dataset %s: %s", ds_id, e)
+        if progress:
+            progress.fail(f"Tokenization error: {e}")
         return web.json_response({"error": f"Tokenization error: {e}"}, status=500)
 
 
@@ -666,6 +763,27 @@ async def handle_format_sft_dataset(request: web.Request) -> web.Response:
         logger.exception("SFT formatting failed for %s: %s", ds_id, exc)
         return web.json_response({"error": f"SFT formatting failed: {exc}"}, status=500)
 
+
+def _resolve_dataset_source(dataset_id: str, workspace_id: str | None = None):
+    """Resolve a dataset through SQLite, then through the on-disk workspace scan."""
+    info = DATASET_MGR.get_dataset_details(str(dataset_id))
+    source = info.get("file_path") if info else None
+    if source and Path(source).is_file():
+        return info, Path(source)
+
+    # Datasets can be listed by the desktop shell directly from a workspace
+    # without a matching SQLite row (legacy/built-in corpora). Fall back to the
+    # same filesystem resolver used by the worker.
+    try:
+        from ..worker.dataset_ops import find_dataset_file
+
+        found = find_dataset_file(str(dataset_id), workspace_id)
+    except Exception:
+        logger.exception("Could not search filesystem for dataset %s", dataset_id)
+        found = None
+    return info, found
+
+
 async def handle_dataset_quality(request: web.Request) -> web.Response:
     """Read-only preflight: quality, PII, duplicates, contamination, fertility."""
     from ..data.quality_audit import audit_dataset_file
@@ -679,9 +797,9 @@ async def handle_dataset_quality(request: web.Request) -> web.Response:
         ds_id = data.get("dataset_id") or data.get("id")
     if not ds_id:
         return web.json_response({"error": "No dataset_id provided"}, status=400)
-    info = DATASET_MGR.get_dataset_details(str(ds_id))
-    source = info.get("file_path") if info else None
-    if not source or not Path(source).is_file():
+    workspace_id = get_request_workspace_id(request)
+    info, source = _resolve_dataset_source(str(ds_id), workspace_id)
+    if not source:
         return web.json_response({"error": f"Dataset file not found for {ds_id}"}, status=404)
 
     eval_ids = data.get("eval_dataset_ids") or []
@@ -691,9 +809,9 @@ async def handle_dataset_quality(request: web.Request) -> web.Response:
         return web.json_response({"error": "eval_dataset_ids must be a list"}, status=400)
     eval_paths = []
     for eval_id in eval_ids[:10]:
-        eval_info = DATASET_MGR.get_dataset_details(str(eval_id))
-        if eval_info and eval_info.get("file_path"):
-            eval_paths.append(eval_info["file_path"])
+        _, eval_source = _resolve_dataset_source(str(eval_id), workspace_id)
+        if eval_source:
+            eval_paths.append(str(eval_source))
     try:
         max_docs = int(data.get("max_samples", data.get("max_docs", 5000)))
     except (TypeError, ValueError):
@@ -702,6 +820,12 @@ async def handle_dataset_quality(request: web.Request) -> web.Response:
         duplicate_threshold = float(data.get("duplicate_threshold", 0.80))
     except (TypeError, ValueError):
         return web.json_response({"error": "duplicate_threshold must be a number"}, status=400)
+
+    from ..data.dataset_progress import DatasetProgress
+
+    job_id = str(data.get("job_id") or "").strip() or None
+    name = info.get("name", ds_id) if info else getattr(source, "stem", ds_id)
+    progress = DatasetProgress(job_id, "quality", str(ds_id), name) if job_id else None
     try:
         # Auditing is CPU-bound; keep the aiohttp event loop responsive.
         loop = asyncio.get_running_loop()
@@ -713,11 +837,17 @@ async def handle_dataset_quality(request: web.Request) -> web.Response:
                 tokenizer=DATASET_MGR.tokenizer,
                 max_docs=max_docs,
                 duplicate_threshold=duplicate_threshold,
+                progress=progress,
             ),
         )
-        return web.json_response({"success": True, "dataset_id": ds_id, "name": info.get("name", ds_id), **result})
+        completed = {"success": True, "dataset_id": ds_id, "name": name, **result}
+        if progress:
+            progress.complete(completed)
+        return web.json_response(completed)
     except Exception as exc:
         logger.exception("Dataset quality audit failed for %s", ds_id)
+        if progress:
+            progress.fail(str(exc))
         return web.json_response({"error": str(exc)}, status=500)
 
 
@@ -733,17 +863,76 @@ async def handle_curate_dataset(request: web.Request) -> web.Response:
     if not ds_id:
         return web.json_response({"error": "No dataset_id provided"}, status=400)
 
+    workspace_id = get_request_workspace_id(request)
+    _, source = _resolve_dataset_source(str(ds_id), workspace_id)
+    if not source:
+        return web.json_response({"error": f"Dataset file not found for {ds_id}"}, status=404)
+
     try:
         score_res = DATASET_MGR.curate_dataset(
             dataset_id=ds_id,
             jaccard_threshold=float(data.get("jaccard_threshold", 0.80)),
             lid_threshold=float(data.get("lid_threshold", 0.80)),
             save_curated=bool(data.get("save_curated", True)),
-            max_samples=int(data.get("max_samples", 5000)) if data.get("max_samples") else None,
+            max_samples=int(data.get("max_samples")) if data.get("max_samples") else None,
+            source_path=source,
         )
         return web.json_response(score_res)
     except Exception as e:
         logger.exception("Dataset curation failed for %s: %s", ds_id, e)
+        return web.json_response({"error": str(e)}, status=500)
+
+
+async def handle_dataset_operation(request: web.Request) -> web.Response:
+    """Read persisted progress for a cleaning, tokenization, or audit job."""
+    from ..data.dataset_progress import read_job_status
+
+    status = read_job_status(request.match_info.get("job_id"))
+    return web.json_response(status or {"status": "unknown"})
+
+
+async def handle_clean_dataset(request: web.Request) -> web.Response:
+    """Clean an existing dataset into a new registered copy."""
+    ds_id = request.match_info.get("id")
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    if not ds_id:
+        ds_id = data.get("id") or data.get("dataset_id")
+    if not ds_id:
+        return web.json_response({"error": "No dataset_id provided"}, status=400)
+
+    workspace_id = get_request_workspace_id(request)
+    _, source = _resolve_dataset_source(str(ds_id), workspace_id)
+    if not source:
+        return web.json_response({"error": f"Dataset file not found for {ds_id}"}, status=404)
+
+    from ..data.dataset_progress import DatasetProgress
+
+    job_id = str(data.get("job_id") or "").strip() or None
+    info = DATASET_MGR.get_dataset_details(str(ds_id))
+    name = info.get("name") if info else str(source.stem)
+    progress = DatasetProgress(job_id, "clean", str(ds_id), name) if job_id else None
+    try:
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: DATASET_MGR.clean_dataset(
+                str(ds_id),
+                options=data,
+                source_path=source,
+                workspace_id=workspace_id,
+                progress=progress,
+            ),
+        )
+        if progress:
+            progress.complete(result)
+        return web.json_response(result)
+    except Exception as e:
+        logger.exception("Dataset cleaning failed for %s: %s", ds_id, e)
+        if progress:
+            progress.fail(str(e))
         return web.json_response({"error": str(e)}, status=500)
 
 
@@ -1629,7 +1818,9 @@ async def handle_v1_chat_completions(request: web.Request) -> web.Response:
     max_tokens = int(data.get("max_tokens", 256))
 
     from ..tokenizer.chat_template import ChatTemplateRenderer
-    renderer = ChatTemplateRenderer("chatml")
+    # SFT and the evaluation tab use the native RoCanon markers. Rendering
+    # ChatML here tokenizes <|im_start|> as plain characters and derails the model.
+    renderer = ChatTemplateRenderer("rocanon")
     formatted_prompt = renderer.render(messages, add_generation_prompt=True)
 
     request_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -1993,6 +2184,7 @@ def create_app() -> web.Application:
 
     app.router.add_post("/api/datasets/upload", handle_upload_dataset)
     app.router.add_get("/api/datasets", handle_list_datasets)
+    app.router.add_get("/api/datasets/operations/{job_id}", handle_dataset_operation)
     app.router.add_get("/api/datasets/{id}/stats", handle_get_dataset_stats)
     app.router.add_post("/api/datasets/{id}/tokenize", handle_tokenize_dataset)
     app.router.add_post("/api/datasets/tokenize", handle_tokenize_dataset)
@@ -2001,6 +2193,8 @@ def create_app() -> web.Application:
     app.router.add_post("/api/datasets/{id}/quality", handle_dataset_quality)
     app.router.add_post("/api/datasets/{id}/curate", handle_curate_dataset)
     app.router.add_post("/api/datasets/curate", handle_curate_dataset)
+    app.router.add_post("/api/datasets/{id}/clean", handle_clean_dataset)
+    app.router.add_post("/api/datasets/clean", handle_clean_dataset)
     app.router.add_delete("/api/datasets/{id}", handle_delete_dataset)
     app.router.add_post("/api/tokenizer/inspect", handle_tokenizer_inspect)
     app.router.add_post("/api/notifications/test", handle_test_notification)

@@ -36,6 +36,7 @@ from src.telemetry.vram_guard import VRAMAlertLevel, VRAMGuard, VRAMThresholdCon
 from src.tokenizer.tokenizer import RoCanonTokenizer
 from src.worker.protocol import CommandType, EventType, RunState, WorkerCommand, WorkerEvent
 from src.worker.state_machine import InvalidStateTransitionError, RunStateMachine
+from src.worker.training_worker import _checkpoint_retention_limit, _epoch_session_budget
 
 
 class TestDatabasePersistence:
@@ -154,6 +155,98 @@ class TestCheckpointManager:
         deleted = cm.delete_checkpoint(saved_path)
         assert deleted is True
         assert not saved_path.exists()
+
+
+class TestPhaseAndRetentionBudgets:
+    """Regression tests for checkpoint retention and phase-relative epochs."""
+
+    def test_retention_setting_is_clamped(self):
+        assert _checkpoint_retention_limit({"max_checkpoints_kept": "7"}) == 7
+        assert _checkpoint_retention_limit({"max_checkpoints_kept": 0}) == 1
+        assert _checkpoint_retention_limit({"max_checkpoints_kept": "bad"}) == 4
+        assert _checkpoint_retention_limit({}) == 4
+
+    def test_prune_keeps_best_plus_configured_window(self, tmp_path):
+        cm = CheckpointManager(checkpoint_dir=tmp_path)
+        names = [
+            "best_model.pt",
+            "checkpoint_step_10.pt",
+            "checkpoint_step_20.pt",
+            "checkpoint_step_30.pt",
+            "checkpoint_step_40.pt",
+        ]
+        now = time.time()
+        for offset, name in enumerate(names):
+            path = tmp_path / name
+            path.write_bytes(b"checkpoint")
+            os.utime(path, (now + offset, now + offset))
+
+        deleted = cm.prune_checkpoints(keep_last_n=2)
+        remaining = sorted(p.name for p in tmp_path.glob("*.pt"))
+        assert deleted == ["checkpoint_step_10.pt", "checkpoint_step_20.pt"]
+        assert remaining == ["best_model.pt", "checkpoint_step_30.pt", "checkpoint_step_40.pt"]
+
+    def test_prune_keeps_an_anchor_for_each_completed_phase(self, tmp_path):
+        cm = CheckpointManager(checkpoint_dir=tmp_path)
+        now = time.time()
+        files = [
+            ("best_model.pt", None, 0),
+            ("checkpoint_step_10.pt", "pretrain", 10),
+            ("checkpoint_step_100.pt", "pretrain", 20),
+            ("checkpoint_step_7290.pt", "chat_sft", 30),
+            ("checkpoint_step_7500.pt", "chat_sft", 40),
+            ("checkpoint_step_8000.pt", "chat_sft", 50),
+        ]
+        for name, phase, offset in files:
+            path = tmp_path / name
+            path.write_bytes(b"checkpoint")
+            os.utime(path, (now + offset, now + offset))
+            if phase is not None:
+                path.with_suffix(".json").write_text(
+                    json.dumps({"phase": phase, "step": offset}), encoding="utf-8"
+                )
+
+        deleted = cm.prune_checkpoints(keep_last_n=2, current_phase="chat_sft")
+        remaining = sorted(p.name for p in tmp_path.glob("*.pt"))
+        assert deleted == ["checkpoint_step_10.pt", "checkpoint_step_7290.pt"]
+        assert remaining == [
+            "best_model.pt",
+            "checkpoint_step_100.pt",
+            "checkpoint_step_7500.pt",
+            "checkpoint_step_8000.pt",
+        ]
+        # The pretrain anchor keeps its metadata so its phase remains visible.
+        assert (tmp_path / "checkpoint_step_100.json").is_file()
+
+    def test_new_sft_phase_gets_full_epoch_budget(self):
+        global_target, remaining, steps, target_steps, done = _epoch_session_budget(
+            phase_start_tokens=77_000_000,
+            total_tokens=77_000_000,
+            target_epochs=2,
+            train_len=1_229_500,
+            tokens_per_step=5_071,
+            start_step=6_546,
+        )
+        assert global_target == 79_459_000
+        assert remaining == 2_459_000
+        assert done == 0
+        assert steps == 485
+        assert target_steps == 7_031
+
+    def test_same_phase_resume_keeps_epoch_progress(self):
+        global_target, remaining, steps, target_steps, done = _epoch_session_budget(
+            phase_start_tokens=77_000_000,
+            total_tokens=77_614_750,
+            target_epochs=2,
+            train_len=1_229_500,
+            tokens_per_step=5_071,
+            start_step=6_546,
+        )
+        assert global_target == 79_459_000
+        assert remaining == 1_844_250
+        assert done == 614_750
+        assert steps == 364
+        assert target_steps == 6_910
 
 
 class TestHardwareAndVRAMGuard:

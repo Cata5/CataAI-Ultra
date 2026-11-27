@@ -130,6 +130,10 @@ class CheckpointManager:
         filename_prefix: str = "checkpoint",
         is_best: bool = False,
         workspace_id: str = "default",
+        phase_start_tokens: Optional[int] = None,
+        phase_start_step: Optional[int] = None,
+        dataset_tokens: Optional[int] = None,
+        dataset_name: Optional[str] = None,
     ) -> Path:
         """
         Atomically saves training state to disk.
@@ -184,6 +188,10 @@ class CheckpointManager:
             "global_step": step,
             "tokens_seen": tokens_seen,
             "phase": phase,
+            "phase_start_tokens": phase_start_tokens,
+            "phase_start_step": phase_start_step,
+            "dataset_tokens": dataset_tokens,
+            "dataset_name": dataset_name,
             "dataset_revision": dataset_rev,
             "tokenizer_version": tokenizer_ver,
             "val_loss": val_loss,
@@ -233,6 +241,10 @@ class CheckpointManager:
                 "global_step": step,
                 "tokens_seen": tokens_seen,
                 "phase": phase,
+                "phase_start_tokens": phase_start_tokens,
+                "phase_start_step": phase_start_step,
+                "dataset_tokens": dataset_tokens,
+                "dataset_name": dataset_name,
                 "dataset_revision": dataset_rev,
                 "tokenizer_version": tokenizer_ver,
                 "val_loss": val_loss,
@@ -274,12 +286,12 @@ class CheckpointManager:
                     },
                 )
 
-            # Automatically enforce rolling checkpoint retention (keep max N step checkpoints)
-            if not is_best:
-                try:
-                    self.prune_checkpoints(keep_last_n=self.max_checkpoints)
-                except Exception as prune_err:
-                    logger.warning("Error during checkpoint pruning: %s", prune_err)
+            # Enforce rolling retention on every save, including best-model
+            # updates, so lowering the Settings limit takes effect immediately.
+            try:
+                self.prune_checkpoints(keep_last_n=self.max_checkpoints, current_phase=phase)
+            except Exception as prune_err:
+                logger.warning("Error during checkpoint pruning: %s", prune_err)
 
             return target_path
         finally:
@@ -487,6 +499,10 @@ class CheckpointManager:
             "step": raw_payload.get("step", raw_payload.get("global_step", 0)),
             "tokens_seen": raw_payload.get("tokens_seen", 0),
             "phase": raw_payload.get("phase", "pretrain"),
+            "phase_start_tokens": raw_payload.get("phase_start_tokens"),
+            "phase_start_step": raw_payload.get("phase_start_step"),
+            "dataset_tokens": raw_payload.get("dataset_tokens"),
+            "dataset_name": raw_payload.get("dataset_name"),
             "val_loss": raw_payload.get("val_loss"),
             "train_loss": raw_payload.get("train_loss"),
             "exact_match": exact_match,
@@ -910,17 +926,35 @@ class CheckpointManager:
                 pass
         return removed
 
-    def prune_checkpoints(self, keep_last_n: int = 4) -> List[str]:
+    def _checkpoint_phase(self, path: Path) -> Optional[str]:
+        """Read the phase from the companion JSON written beside a checkpoint."""
+        meta_path = path.with_suffix(".json")
+        if not meta_path.is_file():
+            return None
+        try:
+            with open(meta_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            phase = payload.get("phase")
+            return str(phase) if phase else None
+        except Exception:
+            return None
+
+    def prune_checkpoints(
+        self, keep_last_n: int = 4, current_phase: Optional[str] = None
+    ) -> List[str]:
         """
-        Retains at most keep_last_n step-based checkpoint files (.pt).
-        Preserves 'best_model.pt' unconditionally.
-        Deletes older step checkpoints from disk and database.
-        Returns list of deleted filenames.
+        Retains a rolling checkpoint window without erasing completed phases.
+
+        The newest ``keep_last_n`` files belong to ``current_phase``.  In
+        addition, the latest checkpoint of every earlier phase is kept as an
+        immutable phase anchor.  Without that anchor, starting SFT would prune
+        the last pretrain checkpoint and make a clean retrain impossible.
+        ``best_model.pt`` is always preserved.
         """
         if keep_last_n <= 0:
             return []
 
-        step_files: List[Tuple[int, float, Path]] = []
+        step_files: List[Tuple[int, float, Path, Optional[str]]] = []
         for p in self.checkpoint_dir.glob("*.pt"):
             if p.name.startswith(".tmp") or p.name == "best_model.pt":
                 continue
@@ -936,21 +970,35 @@ class CheckpointManager:
                 except Exception:
                     pass
 
-            step_files.append((step_num, p.stat().st_mtime, p))
+            step_files.append((step_num, p.stat().st_mtime, p, self._checkpoint_phase(p)))
 
         # Sort ascending by file mtime (oldest first, so newly saved runs/steps are never purged over old runs)
         step_files.sort(key=lambda x: x[1])
 
+        if current_phase is None:
+            to_delete = step_files[:-keep_last_n]
+        else:
+            current = [item for item in step_files if item[3] == current_phase]
+            anchors: dict[str, Tuple[int, float, Path, Optional[str]]] = {}
+            for item in step_files:
+                if item[3] == current_phase:
+                    continue
+                key = item[3] or "unknown"
+                previous = anchors.get(key)
+                # Keep the newest checkpoint of each completed phase.
+                if previous is None or (item[0], item[1]) > (previous[0], previous[1]):
+                    anchors[key] = item
+            keep = set(current[-keep_last_n:]) | set(anchors.values())
+            to_delete = [item for item in step_files if item not in keep]
+
         deleted: List[str] = []
-        num_to_delete = len(step_files) - keep_last_n
-        if num_to_delete > 0:
-            for step_num, mtime, file_path in step_files[:num_to_delete]:
-                try:
-                    logger.info("Pruning old checkpoint: %s (step %d)", file_path.name, step_num)
-                    if self.delete_checkpoint(file_path.name):
-                        deleted.append(file_path.name)
-                except Exception as err:
-                    logger.warning("Failed to prune checkpoint %s: %s", file_path.name, err)
+        for step_num, mtime, file_path, _phase in to_delete:
+            try:
+                logger.info("Pruning old checkpoint: %s (step %d)", file_path.name, step_num)
+                if self.delete_checkpoint(file_path.name):
+                    deleted.append(file_path.name)
+            except Exception as err:
+                logger.warning("Failed to prune checkpoint %s: %s", file_path.name, err)
 
         return deleted
 

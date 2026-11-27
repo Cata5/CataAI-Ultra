@@ -19,8 +19,12 @@ import torch
 
 from ..tokenizer.tokenizer import RoCanonTokenizer
 from ..utils.paths import cache_dir as app_cache_dir, data_dir, workspaces_dir
+from .text_repair import normalize_training_text
 
 logger = logging.getLogger(__name__)
+
+# Bump when the SFT formatting/label layout changes so stale caches are ignored.
+_SFT_CACHE_VERSION = "v2"
 
 
 class CustomDatasetEngine:
@@ -299,6 +303,8 @@ class CustomDatasetEngine:
             with open(file_path, "r", encoding="latin-1") as f:
                 text = f.read()
 
+        text = normalize_training_text(text)
+
         if max_samples and max_samples > 0:
             text = text[: max_samples * 500]
 
@@ -396,20 +402,40 @@ class CustomDatasetEngine:
         Assistant tokens -> label: token_id
         """
         sub_tag = f"_sub{max_samples}" if max_samples else "_full"
-        cache_bin_in = self.cache_dir / f"{file_path.stem}{sub_tag}_sft_in.bin"
-        cache_bin_lbl = self.cache_dir / f"{file_path.stem}{sub_tag}_sft_lbl.bin"
-        cache_file = self.cache_dir / f"{file_path.stem}{sub_tag}_sft.pt"
+        cache_tag = f"_sft_{_SFT_CACHE_VERSION}"
+        cache_bin_in = self.cache_dir / f"{file_path.stem}{sub_tag}{cache_tag}_in.bin"
+        cache_bin_lbl = self.cache_dir / f"{file_path.stem}{sub_tag}{cache_tag}_lbl.bin"
+        cache_file = self.cache_dir / f"{file_path.stem}{sub_tag}{cache_tag}.pt"
+
+        # A cache built from an older copy of the dataset can contain text that
+        # has since been repaired. Ignore it instead of silently training on it.
+        try:
+            source_mtime_ns = file_path.stat().st_mtime_ns
+        except OSError:
+            source_mtime_ns = 0
+
+        def _fresh(path: Path) -> bool:
+            try:
+                return path.stat().st_mtime_ns >= source_mtime_ns
+            except OSError:
+                return False
 
         # 1. Zero-copy binary memmap check across candidate shards
         candidate_sft_in = [
             cache_bin_in,
-            self.cache_dir / f"{file_path.stem}_full_sft_in.bin",
-            self.cache_dir / f"{file_path.stem}_sft_in.bin",
-            file_path.parent / f"{file_path.stem}_full_sft_in.bin",
+            self.cache_dir / f"{file_path.stem}_full{cache_tag}_in.bin",
+            self.cache_dir / f"{file_path.stem}{cache_tag}_in.bin",
+            file_path.parent / f"{file_path.stem}_full{cache_tag}_in.bin",
         ]
         for c_in in candidate_sft_in:
-            c_lbl = c_in.parent / c_in.name.replace("_sft_in.bin", "_sft_lbl.bin")
-            if c_in.exists() and c_lbl.exists() and c_in.stat().st_size > 0:
+            c_lbl = c_in.with_name(c_in.name.replace("_in.bin", "_lbl.bin"))
+            if (
+                c_in.exists()
+                and c_lbl.exists()
+                and c_in.stat().st_size > 0
+                and _fresh(c_in)
+                and _fresh(c_lbl)
+            ):
                 print(f"[DatasetEngine] Zero-copy loading binary SFT memmap shards: {c_in.name}")
                 if progress_callback:
                     progress_callback(f"Zero-copy loading SFT memmap shards...", 50.0)
@@ -420,12 +446,12 @@ class CustomDatasetEngine:
         # 2. PyTorch .pt cache fallback (with mmap)
         candidate_sft_pt = [
             cache_file,
-            self.cache_dir / f"{file_path.stem}_full_sft.pt",
-            self.cache_dir / f"{file_path.stem}_sft.pt",
-            file_path.parent / f"{file_path.stem}_full_sft.pt",
+            self.cache_dir / f"{file_path.stem}_full{cache_tag}.pt",
+            self.cache_dir / f"{file_path.stem}{cache_tag}.pt",
+            file_path.parent / f"{file_path.stem}_full{cache_tag}.pt",
         ]
         for c_pt in candidate_sft_pt:
-            if c_pt.exists() and c_pt.stat().st_size > 0:
+            if c_pt.exists() and c_pt.stat().st_size > 0 and _fresh(c_pt):
                 print(f"[DatasetEngine] Loading pre-tokenized chat cache: {c_pt.name}")
                 if progress_callback:
                     progress_callback(f"Loading cached chat SFT array: {c_pt.name}...", 50.0)
@@ -444,6 +470,10 @@ class CustomDatasetEngine:
         except UnicodeDecodeError:
             with open(file_path, "r", encoding="latin-1") as f:
                 content = f.read()
+
+        # Repair UTF-8/cp1252 mojibake and drop standalone NaN lines before
+        # parsing, so repaired files do not need to be re-exported by hand.
+        content = normalize_training_text(content)
 
         pattern = re.compile(
             r"(?:<\|im_start\|>|<\|)user\s*\n?(.*?)(?:<\|im_end\|>|<\|end_turn\|>)\s*"
@@ -512,6 +542,14 @@ class CustomDatasetEngine:
                             dialog_pairs.append((prompt, resp))
                 except Exception:
                     pass
+
+        # Apply the same repair to every accepted pair, including pairs that
+        # came from JSONL/Parquet rather than the raw ChatML regex.
+        dialog_pairs = [
+            (normalize_training_text(u).strip(), normalize_training_text(a).strip())
+            for u, a in dialog_pairs
+        ]
+        dialog_pairs = [(u, a) for u, a in dialog_pairs if u and a]
 
         print(f"[DatasetEngine] Parsed {len(dialog_pairs):,} dialog turns in {file_path.name}")
 

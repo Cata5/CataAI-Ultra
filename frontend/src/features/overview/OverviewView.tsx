@@ -72,12 +72,14 @@ export const OverviewView: React.FC = () => {
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Sync historical metrics from database if buffer is currently empty
+  // Reload the complete SQLite history for the active run and whenever its
+  // state changes. Resuming keeps the same run id, so LR / gradient-norm
+  // charts must not start at the checkpoint with an empty buffer.
   useEffect(() => {
-    if (status?.run_id && metricsHistory.length === 0) {
+    if (status?.run_id) {
       loadRunHistory(status.run_id);
     }
-  }, [status?.run_id, metricsHistory.length, loadRunHistory]);
+  }, [status?.run_id, currentState, loadRunHistory]);
 
   useEffect(() => {
     return () => {

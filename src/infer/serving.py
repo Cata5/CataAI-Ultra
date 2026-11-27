@@ -178,7 +178,7 @@ def export_ollama_modelfile(
     model_path: str,
     model_name: str,
     output_dir: str = "models",
-    template: str = "chatml",
+    template: str = "rocanon",
 ) -> str:
     """Writes a Modelfile only for a real GGUF; `.pt` is not an Ollama blob."""
     if Path(model_path).suffix.lower() != ".gguf":
@@ -190,19 +190,33 @@ def export_ollama_modelfile(
     p.mkdir(parents=True, exist_ok=True)
     modelfile_path = p / "Modelfile"
 
+    # The Modelfile template uses Go-template braces, so keep it in a plain
+    # string. An f-string would turn `{{` into `{` and produce invalid syntax.
+    if template == "rocanon":
+        template_block = (
+            'TEMPLATE """'
+            '{{ if .System }}<|system|>\n{{ .System }}<|end_turn|>\n{{ end }}'
+            '{{ if .Prompt }}<|user|>\n{{ .Prompt }}\n{{ end }}'
+            '<|assistant|>\n{{ .Response }}<|end_turn|>'
+            '"""\n'
+        )
+    else:
+        template_block = (
+            'TEMPLATE """'
+            '{{ if .System }}<|im_start|>system\n{{ .System }}<|im_end|>\n{{ end }}'
+            '{{ if .Prompt }}<|im_start|>user\n{{ .Prompt }}<|im_end|>\n{{ end }}'
+            '<|im_start|>assistant\n{{ .Response }}<|im_end|>'
+            '"""\n'
+        )
+
     content = (
-        f"# Ollama Modelfile exported from CataAI Ultra (LLM Maker)\n"
+        "# Ollama Modelfile exported from CataAI Ultra (LLM Maker)\n"
         f"FROM {model_path}\n\n"
-        f"PARAMETER temperature 0.7\n"
-        f"PARAMETER top_p 0.9\n"
-        f"PARAMETER stop <|im_end|>\n"
-        f"PARAMETER stop <|end_turn|>\n\n"
-        f"TEMPLATE \"\"\"{{ if .System }}<|im_start|>system\n"
-        f"{{ .System }}<|im_end|>\n"
-        f"{{ end }}{{ if .Prompt }}<|im_start|>user\n"
-        f"{{ .Prompt }}<|im_end|>\n"
-        f"{{ end }}<|im_start|>assistant\n"
-        f"{{ .Response }}<|im_end|>\"\"\"\n"
+        "PARAMETER temperature 0.7\n"
+        "PARAMETER top_p 0.9\n"
+        "PARAMETER stop <|im_end|>\n"
+        "PARAMETER stop <|end_turn|>\n\n"
+        + template_block
     )
     with open(modelfile_path, "w", encoding="utf-8") as f:
         f.write(content)

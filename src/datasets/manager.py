@@ -13,7 +13,7 @@ import os
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..db.database import StudioDatabase
 from ..tokenizer.tokenizer import RoCanonTokenizer
@@ -219,6 +219,88 @@ class DatasetManager:
                         logger.warning("Could not unlink dataset file %s: %s", p, e)
         return True
 
+    def _resolve_dataset_path(self, dataset_id: str, source_path: Path | str | None = None) -> Path:
+        if source_path is not None:
+            path = Path(source_path)
+        else:
+            ds_info = self.get_dataset_details(dataset_id) or {}
+            source = ds_info.get("file_path")
+            if not source:
+                raise FileNotFoundError(f"Dataset '{dataset_id}' not found or has no valid file path.")
+            path = Path(source)
+        if not path.is_file():
+            raise FileNotFoundError(f"Dataset file does not exist on disk: {path}")
+        return path
+
+    def _invalidate_token_cache(self, stem: str) -> None:
+        cache = cache_dir()
+        if not cache.is_dir():
+            return
+        patterns = (
+            f"{stem}_full_tokens.bin",
+            f"{stem}_full_tokens.pt",
+            f"{stem}.tokenized",
+            f"{stem}_sft*.pt",
+            f"{stem}_train*.bin",
+            f"{stem}_val*.bin",
+        )
+        for pattern in patterns:
+            for cached in cache.glob(pattern):
+                try:
+                    cached.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.debug("Could not remove stale token cache %s: %s", cached, exc)
+
+    def clean_dataset(
+        self,
+        dataset_id: str,
+        options: Dict[str, Any] | None = None,
+        source_path: Path | str | None = None,
+        output_suffix: str = "_clean",
+        save_cleaned: bool = True,
+        name: str | None = None,
+        workspace_id: str = "default",
+        progress: Callable[[str, int, int | None, str], None] | None = None,
+    ) -> Dict[str, Any]:
+        """Clean a dataset into a sibling file using the shared format-aware pipeline."""
+        from ..data.dataset_cleaning import CleanOptions, clean_dataset_file
+
+        opts = options or {}
+        path = self._resolve_dataset_path(dataset_id, source_path)
+        output_path = self.upload_dir / f"{path.stem}{output_suffix}{path.suffix}"
+        clean_options = CleanOptions(
+            quality=bool(opts.get("quality", True)),
+            language=bool(opts.get("language", True)),
+            deduplicate=bool(opts.get("deduplicate", True)),
+            mask_pii=bool(opts.get("mask_pii", True)),
+            lid_threshold=float(opts.get("lid_threshold", 0.80)),
+            jaccard_threshold=float(opts.get("jaccard_threshold", 0.80)),
+            target_languages=tuple(opts.get("target_languages", ("ron", "eng", "ro", "en"))),
+            max_docs=opts.get("max_samples") or None,
+        )
+        result = clean_dataset_file(path, output_path, clean_options, progress=progress)
+        self._invalidate_token_cache(path.stem)
+        self._invalidate_token_cache(output_path.stem)
+
+        cleaned_dataset_id = None
+        if result.get("records_out", 0) > 0 and save_cleaned:
+            registered = self.register_uploaded_file(
+                output_path,
+                name=name or f"{dataset_id} (Clean)",
+                workspace_id=workspace_id,
+            )
+            if registered.get("success"):
+                cleaned_dataset_id = registered.get("dataset_id")
+        cleaned_path = str(output_path) if result.get("records_out", 0) > 0 else None
+        result.update({
+            "dataset_id": dataset_id,
+            "cleaned_dataset_id": cleaned_dataset_id,
+            "cleaned_file_path": cleaned_path,
+            "curated_dataset_id": cleaned_dataset_id,
+            "curated_file_path": cleaned_path,
+        })
+        return result
+
     def curate_dataset(
         self,
         dataset_id: str,
@@ -226,106 +308,112 @@ class DatasetManager:
         lid_threshold: float = 0.80,
         target_languages: tuple[str, ...] = ("ron", "eng", "ro", "en"),
         save_curated: bool = True,
-        max_samples: Optional[int] = 5000,
+        max_samples: Optional[int] = None,
+        source_path: Path | str | None = None,
     ) -> Dict[str, Any]:
-        """Runs quality evaluation heuristics, LID, and MinHash LSH deduplication on a dataset."""
-        from ..data.curation import TextCurator
-
-        ds_info = self.get_dataset_details(dataset_id)
-        if not ds_info or not ds_info.get("file_path"):
-            raise FileNotFoundError(f"Dataset '{dataset_id}' not found or has no valid file path.")
-
-        path = Path(ds_info["file_path"])
-        if not path.exists():
-            raise FileNotFoundError(f"Dataset file does not exist on disk: {path}")
-
-        curator = TextCurator(
-            lid_threshold=lid_threshold,
-            target_languages=target_languages,
-            jaccard_threshold=jaccard_threshold,
-            num_perm=128,
+        """Backward-compatible wrapper around the shared cleaning pipeline."""
+        result = self.clean_dataset(
+            dataset_id,
+            options={
+                "quality": True,
+                "language": True,
+                "deduplicate": True,
+                "mask_pii": True,
+                "jaccard_threshold": jaccard_threshold,
+                "lid_threshold": lid_threshold,
+                "target_languages": target_languages,
+                "max_samples": max_samples,
+            },
+            source_path=source_path,
+            output_suffix="_curated",
+            save_cleaned=save_curated,
+            name=f"{dataset_id} (Curated)",
         )
-
-        total_read = 0
-        quality_rejected = 0
-        lang_rejected = 0
-        duplicates_purged = 0
-        accepted_samples: List[str] = []
-
-        is_jsonl = path.suffix.lower() == ".jsonl"
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                raw_sample = line.strip()
-                if not raw_sample:
-                    continue
-                total_read += 1
-
-                # Extract text field if jsonl
-                sample_text = raw_sample
-                if is_jsonl:
-                    try:
-                        obj = json.loads(raw_sample)
-                        sample_text = obj.get("text") or obj.get("output") or obj.get("instruction") or raw_sample
-                    except Exception:
-                        pass
-
-                # 1. Quality heuristic check
-                if not curator.filter_quality(sample_text):
-                    quality_rejected += 1
-                    continue
-
-                # 2. Language identification
-                if not curator.filter_language(sample_text):
-                    lang_rejected += 1
-                    continue
-
-                accepted_samples.append(raw_sample)
-                if max_samples and total_read >= max_samples:
-                    break
-
-        # 3. MinHash LSH deduplication
-        deduped = list(curator.deduplicate_minhash(accepted_samples))
-        duplicates_purged = len(accepted_samples) - len(deduped)
-
-        curated_file_path = None
-        curated_dataset_id = None
-        if save_curated and deduped:
-            out_stem = f"{path.stem}_curated"
-            curated_file_path = self.upload_dir / f"{out_stem}{path.suffix}"
-            with open(curated_file_path, "w", encoding="utf-8") as out_f:
-                for s in deduped:
-                    out_f.write(s + "\n")
-
-            # Register curated dataset in DB
-            curated_dataset_id = f"{dataset_id}_curated"
-            try:
-                self.register_uploaded_file(curated_file_path, name=f"{ds_info.get('name', dataset_id)} (Curated)")
-            except Exception as reg_e:
-                logger.debug("Curated dataset auto-registration: %s", reg_e)
-
-        pass_rate = round((len(deduped) / max(1, total_read)) * 100, 2)
-        dup_rate = round((duplicates_purged / max(1, len(accepted_samples))) * 100, 2)
-
-        return {
-            "dataset_id": dataset_id,
-            "total_samples_analyzed": total_read,
-            "total_samples": total_read,
-            "accepted_samples": len(deduped),
-            "curated_samples": len(deduped),
-            "quality_rejected": quality_rejected,
-            "language_rejected": lang_rejected,
-            "low_lid_dropped": lang_rejected,
-            "duplicates_purged": duplicates_purged,
-            "exact_duplicates_dropped": duplicates_purged,
-            "minhash_duplicates_dropped": duplicates_purged,
-            "pii_masked_count": 0,
-            "quality_pass_rate_pct": pass_rate,
-            "retention_rate": pass_rate,
-            "duplicate_rate_pct": dup_rate,
-            "jaccard_threshold": jaccard_threshold,
+        result.update({
+            "total_samples_analyzed": result.get("records_in", 0),
+            "total_samples": result.get("records_in", 0),
+            "accepted_samples": result.get("records_out", 0),
+            "curated_samples": result.get("records_out", 0),
+            "duplicates_purged": result.get("duplicates_removed", 0),
+            "exact_duplicates_dropped": result.get("exact_duplicates", 0),
+            "minhash_duplicates_dropped": result.get("near_duplicates", 0),
+            "pii_masked_count": result.get("pii_documents", 0),
+            "quality_pass_rate_pct": result.get("retention_pct", 0.0),
+            "retention_rate": result.get("retention_pct", 0.0),
+            "duplicate_rate_pct": round(
+                result.get("duplicates_removed", 0) / max(1, result.get("records_in", 0)) * 100, 2
+            ),
             "lid_threshold": lid_threshold,
-            "curated_file_path": str(curated_file_path) if curated_file_path else None,
-            "curated_dataset_id": curated_dataset_id,
-            "preview_samples": deduped[:5],
-        }
+            "jaccard_threshold": jaccard_threshold,
+            "preview_samples": [],
+        })
+        return result
+
+    def import_cleaned_file(
+        self,
+        file_path: Path | str,
+        name: str | None = None,
+        clean: bool = True,
+        options: Dict[str, Any] | None = None,
+        workspace_id: str = "default",
+        progress: Callable[[str, int, int | None, str], None] | None = None,
+    ) -> Dict[str, Any]:
+        """Import a file, optionally cleaning it and hiding the raw source under raw/."""
+        source = Path(file_path)
+        if not source.is_file():
+            return {"success": False, "error": f"File not found: {source}"}
+        safe_name = Path(name or source.name).name
+        if not safe_name or safe_name in {".", ".."}:
+            return {"success": False, "error": "Invalid dataset filename"}
+        raw_dir = self.upload_dir / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = raw_dir / safe_name
+        if raw_path.exists():
+            raw_path = raw_dir / f"{Path(safe_name).stem}_{time.time_ns()}{Path(safe_name).suffix}"
+        shutil.copy2(source, raw_path)
+
+        if not clean:
+            target = self.upload_dir / safe_name
+            if source.resolve() != target.resolve():
+                shutil.copy2(raw_path, target)
+            result = self.register_uploaded_file(target, name=safe_name, workspace_id=workspace_id)
+            result["cleaning"] = None
+            return result
+
+        try:
+            from ..data.dataset_cleaning import CleanOptions, clean_dataset_file
+
+            opts = options or {}
+            output = self.upload_dir / safe_name
+            result = clean_dataset_file(
+                raw_path,
+                output,
+                CleanOptions(
+                    quality=bool(opts.get("quality", True)),
+                    language=bool(opts.get("language", True)),
+                    deduplicate=bool(opts.get("deduplicate", True)),
+                    mask_pii=bool(opts.get("mask_pii", True)),
+                    lid_threshold=float(opts.get("lid_threshold", 0.80)),
+                    jaccard_threshold=float(opts.get("jaccard_threshold", 0.80)),
+                    target_languages=tuple(opts.get("target_languages", ("ron", "eng", "ro", "en"))),
+                    max_docs=opts.get("max_samples") or None,
+                ),
+                progress=progress,
+            )
+            self._invalidate_token_cache(output.stem)
+            if result.get("records_out", 0) <= 0:
+                raise ValueError("Cleaning removed every record")
+            registered = self.register_uploaded_file(output, name=safe_name, workspace_id=workspace_id)
+            if not registered.get("success"):
+                raise ValueError(registered.get("error") or "Cleaned dataset validation failed")
+            registered["cleaning"] = result
+            return registered
+        except Exception as exc:
+            logger.warning("Dataset cleaning failed for %s; importing raw file: %s", safe_name, exc)
+            target = self.upload_dir / safe_name
+            if raw_path.resolve() != target.resolve():
+                shutil.copy2(raw_path, target)
+            registered = self.register_uploaded_file(target, name=safe_name, workspace_id=workspace_id)
+            registered["cleaning"] = {"success": False, "error": str(exc)}
+            return registered
 

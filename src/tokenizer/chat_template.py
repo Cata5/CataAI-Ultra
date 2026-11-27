@@ -61,6 +61,23 @@ BUILTIN_TEMPLATES: Dict[str, str] = {
         "{{ '### Response:\n' }}"
         "{% endif %}"
     ),
+    # Native RoCanon/CataAI format used by the SFT loader. The tokenizer has
+    # <|user|>, <|assistant|>, <|system|> and <|end_turn|> as special tokens;
+    # ChatML markers are not in the vocabulary.
+    "rocanon": (
+        "{% for message in messages %}"
+        "{% if message['role'] == 'system' %}"
+        "{{ '<|system|>\n' + message['content'] + '<|end_turn|>\n' }}"
+        "{% elif message['role'] == 'user' %}"
+        "{{ '<|user|>\n' + message['content'] + '\n' }}"
+        "{% elif message['role'] == 'assistant' %}"
+        "{{ '<|assistant|>\n' + message['content'] + '<|end_turn|>\n' }}"
+        "{% endif %}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}"
+        "{{ '<|assistant|>\n' }}"
+        "{% endif %}"
+    ),
 }
 
 
@@ -76,6 +93,7 @@ class ChatTemplateRenderer:
             logger.warning("jinja2 package not installed; falling back to rule-based template formatting.")
 
         self.template_name = template if template in BUILTIN_TEMPLATES else "custom"
+        self.end_token = "<|end_turn|>" if template == "rocanon" else "<|im_end|>"
         self.raw_template = BUILTIN_TEMPLATES.get(template, template)
         self._compiled_template = None
         if self.jinja2:
@@ -101,6 +119,21 @@ class ChatTemplateRenderer:
                 )
             except Exception as e:
                 logger.warning("Error rendering jinja2 template: %s. Using fallback.", e)
+
+        if self.template_name == "rocanon":
+            out = []
+            for m in messages:
+                role = m.get("role", "user")
+                content = m.get("content", "")
+                if role == "system":
+                    out.append(f"<|system|>\n{content}<|end_turn|>\n")
+                elif role == "assistant":
+                    out.append(f"<|assistant|>\n{content}<|end_turn|>\n")
+                else:
+                    out.append(f"<|user|>\n{content}\n")
+            if add_generation_prompt:
+                out.append("<|assistant|>\n")
+            return "".join(out)
 
         # Robust rule-based fallback (ChatML format)
         out = []
@@ -140,6 +173,6 @@ class ChatTemplateRenderer:
             "prompt": formatted_prompt,
             "chosen": chosen.strip(),
             "rejected": rejected.strip(),
-            "full_chosen": formatted_prompt + chosen.strip() + "<|im_end|>",
-            "full_rejected": formatted_prompt + rejected.strip() + "<|im_end|>",
+            "full_chosen": formatted_prompt + chosen.strip() + self.end_token,
+            "full_rejected": formatted_prompt + rejected.strip() + self.end_token,
         }

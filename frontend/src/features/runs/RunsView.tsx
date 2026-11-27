@@ -36,6 +36,9 @@ export interface RunsViewProps {
   initialTab?: RunManagementTab | string;
 }
 
+const checkpointKey = (checkpoint: CheckpointItem): string =>
+  checkpoint.id || checkpoint.filename;
+
 export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }) => {
   const [activeTab, setActiveTab] = useState<RunManagementTab>(() => {
     if (initialTab === "checkpoints" || initialTab === "analytics" || initialTab === "logs" || initialTab === "all") {
@@ -51,7 +54,9 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Delete checkpoint state
-  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [deleteTargets, setDeleteTargets] = useState<string[]>([]);
+  const [selectedCheckpointIds, setSelectedCheckpointIds] = useState<Set<string>>(new Set());
+  const [isDeletingCheckpoints, setIsDeletingCheckpoints] = useState(false);
 
   // Multi-run comparison
   const [showRunCompare, setShowRunCompare] = useState(false);
@@ -72,6 +77,11 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
       const [r, c] = await Promise.all([api.listRuns(100), api.listCheckpoints()]);
       setRuns(r);
       setCheckpoints(c);
+      setSelectedCheckpointIds((prev) => {
+        const available = new Set(c.map(checkpointKey));
+        const next = new Set(Array.from(prev).filter((id) => available.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
       if (r.length > 0 && !selectedRunId) {
         setSelectedRunId(r[0].id);
       }
@@ -97,14 +107,50 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
       .catch(console.error);
   }, [selectedRunId]);
 
+  const toggleCheckpointSelection = (id: string) => {
+    setSelectedCheckpointIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllCheckpoints = () => {
+    setSelectedCheckpointIds((prev) =>
+      prev.size === checkpoints.length
+        ? new Set()
+        : new Set(checkpoints.map(checkpointKey))
+    );
+  };
+
   const handleDeleteCheckpoint = async () => {
-    if (!deleteTargetId) return;
+    if (deleteTargets.length === 0) return;
+    setIsDeletingCheckpoints(true);
     try {
-      await api.deleteCheckpoint(deleteTargetId);
-      setCheckpoints((prev) => prev.filter((c) => c.id !== deleteTargetId && c.filename !== deleteTargetId));
-      setDeleteTargetId(null);
+      const { deleted, failed } = await api.deleteCheckpoints(deleteTargets);
+      const deletedSet = new Set(deleted);
+      if (deleted.length > 0) {
+        setCheckpoints((prev) =>
+          prev.filter((checkpoint) => !deletedSet.has(checkpointKey(checkpoint)))
+        );
+        setSelectedCheckpointIds((prev) => {
+          const next = new Set(prev);
+          deleted.forEach((id) => next.delete(id));
+          return next;
+        });
+      }
+      setDeleteTargets([]);
+      if (failed.length > 0) {
+        alert(
+          `Deleted ${deleted.length} checkpoint(s). ${failed.length} could not be deleted:\n` +
+            failed.map((failure) => `${failure.id}: ${failure.error}`).join("\n")
+        );
+      }
     } catch (e: any) {
       alert(`Delete error: ${e.message}`);
+    } finally {
+      setIsDeletingCheckpoints(false);
     }
   };
 
@@ -272,6 +318,22 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
 
   const checkpointColumns: Column<CheckpointItem>[] = [
     {
+      header: "SELECT",
+      className: "w-10",
+      cell: (item) => {
+        const id = checkpointKey(item);
+        return (
+          <input
+            type="checkbox"
+            checked={selectedCheckpointIds.has(id)}
+            onChange={() => toggleCheckpointSelection(id)}
+            aria-label={`Select checkpoint ${item.filename}`}
+            className="h-3.5 w-3.5 cursor-pointer accent-[#D4D4D4]"
+          />
+        );
+      },
+    },
+    {
       header: "CHECKPOINT FILE",
       accessorKey: "filename",
       sortable: true,
@@ -338,7 +400,7 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
             <span>Eval</span>
           </a>
           <a
-            href={`/training?resume_checkpoint=${encodeURIComponent(item.id || item.filename)}`}
+            href={`/training?resume_checkpoint=${encodeURIComponent(item.path || item.filename)}&auto_resume=1`}
             className="px-2 py-1 rounded bg-[#262626] border border-[#333333] hover:border-[#525252] text-[#A3A3A3] hover:text-[#F2F2F2] transition-colors flex items-center gap-1 text-[10px]"
             title="Resume Training from this checkpoint"
           >
@@ -346,7 +408,7 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
             <span>Resume</span>
           </a>
           <button
-            onClick={() => setDeleteTargetId(item.id || item.filename)}
+            onClick={() => setDeleteTargets([checkpointKey(item)])}
             className="p-1.5 rounded bg-[#262626] border border-[#333333] hover:border-[#f87171]/50 hover:text-[#f87171] text-[#737373] transition-colors"
             title="Delete Checkpoint"
           >
@@ -563,10 +625,48 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
                 Load into Evaluation lab or resume training directly from any checkpoint
               </span>
             </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-[#333333] bg-[#1B1B1B] px-3 py-2">
+              <label className="flex cursor-pointer items-center gap-2 text-[10px] uppercase tracking-wider text-[#A3A3A3]">
+                <input
+                  type="checkbox"
+                  checked={checkpoints.length > 0 && selectedCheckpointIds.size === checkpoints.length}
+                  onChange={toggleAllCheckpoints}
+                  disabled={checkpoints.length === 0}
+                  aria-label="Select all checkpoints"
+                  className="h-3.5 w-3.5 cursor-pointer accent-[#D4D4D4] disabled:cursor-not-allowed disabled:opacity-40"
+                />
+                Select all checkpoints
+              </label>
+              <div className="flex items-center gap-2">
+                {selectedCheckpointIds.size > 0 && (
+                  <span className="text-[10px] text-[#A3A3A3]">
+                    {selectedCheckpointIds.size} selected
+                  </span>
+                )}
+                {selectedCheckpointIds.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedCheckpointIds(new Set())}
+                    className="text-[10px] text-[#737373] transition-colors hover:text-[#F2F2F2]"
+                  >
+                    Clear
+                  </button>
+                )}
+                <Button
+                  variant="danger"
+                  size="sm"
+                  icon={<Trash2 className="w-3 h-3" />}
+                  disabled={selectedCheckpointIds.size === 0}
+                  onClick={() => setDeleteTargets(Array.from(selectedCheckpointIds))}
+                >
+                  Delete selected
+                </Button>
+              </div>
+            </div>
             <DataTable
               data={checkpoints}
               columns={checkpointColumns}
-              keyExtractor={(c) => c.id || c.filename}
+              keyExtractor={checkpointKey}
               searchPlaceholder="Search checkpoints by name, step, or run ID..."
             />
           </div>
@@ -766,14 +866,21 @@ export const RunsView: React.FC<RunsViewProps> = ({ initialTab = "experiments" }
 
       {/* Confirm Delete Dialog */}
       <ConfirmDialog
-        isOpen={!!deleteTargetId}
-        title="Delete Checkpoint"
-        message={`Are you sure you want to permanently delete checkpoint '${deleteTargetId}'? This action cannot be undone.`}
-        confirmLabel="Delete Checkpoint"
+        isOpen={deleteTargets.length > 0}
+        title={deleteTargets.length > 1 ? `Delete ${deleteTargets.length} Checkpoints` : "Delete Checkpoint"}
+        message={
+          deleteTargets.length > 1
+            ? `Permanently delete ${deleteTargets.length} selected checkpoints? This removes their weight files and metadata and cannot be undone.`
+            : `Are you sure you want to permanently delete checkpoint '${deleteTargets[0]}'? This action cannot be undone.`
+        }
+        confirmLabel={deleteTargets.length > 1 ? `Delete ${deleteTargets.length} Checkpoints` : "Delete Checkpoint"}
         cancelLabel="Cancel"
         variant="danger"
+        loading={isDeletingCheckpoints}
         onConfirm={handleDeleteCheckpoint}
-        onCancel={() => setDeleteTargetId(null)}
+        onCancel={() => {
+          if (!isDeletingCheckpoints) setDeleteTargets([]);
+        }}
       />
     </div>
   );

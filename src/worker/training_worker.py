@@ -57,6 +57,150 @@ def _first_int(mapping: Dict[str, Any], keys: List[str], default: int) -> int:
     return default
 
 
+def _schedule_factor(
+    schedule_type: str,
+    step: int,
+    total_steps: int,
+    warmup_steps: int,
+    stable_steps: int,
+    min_lr_ratio: float,
+) -> Tuple[float, str]:
+    """Return the user LR schedule factor at an absolute (global) step.
+
+    The step argument is the run step, not the number of steps executed in
+    this process. Keeping this pure makes resume continuity testable.
+    """
+    total_steps = max(1, int(total_steps))
+    step = max(0, int(step))
+    warmup = min(max(1, int(warmup_steps)), max(1, total_steps // 2))
+    # A stable window longer than the run would otherwise hide the decay
+    # boundary beyond total_steps. Clamp it so the schedule always ends where
+    # the phase ends.
+    stable = max(0, min(int(stable_steps), max(0, total_steps - warmup)))
+    min_ratio = max(0.0001, min(0.5, float(min_lr_ratio)))
+    kind = (schedule_type or "wsd").lower()
+
+    if kind == "wsd":
+        if step < warmup:
+            return max(0.01, step / float(warmup)), "warmup"
+        if step <= (warmup + stable):
+            return 1.0, "stable"
+        decay_start = warmup + stable
+        decay_span = max(1, total_steps - decay_start)
+        progress = min(1.0, max(0.0, (step - decay_start) / float(decay_span)))
+        cosine_mult = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_ratio + (1.0 - min_ratio) * cosine_mult, "decay"
+
+    if kind in ("cosine", "cos"):
+        if step < warmup:
+            return max(0.01, step / float(warmup)), "warmup"
+        decay_span = max(1, total_steps - warmup)
+        progress = min(1.0, max(0.0, (step - warmup) / float(decay_span)))
+        cosine_mult = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_ratio + (1.0 - min_ratio) * cosine_mult, "decay"
+
+    if kind == "linear":
+        if step < warmup:
+            return max(0.01, step / float(warmup)), "warmup"
+        decay_span = max(1, total_steps - warmup)
+        progress = min(1.0, max(0.0, (step - warmup) / float(decay_span)))
+        return min_ratio + (1.0 - min_ratio) * (1.0 - progress), "decay"
+
+    return 1.0, "constant"
+
+
+def _phase_schedule_window(target_steps: int, phase_start_step: int) -> Tuple[int, int]:
+    """Return (relative_start, total_steps) for a phase-local LR schedule.
+
+    A new phase (for example SFT after pretraining) must get its own warmup
+    and decay window. Reusing the global checkpoint step would put it straight
+    into the decay tail and make the LR collapse on the first step.
+    """
+    total = max(1, int(target_steps))
+    start = max(0, min(int(phase_start_step), total - 1))
+    return start, max(1, total - start)
+
+
+def _fallback_phase_start(phase: str, start_step: int, start_tokens: int) -> Tuple[int, int]:
+    """Choose the phase origin when an old checkpoint has no stored context.
+
+    Pretraining always began at zero, so an old pretrain checkpoint must not
+    restart its warmup/epoch budget halfway through. Other phases (SFT and
+    alignment) may have begun at the loaded checkpoint, so treat that as their
+    origin to give them a complete phase budget."""
+    if (phase or "").lower() in ("pretrain", "causal_lm"):
+        return 0, 0
+    return int(start_tokens), int(start_step)
+
+
+def _phase_continuation_mismatch(
+    loaded_phase: Optional[str],
+    loaded_dataset_name: Optional[str],
+    loaded_dataset_tokens: Optional[int],
+    phase: str,
+    dataset_name: str,
+    current_dataset_tokens: Optional[int],
+) -> Optional[str]:
+    """Return why a checkpoint cannot continue the current phase, if it cannot.
+
+    A checkpoint from the same phase and dataset can continue its warmup and
+    epoch budget. If the dataset was rebuilt or repaired, its token count
+    changes; resuming from the old checkpoint must then start a new phase so
+    the model gets a full pass over the corrected data instead of the few
+    tokens left in the old phase.
+    """
+    if (loaded_phase or phase) != phase:
+        return "phase changed"
+    if loaded_dataset_name and loaded_dataset_name != str(dataset_name):
+        return "dataset changed"
+    if loaded_dataset_tokens is not None and current_dataset_tokens is not None:
+        try:
+            if int(loaded_dataset_tokens) != int(current_dataset_tokens):
+                return "dataset size changed"
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _checkpoint_retention_limit(settings: Dict[str, Any], default: int = 4) -> int:
+    """Read the checkpoint retention setting, clamped to a usable count."""
+    try:
+        value = int(settings.get("max_checkpoints_kept", default))
+    except (TypeError, ValueError):
+        value = default
+    return max(1, value)
+
+
+def _epoch_session_budget(
+    phase_start_tokens: int,
+    total_tokens: int,
+    target_epochs: int,
+    train_len: int,
+    tokens_per_step: int,
+    start_step: int,
+) -> Tuple[int, int, int, int, int]:
+    """Calculate an epoch budget relative to the current phase start.
+
+    Token counters are global for the model, but epoch targets are per phase.
+    Without subtracting `phase_start_tokens`, a fresh SFT phase inherits the
+    pretraining token count and has "no epochs left" on its first step.
+    """
+    phase_start = max(0, int(phase_start_tokens))
+    total = max(0, int(total_tokens))
+    phase_tokens_done = max(0, total - phase_start)
+    global_target_tokens = phase_start + int(target_epochs * train_len)
+    session_target_tokens = max(1, global_target_tokens - total)
+    session_steps = max(1, math.ceil(session_target_tokens / max(1, int(tokens_per_step))))
+    target_steps = int(start_step) + session_steps
+    return (
+        global_target_tokens,
+        session_target_tokens,
+        session_steps,
+        target_steps,
+        phase_tokens_done,
+    )
+
+
 class _NonMainProcessDB:
     """Read-through database facade that drops writes on non-zero DDP ranks.
 
@@ -96,7 +240,14 @@ class TrainingWorkerProcess:
         self.event_queue = event_queue
         self.device_str = device_str
         self.db = StudioDatabase(db_path) if db_path else StudioDatabase()
-        self.checkpoint_manager = CheckpointManager(db=self.db)
+        try:
+            initial_settings = self.db.get_settings()
+        except Exception:
+            initial_settings = {}
+        self.checkpoint_manager = CheckpointManager(
+            db=self.db,
+            max_checkpoints=_checkpoint_retention_limit(initial_settings),
+        )
         self.hardware_monitor = HardwareMonitor()
         self.vram_guard = VRAMGuard()
 
@@ -113,6 +264,13 @@ class TrainingWorkerProcess:
 
         self.current_run_id: Optional[str] = None
         self.current_phase: str = "pretrain"
+        # Token/step position where the current phase (and dataset) started.
+        # Epoch targets are relative to this point so a fresh SFT phase does
+        # not inherit the token count of an earlier pretraining phase.
+        self.phase_start_tokens: Optional[int] = None
+        self.phase_start_step: Optional[int] = None
+        self.phase_dataset_tokens: Optional[int] = None
+        self.phase_dataset_name: Optional[str] = None
         self.lr_multiplier: float = 1.0
         self.dynamic_muon_lr: Optional[float] = None
         self.dynamic_adamw_lr: Optional[float] = None
@@ -151,6 +309,14 @@ class TrainingWorkerProcess:
             self.event_queue.put_nowait(event.to_dict())
         except Exception as e:
             logger.error("Failed to enqueue worker event: %s", e)
+
+    def _save_checkpoint(self, **kwargs: Any) -> Path:
+        """Save a checkpoint with the active phase/dataset progress attached."""
+        kwargs.setdefault("phase_start_tokens", self.phase_start_tokens)
+        kwargs.setdefault("phase_start_step", self.phase_start_step)
+        kwargs.setdefault("dataset_tokens", self.phase_dataset_tokens)
+        kwargs.setdefault("dataset_name", self.phase_dataset_name)
+        return self.checkpoint_manager.save_checkpoint(**kwargs)
 
     def _poll_commands(self) -> None:
         while True:
@@ -296,13 +462,20 @@ class TrainingWorkerProcess:
         es_min_delta = float(payload.get("early_stopping_min_delta", 0.001))
 
         self.sched_type = str(payload.get("scheduler") or payload.get("scheduler_type") or "wsd").lower()
+        # Keep the percentage form as well: the actual phase length can differ
+        # from the planner's step estimate, and warmup/stable must scale to the
+        # phase that is actually running.
+        self.user_warmup_pct: Optional[float] = None
         if payload.get("warmup_steps_pct") is not None:
-            self.user_warmup_steps = max(1, int(target_steps * (float(payload["warmup_steps_pct"]) / 100.0)))
+            self.user_warmup_pct = max(0.0, float(payload["warmup_steps_pct"]))
+            self.user_warmup_steps = max(1, int(target_steps * (self.user_warmup_pct / 100.0)))
         else:
             self.user_warmup_steps = int(payload.get("warmup_steps") if payload.get("warmup_steps") is not None else 20)
 
+        self.user_stable_pct: Optional[float] = None
         if payload.get("stable_steps_pct") is not None:
-            self.user_stable_steps = max(1, int(target_steps * (float(payload["stable_steps_pct"]) / 100.0)))
+            self.user_stable_pct = max(0.0, float(payload["stable_steps_pct"]))
+            self.user_stable_steps = max(1, int(target_steps * (self.user_stable_pct / 100.0)))
         else:
             self.user_stable_steps = int(payload.get("stable_steps") if payload.get("stable_steps") is not None else 50)
         self.min_lr = float(payload.get("min_lr") if payload.get("min_lr") is not None else 0.0001)
@@ -339,18 +512,40 @@ class TrainingWorkerProcess:
         else:
             self.checkpoint_manager.checkpoint_dir = checkpoints_dir()
 
+        # The Settings tab is the source of truth for how many rolling step
+        # checkpoints a workspace keeps. Re-read it for every run so a change
+        # does not require restarting the worker process.
+        try:
+            retention_settings = self.db.get_settings()
+        except Exception:
+            retention_settings = {}
+        self.checkpoint_manager.max_checkpoints = _checkpoint_retention_limit(retention_settings)
+
         self.state_machine.transition_to(RunState.STARTING)
-        # Every DDP rank opens the same SQLite file; only rank 0 may insert the run.
+        # Every DDP rank opens the same SQLite file; only rank 0 may touch the run.
         rank_hint = int(payload.get("rank") or os.environ.get("RANK", "0") or 0)
+        existing_run = self.db.get_run(run_id) if rank_hint == 0 else None
         if rank_hint == 0:
-            self.db.create_run(
-                run_id=run_id,
-                name=payload.get("run_name", f"RoCanon Run {run_id}"),
-                current_phase=phase,
-                dataset_source=str(dataset_source),
-                config={"arch": config_arch, "opt": config_opt, "es": config_es},
-                workspace_id=self.workspace_id,
-            )
+            if existing_run is not None:
+                # Resuming continues the originating run (same metrics, charts,
+                # progress and epoch counters). Never silently replace its row.
+                if not checkpoint_to_load:
+                    raise ValueError(
+                        f"Run id '{run_id}' already exists but no resume checkpoint was supplied."
+                    )
+                self.db.update_run_status(run_id, RunState.STARTING.value)
+                logger.info(
+                    "Continuing existing run %s from checkpoint %s", run_id, checkpoint_to_load
+                )
+            else:
+                self.db.create_run(
+                    run_id=run_id,
+                    name=payload.get("run_name", f"RoCanon Run {run_id}"),
+                    current_phase=phase,
+                    dataset_source=str(dataset_source),
+                    config={"arch": config_arch, "opt": config_opt, "es": config_es},
+                    workspace_id=self.workspace_id,
+                )
 
         target_device_str = payload.get("device")
         # Handle 'auto', empty, 'cluster', 'multi_gpu', or unrecognised device strings safely
@@ -373,7 +568,6 @@ class TrainingWorkerProcess:
         dist_rank = 0
         requested_world_size = int(payload.get("world_size") or os.environ.get("WORLD_SIZE", "1"))
         if bool(payload.get("is_cluster")) or requested_world_size > 1:
-            import os
             import datetime
             import socket
 
@@ -530,6 +724,12 @@ class TrainingWorkerProcess:
         start_step = 0
         total_tokens = 0
         start_tokens = 0
+        load_res: Dict[str, Any] = {}
+        loaded_phase: Optional[str] = None
+        loaded_phase_start_tokens: Optional[int] = None
+        loaded_phase_start_step: Optional[int] = None
+        loaded_dataset_name: Optional[str] = None
+        loaded_dataset_tokens: Optional[int] = None
         if checkpoint_to_load:
             try:
                 resolved_chk_p = self.checkpoint_manager.resolve_checkpoint_path(checkpoint_to_load)
@@ -546,6 +746,11 @@ class TrainingWorkerProcess:
                 start_step = int(load_res.get("step", 0))
                 total_tokens = int(load_res.get("tokens_seen", 0))
                 start_tokens = total_tokens
+                loaded_phase = load_res.get("phase")
+                loaded_phase_start_tokens = load_res.get("phase_start_tokens")
+                loaded_phase_start_step = load_res.get("phase_start_step")
+                loaded_dataset_name = load_res.get("dataset_name")
+                loaded_dataset_tokens = load_res.get("dataset_tokens")
                 trainer.global_step = start_step
                 trainer.cumulative_tokens = total_tokens
                 chk_val_loss = load_res.get("val_loss")
@@ -566,6 +771,19 @@ class TrainingWorkerProcess:
                     chk_val_loss,
                     len(muon_opt.state),
                 )
+                if existing_run is not None:
+                    removed = self.db.delete_metrics_after(run_id, start_step)
+                    if removed:
+                        logger.info(
+                            "Removed %d stale metric points after checkpoint step %d for run %s",
+                            removed, start_step, run_id,
+                        )
+                    self.db.update_run_status(
+                        run_id,
+                        RunState.STARTING.value,
+                        step=start_step,
+                        tokens=total_tokens,
+                    )
                 self._send_event(WorkerEvent(
                     event_type=EventType.STATE_CHANGED,
                     run_id=run_id,
@@ -695,20 +913,87 @@ class TrainingWorkerProcess:
 
         val_batches = max(1, min(12, val_len // max(1, batch_len)))
 
+        # Epoch targets belong to the current phase/dataset, not to the whole
+        # model lifetime. A fresh SFT phase on a model that already trained 77M
+        # pretraining tokens must still get its full SFT epoch budget.
+        current_dataset_tokens = int(train_len) if is_seq_tokens else None
+        if checkpoint_to_load and start_step > 0:
+            mismatch = _phase_continuation_mismatch(
+                loaded_phase,
+                loaded_dataset_name,
+                loaded_dataset_tokens,
+                phase,
+                str(dataset_source),
+                current_dataset_tokens,
+            )
+            if mismatch is None and loaded_phase_start_tokens is not None:
+                self.phase_start_tokens = int(loaded_phase_start_tokens)
+                self.phase_start_step = int(loaded_phase_start_step if loaded_phase_start_step is not None else start_step)
+                logger.info(
+                    "Continuing phase '%s' from token %d (phase start step %d).",
+                    phase, self.phase_start_tokens, self.phase_start_step,
+                )
+            else:
+                # Pretraining is the base phase: without metadata an old
+                # pretrain checkpoint still started at step/token 0, so do not
+                # restart warmup or reset its epoch budget at the checkpoint.
+                self.phase_start_tokens, self.phase_start_step = _fallback_phase_start(
+                    phase, start_step, start_tokens
+                )
+                logger.info(
+                    "Starting a new '%s' phase at step %d (token %d): %s "
+                    "(checkpoint phase/dataset %s/%s, dataset tokens %s; current %s/%s, tokens %s). "
+                    "The %d-epoch target and LR window are phase-relative.",
+                    phase, self.phase_start_step, self.phase_start_tokens,
+                    mismatch or "checkpoint has no phase progress metadata",
+                    loaded_phase or "unknown", loaded_dataset_name or "unknown", loaded_dataset_tokens,
+                    phase, dataset_source, current_dataset_tokens,
+                    target_epochs,
+                )
+        else:
+            self.phase_start_tokens = start_tokens
+            self.phase_start_step = start_step
+
+        self.phase_dataset_tokens = int(train_len)
+        self.phase_dataset_name = str(dataset_source)
+
         # Resolve target tokens and session steps per dataset/session
         tokens_per_step = training_cfg.micro_batch_size * max(1, training_cfg.seq_len - 1) * max(1, training_cfg.grad_accum_steps)
         if duration_mode == "epochs":
-            session_target_tokens = int(target_epochs * train_len)
-            session_steps = max(1, math.ceil(session_target_tokens / max(1, tokens_per_step)))
-            target_steps = start_step + session_steps
-            target_tokens = start_tokens + session_target_tokens
+            # The target is phase-relative: a checkpoint at epoch 1.4 of 3 must
+            # train the remaining 1.6 epochs, while a new phase starts at 0.
+            (
+                global_target_tokens,
+                session_target_tokens,
+                session_steps,
+                target_steps,
+                phase_tokens_done,
+            ) = _epoch_session_budget(
+                phase_start_tokens=int(self.phase_start_tokens or 0),
+                total_tokens=total_tokens,
+                target_epochs=target_epochs,
+                train_len=train_len,
+                tokens_per_step=tokens_per_step,
+                start_step=start_step,
+            )
+            target_tokens = total_tokens + session_target_tokens
             logger.info(
-                "Epoch mode: target %d epochs on dataset (%d tokens/epoch). Session targets: %d steps, %d tokens. Global target step: %d.",
-                target_epochs, train_len, session_steps, session_target_tokens, target_steps,
+                "Epoch mode: target %d epochs for this phase (%d tokens/epoch), %.3f epochs already done, "
+                "%d tokens remaining. Session targets: %d steps, %d tokens. Global target step: %d.",
+                target_epochs, train_len, phase_tokens_done / max(1, train_len), session_target_tokens,
+                session_steps, session_target_tokens, target_steps,
             )
         else:
             session_target_tokens = max(1, session_steps * tokens_per_step)
             target_tokens = start_tokens + session_target_tokens
+
+        phase_sched_start, phase_sched_total = _phase_schedule_window(
+            target_steps, int(self.phase_start_step or 0)
+        )
+        logger.info(
+            "Phase '%s' LR schedule: step %d..%d (%d steps), current step %d.",
+            phase, phase_sched_start, target_steps, phase_sched_total, start_step,
+        )
 
         self.state_machine.transition_to(RunState.RUNNING)
         self._send_event(WorkerEvent(
@@ -800,48 +1085,35 @@ class TrainingWorkerProcess:
                 # Dynamic Learning Rate Scheduling & Adaptation
                 session_total_steps = max(1, target_steps - start_step)
                 session_step = max(0, step - start_step)
+                # Drive the schedule inside the current phase. A global step
+                # would put a fresh SFT phase at 93% of a pretraining-length
+                # schedule and decay the LR immediately. Within one phase this
+                # stays continuous across resume because phase_start_step is
+                # stored in the checkpoint.
+                phase_schedule_start, schedule_total_steps = _phase_schedule_window(
+                    target_steps, int(self.phase_start_step or 0)
+                )
+                schedule_step = max(0, step - phase_schedule_start)
 
                 # 1. User-configured Learning Rate Schedule (WSD, Cosine, Linear, Constant)
-                warmup = min(self.user_warmup_steps, max(1, session_total_steps // 2))
-                stable = self.user_stable_steps
+                if self.user_warmup_pct is not None:
+                    warmup = max(1, int(round(schedule_total_steps * (self.user_warmup_pct / 100.0))))
+                else:
+                    warmup = self.user_warmup_steps
+                warmup = min(warmup, max(1, schedule_total_steps // 2))
+                if self.user_stable_pct is not None:
+                    stable = max(0, int(round(schedule_total_steps * (self.user_stable_pct / 100.0))))
+                else:
+                    stable = self.user_stable_steps
                 min_lr_ratio = max(0.0001, min(0.5, self.min_lr / max(1e-12, base_adamw)))
-
-                if self.sched_type == "wsd":
-                    if session_step < warmup:
-                        sched_factor = max(0.01, float(session_step) / float(max(1, warmup)))
-                        sched_phase = "warmup"
-                    elif session_step <= (warmup + stable):
-                        sched_factor = 1.0
-                        sched_phase = "stable"
-                    else:
-                        decay_start = warmup + stable
-                        decay_span = max(1, session_total_steps - decay_start)
-                        progress = min(1.0, max(0.0, (session_step - decay_start) / float(decay_span)))
-                        cosine_mult = 0.5 * (1.0 + math.cos(math.pi * progress))
-                        sched_factor = min_lr_ratio + (1.0 - min_lr_ratio) * cosine_mult
-                        sched_phase = "decay"
-                elif self.sched_type in ("cosine", "cos"):
-                    if session_step < warmup:
-                        sched_factor = max(0.01, float(session_step) / float(max(1, warmup)))
-                        sched_phase = "warmup"
-                    else:
-                        decay_span = max(1, session_total_steps - warmup)
-                        progress = min(1.0, max(0.0, (session_step - warmup) / float(decay_span)))
-                        cosine_mult = 0.5 * (1.0 + math.cos(math.pi * progress))
-                        sched_factor = min_lr_ratio + (1.0 - min_lr_ratio) * cosine_mult
-                        sched_phase = "decay"
-                elif self.sched_type == "linear":
-                    if session_step < warmup:
-                        sched_factor = max(0.01, float(session_step) / float(max(1, warmup)))
-                        sched_phase = "warmup"
-                    else:
-                        decay_span = max(1, session_total_steps - warmup)
-                        progress = min(1.0, max(0.0, (session_step - warmup) / float(decay_span)))
-                        sched_factor = min_lr_ratio + (1.0 - min_lr_ratio) * (1.0 - progress)
-                        sched_phase = "decay"
-                else:  # constant
-                    sched_factor = 1.0
-                    sched_phase = "constant"
+                sched_factor, sched_phase = _schedule_factor(
+                    self.sched_type,
+                    schedule_step,
+                    schedule_total_steps,
+                    warmup,
+                    stable,
+                    min_lr_ratio,
+                )
 
                 # 2. Gradient stability protection (prevents catastrophic weight blowouts)
                 if not self.auto_lr_adjust:
@@ -870,7 +1142,7 @@ class TrainingWorkerProcess:
                 # Manual Checkpoint requested
                 if self.manual_chk_requested:
                     self.manual_chk_requested = False
-                    chk_p = self.checkpoint_manager.save_checkpoint(
+                    chk_p = self._save_checkpoint(
                         model=model,
                         step=step,
                         tokens_seen=total_tokens,
@@ -893,8 +1165,12 @@ class TrainingWorkerProcess:
                 try:
                     trainer.zero_grad()
                     session_curr_step = max(0, step - start_step - 1)
+                    # Offset the data stream by the restored step. Without this
+                    # a resumed run replays the dataset from token 0 even though
+                    # its model/optimizer state starts at the checkpoint.
+                    global_curr_step = start_step + session_curr_step
                     for accum_idx in range(training_cfg.grad_accum_steps):
-                        global_micro_step = session_curr_step * training_cfg.grad_accum_steps + accum_idx
+                        global_micro_step = global_curr_step * training_cfg.grad_accum_steps + accum_idx
                         # DDP shards the stream: every rank takes a distinct window,
                         # then all-reduce makes the effective batch world_size times larger.
                         start_pos = (global_micro_step * dist_world_size + dist_rank) * batch_len
@@ -1113,7 +1389,7 @@ class TrainingWorkerProcess:
 
                     # Check if new best validation checkpoint
                     if detector.best_step == step:
-                        self.checkpoint_manager.save_checkpoint(
+                        self._save_checkpoint(
                             model=model,
                             step=step,
                             tokens_seen=total_tokens,
@@ -1155,7 +1431,7 @@ class TrainingWorkerProcess:
                     if detector.stop_requested:
                         logger.warning("Early stopping triggered at step %d", step)
                         detector.restore_best(model)
-                        self.checkpoint_manager.save_checkpoint(
+                        self._save_checkpoint(
                             model=model,
                             step=step,
                             tokens_seen=total_tokens,
@@ -1177,7 +1453,7 @@ class TrainingWorkerProcess:
 
                 # Periodic checkpoint independent of validation
                 if save_freq > 0 and step % save_freq == 0 and detector.best_step != step:
-                    chk_p = self.checkpoint_manager.save_checkpoint(
+                    chk_p = self._save_checkpoint(
                         model=model,
                         step=step,
                         tokens_seen=total_tokens,
@@ -1231,7 +1507,7 @@ class TrainingWorkerProcess:
                         if alert_lvl == VRAMAlertLevel.EMERGENCY and (now_t - self._last_emergency_save_time) > 60.0:
                             self._last_emergency_save_time = now_t
                             logger.warning("VRAM Emergency! Saving single protective snapshot...")
-                            self.checkpoint_manager.save_checkpoint(
+                            self._save_checkpoint(
                                 model=model,
                                 step=step,
                                 tokens_seen=total_tokens,
@@ -1248,13 +1524,28 @@ class TrainingWorkerProcess:
                                 self.state_machine.transition_to(RunState.PAUSING)
 
                 session_tokens = max(0, total_tokens - start_tokens)
-                epoch_val = round(session_tokens / train_len, 3) if train_len > 0 else 0.0
-                tokens_in_curr_epoch = session_tokens % train_len if train_len > 0 else 0
-                epoch_pct = round((tokens_in_curr_epoch / train_len) * 100, 2) if train_len > 0 else 0.0
+                # Progress and epoch are cumulative properties of the run. A
+                # resumed checkpoint at epoch 1.4 must keep showing 1.4, not
+                # restart at 0 just because this session starts mid-epoch.
+                if train_len > 0:
+                    epoch_tokens = (
+                        max(0, total_tokens - int(self.phase_start_tokens or 0))
+                        if duration_mode == "epochs"
+                        else total_tokens
+                    )
+                    epoch_val = round(epoch_tokens / train_len, 3)
+                    current_epoch = int(epoch_tokens // train_len) + 1
+                    tokens_in_curr_epoch = epoch_tokens % train_len
+                    epoch_pct = round((tokens_in_curr_epoch / train_len) * 100, 2)
+                else:
+                    epoch_val = 0.0
+                    current_epoch = 1
+                    tokens_in_curr_epoch = 0
+                    epoch_pct = 0.0
                 session_curr_steps = max(0, step - start_step)
-                step_pct = round((session_curr_steps / session_total_steps) * 100, 2) if session_total_steps > 0 else 0.0
-                token_pct = round((session_tokens / session_target_tokens) * 100, 2) if session_target_tokens > 0 else 0.0
-                rem_tokens = max(0, session_target_tokens - session_tokens)
+                step_pct = round((step / target_steps) * 100, 2) if target_steps > 0 else 0.0
+                token_pct = round((total_tokens / target_tokens) * 100, 2) if target_tokens > 0 else 0.0
+                rem_tokens = max(0, target_tokens - total_tokens)
                 eta_s = int(rem_tokens / max(tok_per_sec, 1)) if tok_per_sec > 0 else 0
 
                 metric_dict = {
@@ -1270,6 +1561,7 @@ class TrainingWorkerProcess:
                     "dataset_tokens": train_len,
                     "val_tokens": val_len,
                     "epoch": epoch_val,
+                    "current_epoch": current_epoch,
                     "epoch_pct": epoch_pct,
                     "tokens_in_epoch": tokens_in_curr_epoch,
                     "eta_seconds": eta_s,
@@ -1347,7 +1639,7 @@ class TrainingWorkerProcess:
                         get_notifier(db=self.db).notify_live_progress(
                             run_id=run_id,
                             step=step,
-                            total_steps=target_steps if duration_mode != "epochs" else session_total_steps,
+                            total_steps=target_steps,
                             train_loss=float(train_loss),
                             val_loss=float(self.latest_val_loss) if self.latest_val_loss is not None else None,
                             tok_per_sec=float(tok_per_sec),
@@ -1425,7 +1717,7 @@ class TrainingWorkerProcess:
 
                         if detector.best_step == step:
                             logger.info("Final step %d achieved new best validation loss: %.4f", step, val_loss)
-                            self.checkpoint_manager.save_checkpoint(
+                            self._save_checkpoint(
                                 model=model,
                                 step=step,
                                 tokens_seen=total_tokens,
@@ -1453,19 +1745,25 @@ class TrainingWorkerProcess:
                     except Exception as ce:
                         logger.warning("Could not auto-generate training charts on completion: %s", ce)
 
-                    self.checkpoint_manager.save_checkpoint(
-                        model=model,
-                        step=step,
-                        tokens_seen=total_tokens,
-                        optimizers=(muon_opt, adamw_opt),
-                        scheduler=scheduler,
-                        phase=phase,
-                        val_loss=self.latest_val_loss,
-                        train_loss=train_loss,
-                        run_id=run_id,
-                        filename_prefix="final_phase_completed",
-                        workspace_id=self.workspace_id,
-                    )
+                    # When the last step is already the best checkpoint, the
+                    # separate completion snapshot would be a byte-for-byte
+                    # duplicate of best_model.pt under a second name.
+                    if detector.best_step == step:
+                        logger.info("Final step is the best checkpoint; keeping best_model.pt as the completion checkpoint")
+                    else:
+                        self._save_checkpoint(
+                            model=model,
+                            step=step,
+                            tokens_seen=total_tokens,
+                            optimizers=(muon_opt, adamw_opt),
+                            scheduler=scheduler,
+                            phase=phase,
+                            val_loss=self.latest_val_loss,
+                            train_loss=train_loss,
+                            run_id=run_id,
+                            filename_prefix="final_phase_completed",
+                            workspace_id=self.workspace_id,
+                        )
                     try:
                         from ..notifications.webhook import get_notifier
                         get_notifier(db=self.db).notify_run_completed(
@@ -1530,7 +1828,7 @@ class TrainingWorkerProcess:
                     # Save the *live* training state. Restoring the best-validation
                     # weights here would pair old weights with the current optimizer
                     # moments, producing a checkpoint that cannot be resumed correctly.
-                    snapshot_path = self.checkpoint_manager.save_checkpoint(
+                    snapshot_path = self._save_checkpoint(
                         model=model,
                         step=step,
                         tokens_seen=total_tokens,
