@@ -84,6 +84,12 @@ surface. Defensive, source-first review; no live third-party system was probed.
 * **Recommendation:** record the resolved interpreter in the startup log (already done) and prefer a
   bundled runtime for release builds.
 
+### AUD-035 — AUD-001 fix was incomplete: unrestricted unpickling remained in two loaders (High, fixed)
+* **Component:** `src/eval/inference.py` (checkpoint inspection before evaluation), `src/data/custom_loader.py` (pre-tokenized `.pt` cache loading, 2 call sites), `src/infer/generate.py` (CLI and generator loaders).
+* **Evidence:** `safe_torch_load` documents that the `weights_only=False` fallback must never be used, but `inference.py` retried any failed load with `weights_only=False`, and both cache loaders did the same. A `.pt` file with a `__reduce__` payload placed where a cache is looked up (or any checkpoint evaluated) would execute code during load.
+* **Fix:** `inference.py` now calls `safe_torch_load`. The dataset loader uses a new `_load_token_cache` helper that only allows `weights_only=True`, and on failure or missing keys logs a warning and re-tokenizes from source. `generate.py` passes `weights_only=True` explicitly.
+* **Verification:** `tests/unit/test_audit_regressions.py::test_token_cache_loader_never_unpickles_payloads` (marker file not created), `::test_token_cache_loader_returns_valid_cache_and_rejects_missing_keys`. Full Python suite: 414 passed.
+
 ## 3. Areas checked and found sound
 
 * **Path traversal:** network ids are validated against `^[A-Za-z0-9_-]{1,64}$` and resolved inside the

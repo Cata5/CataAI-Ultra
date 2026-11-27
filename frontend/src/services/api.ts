@@ -27,8 +27,8 @@ async function getTauriInvoke() {
   if (tauriInvoke) return tauriInvoke;
   if (isTauri()) {
     try {
-      const module = await import("@tauri-apps/api/core");
-      tauriInvoke = module.invoke;
+      const tauriCore = await import("@tauri-apps/api/core");
+      tauriInvoke = tauriCore.invoke;
       return tauriInvoke;
     } catch {
       return null;
@@ -76,7 +76,7 @@ export const api = {
           latest_metrics: ws.current_step > 0 ? {
             step: ws.current_step,
             loss: ws.current_loss || 0,
-            learning_rate: 0,
+            learning_rate: ws.current_lr ?? 0,
           } : null,
           alerts_count: 0,
           timestamp: Date.now() / 1000,

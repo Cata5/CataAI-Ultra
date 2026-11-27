@@ -167,3 +167,23 @@ pre-migration backups:
   desktop) but has **not** been executed on GitHub-hosted runners.
 
 Total Python tests now: 150 unit + 76 API/backend = **226**.
+---
+
+## 2026-11-27 verification pass
+
+Run on Windows with `.venv` (Python 3.14, torch 2.11.0+cu128). CUDA exists on this machine but was **not used**: all runs below are CPU or static. GPU training, DDP, WDDM, and NVML checks are deferred by request.
+
+| Check | Command | Result |
+| --- | --- | --- |
+| Python, full suite (includes `tests/e2e`) | `pytest -o addopts="" -q` | **414 passed**, 0 failed (412 before + 3 new regression tests, minus 1 removed) |
+| Regression file after AUD-035 | `pytest tests/unit/test_audit_regressions.py` | 11 passed |
+| Frontend typecheck | `npx tsc --noEmit` | exit 0 |
+| Frontend unit tests | `npx vitest run` | 11 passed (5 files) |
+| Frontend production build | `npx next build` | succeeded; 13 pages exported as 15 HTML files (incl. 404 and not-found) |
+| Frontend lint | `npx eslint src` | 1 error (LogsView React Compiler skip, AUD-037), 324 warnings. Before this pass: 2 errors; the `api.ts` `module` error is fixed |
+| Rust compile | `cargo check` (src-tauri) | finished, no errors |
+| Rust unit tests | `cargo test --lib` | **blocked**: test binary exits 0xc0000139 before running (ENV-001). 0 Rust tests executed |
+| HTTP contract | static script, see `api_endpoint_inventory.md` | 0 frontend calls without a route |
+| IPC contract | static script | 0 `invoke` names missing from `generate_handler!` |
+
+**Not executed (deferred or blocked):** GPU training and resume on CUDA, DDP, WDDM and NVML telemetry, the packaged Tauri app and installer, the Playwright e2e suite in `frontend/e2e`, and all Rust unit tests (ENV-001).

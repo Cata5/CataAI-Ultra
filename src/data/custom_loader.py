@@ -23,6 +23,28 @@ from .text_repair import normalize_training_text
 
 logger = logging.getLogger(__name__)
 
+
+def _load_token_cache(path: Path, device, required_keys: Tuple[str, ...]) -> Optional[Dict[str, Any]]:
+    """Loads a pre-tokenized ``.pt`` cache with restricted unpickling only.
+
+    Returns ``None`` (and logs why) when the file cannot be read safely or lacks the
+    required keys, so the caller re-tokenizes from source. Cache-named files can be
+    copied in from elsewhere, so an unrestricted ``torch.load`` fallback is never used.
+    """
+    try:
+        try:
+            data = torch.load(path, map_location=device, mmap=True, weights_only=True)
+        except (RuntimeError, ValueError):
+            # Some archives cannot be memory-mapped; restricted unpickling still applies.
+            data = torch.load(path, map_location=device, weights_only=True)
+    except Exception as exc:
+        logger.warning("Ignoring unreadable token cache %s: %s", path, exc)
+        return None
+    if not isinstance(data, dict) or any(key not in data for key in required_keys):
+        logger.warning("Ignoring token cache %s: expected keys %s", path, ", ".join(required_keys))
+        return None
+    return data
+
 # Bump when the SFT formatting/label layout changes so stale caches are ignored.
 _SFT_CACHE_VERSION = "v2"
 
@@ -286,11 +308,9 @@ class CustomDatasetEngine:
                 print(f"[DatasetEngine] Loading pre-tokenized cache: {c_pt.name}")
                 if progress_callback:
                     progress_callback(f"Loading cached token array: {c_pt.name}...", 50.0)
-                try:
-                    data = torch.load(c_pt, map_location=device, mmap=True, weights_only=True)
-                except Exception:
-                    data = torch.load(c_pt, map_location=device)
-                return data["input_ids"], None
+                data = _load_token_cache(c_pt, device, ("input_ids",))
+                if data is not None:
+                    return data["input_ids"], None
 
         # Read text file
         if progress_callback:
@@ -455,11 +475,9 @@ class CustomDatasetEngine:
                 print(f"[DatasetEngine] Loading pre-tokenized chat cache: {c_pt.name}")
                 if progress_callback:
                     progress_callback(f"Loading cached chat SFT array: {c_pt.name}...", 50.0)
-                try:
-                    data = torch.load(c_pt, map_location=device, mmap=True, weights_only=True)
-                except Exception:
-                    data = torch.load(c_pt, map_location=device)
-                return data["input_ids"], data["labels"]
+                data = _load_token_cache(c_pt, device, ("input_ids", "labels"))
+                if data is not None:
+                    return data["input_ids"], data["labels"]
 
         if progress_callback:
             progress_callback(f"Reading {file_path.name} from disk...", 5.0)

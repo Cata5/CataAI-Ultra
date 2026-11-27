@@ -47,7 +47,7 @@ class RoCanonGenerator:
         model = RoCanonForCausalLM(config)
 
         if checkpoint_path.endswith(".pt") or checkpoint_path.endswith(".bin"):
-            checkpoint = torch.load(checkpoint_path, map_location=target_device)
+            checkpoint = torch.load(checkpoint_path, map_location=target_device, weights_only=True)
             state_dict = checkpoint.get("model_state_dict", checkpoint)
             model.load_state_dict(state_dict)
         elif checkpoint_path.endswith(".safetensors"):
@@ -171,7 +171,7 @@ def interactive_chat():
 
     if args.checkpoint:
         print(f"Loading checkpoint from: {args.checkpoint}")
-        chk = torch.load(args.checkpoint, map_location="cpu")
+        chk = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
         model.load_state_dict(chk.get("model_state_dict", chk))
 
     generator = RoCanonGenerator(model, tokenizer)

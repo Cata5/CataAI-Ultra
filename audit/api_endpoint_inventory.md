@@ -152,3 +152,10 @@ falls back to polling `/api/runs/{id}/metrics`.
 
 These gaps are architectural, not regressions: the desktop frontend never calls those paths
 (`api.ts` has no corresponding method), except workspace export/import which have no UI entry point.
+
+## Verification pass (2026-11-27): static contract check
+
+* **HTTP:** 96 routes registered in `src/dashboard/*.py` (`add_get/post/put/delete`). 67 `/api/...` references in `frontend/src`. Every frontend call matches a registered route and method, after normalising path parameters and query strings. No frontend call is missing a route.
+* **Backend routes with no frontend caller:** 33, mostly intentional: the OpenAI-compatible `/v1/*` endpoints, `/ws`, `/`, and internal or CLI endpoints such as `/api/action`, `/api/config` (POST), `/api/state`, `/api/tasks`, `/api/plugins/*`, `/api/workspaces/import|export`, and `/api/evaluation/stream|suites|attention`. Each is a candidate for removal or a UI hook; none is a broken contract.
+* **Tauri IPC:** every `invoke("name")` in `api.ts` (about 60 distinct commands) is registered in `src-tauri/src/lib.rs` `generate_handler!` (64 entries). No missing command.
+* **Method:** the check was a script that scanned string literals and the nearest `method:` option. Three apparent mismatches were GET calls the heuristic misread, and were confirmed by hand.

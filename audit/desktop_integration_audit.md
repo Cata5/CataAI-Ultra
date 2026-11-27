@@ -127,3 +127,11 @@ against the real database.
    only after the first start attempt.
 4. No automated Rust tests exist; `cargo check`/`cargo build` and the manual startup smoke test are the
    current safety net.
+
+## Verification pass (2026-11-27): Tauri status path
+
+* **Finding:** `frontend/src/services/api.ts` `getSystemStatus` (desktop branch) returned `latest_metrics.learning_rate: 0` on every call, while the HTTP branch returns the real learning rate. The Rust `WorkerStatus` had no learning-rate field.
+* **Fix:** `src-tauri/src/worker.rs` adds `current_lr: Option<f64>`, parses `learning_rate` (or `lr`) from the same step events that set `current_step` and `current_loss`, and clears it on run start. The frontend returns `ws.current_lr ?? 0`.
+* **Verification:** `cargo check` passes. `tsc --noEmit`, `next build`, and 11 Vitest tests pass. The end-to-end desktop flow has not been run (see `known_issues.md` ENV-001 and AUD-036).
+* **Also fixed:** `api.ts` used `const module = await import(...)`, which fails lint (`@next/next/no-assign-module-variable`). Renamed to `tauriCore`.
+* **Behavior to know:** every desktop IPC call falls back silently to HTTP after a `console.warn`. If the HTTP server is down too, the UI shows the HTTP error, but the original IPC error is only in the console.

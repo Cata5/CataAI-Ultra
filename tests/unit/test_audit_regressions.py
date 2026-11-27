@@ -144,3 +144,27 @@ def test_delete_checkpoint_reports_missing_entry(tmp_path: Path) -> None:
     mgr = CheckpointManager(db=db, checkpoint_dir=chk_dir)
 
     assert mgr.delete_checkpoint("does_not_exist.pt") is False
+
+def test_token_cache_loader_never_unpickles_payloads(tmp_path: Path) -> None:
+    from src.data.custom_loader import _load_token_cache
+
+    marker = tmp_path / "cache_pwned.txt"
+    cache_path = tmp_path / "poisoned_tokens.pt"
+    torch.save({"input_ids": _PickleExploit(marker)}, cache_path)
+
+    assert _load_token_cache(cache_path, "cpu", ("input_ids",)) is None
+    assert not marker.exists(), "token cache loading must not run embedded pickle code"
+
+
+def test_token_cache_loader_returns_valid_cache_and_rejects_missing_keys(tmp_path: Path) -> None:
+    from src.data.custom_loader import _load_token_cache
+
+    good = tmp_path / "good.pt"
+    torch.save({"input_ids": torch.arange(4), "labels": torch.arange(4)}, good)
+    loaded = _load_token_cache(good, "cpu", ("input_ids", "labels"))
+    assert loaded is not None and loaded["input_ids"].shape == (4,)
+
+    partial = tmp_path / "partial.pt"
+    torch.save({"input_ids": torch.arange(4)}, partial)
+    assert _load_token_cache(partial, "cpu", ("input_ids", "labels")) is None
+

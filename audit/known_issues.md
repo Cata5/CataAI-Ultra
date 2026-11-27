@@ -62,3 +62,20 @@ AUD-034. Details below; see `audit/pillar_1_2_status.md` for the tests that cove
 | 48.5 M-parameter benchmark not run | Throughput numbers apply to the 1.9 M smoke configuration |
 | Multi-GPU not exercised | Cluster/multi-GPU code paths are code-reviewed only |
 | Legacy dataset directory fallback retained | `D:\proiecte\LLM from Scratch\data` remains a last-resort search path; it is logged, not silent |
+
+
+---
+
+## Verification pass (2026-11-27)
+
+| ID | Severity | Component | Title | Status |
+| --- | --- | --- | --- | --- |
+| AUD-036 | Low | Desktop (Tauri) | `getSystemStatus` returned `alerts_count: 0` on every call in desktop mode | Open; no UI consumer |
+| AUD-037 | Low | Frontend | React Compiler skips `LogsView.tsx` (memoization could not be preserved) | Open; performance only |
+| ENV-001 | Blocked | Rust tests | `cargo test --lib` binary exits `0xc0000139` (STATUS_ENTRYPOINT_NOT_FOUND) before running any test | Environment; not a code assertion failure |
+
+**AUD-036 detail.** `frontend/src/services/api.ts` builds the desktop `SystemStatus` from `get_worker_status`, which has no alert count. The HTTP path counts the in-memory `latest_alerts` list in `worker_manager.py`. Nothing in the frontend reads `alerts_count`, so the value is harmless now, but it would mislead a future consumer. Recommended fix: either add `alerts_count` to the Rust `WorkerStatus` (fed from the same alert events) or drop the field from the desktop type.
+
+**ENV-001 detail.** `cargo check` and `cargo test --no-run` succeed. The test executable crashes at process start on this Windows machine, which is typical of Tauri test binaries that load WebView2 and related DLLs. No Rust assertion runs, so Rust unit tests in `commands.rs` and `secrets.rs` are unverified. Recommended next step: run `cargo test` with `--no-run` plus a manifest check, or run the tests on a Linux CI runner.
+
+**Fixed in this pass (for traceability):** AUD-035 (security), and the desktop learning-rate gap, which had `learning_rate: 0` hardcoded in the Tauri status path. `WorkerStatus` now carries `current_lr`, parsed from the worker's step events, and the frontend uses it. See `desktop_integration_audit.md`.

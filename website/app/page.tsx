@@ -7,9 +7,9 @@ const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 const ledger = [
   { severity: "Critical", found: 4, fixed: 4, open: 0, accepted: 0 },
-  { severity: "High", found: 12, fixed: 12, open: 0, accepted: 0 },
-  { severity: "Medium", found: 11, fixed: 11, open: 0, accepted: 0 },
-  { severity: "Low", found: 7, fixed: 7, open: 0, accepted: 0 },
+  { severity: "High", found: 13, fixed: 13, open: 0, accepted: 0 },
+  { severity: "Medium", found: 11, fixed: 9, open: 2, accepted: 0 },
+  { severity: "Low", found: 9, fixed: 7, open: 2, accepted: 0 },
 ];
 
 const phases = [
@@ -73,16 +73,16 @@ export default function Home() {
               <a className="text-link" href="#audit">Read the audit</a>
             </div>
             <dl className="hero-facts">
-              <div><b>61</b>desktop commands</div>
-              <div><b>93</b>HTTP routes</div>
-              <div><b>412</b>Python tests</div>
+              <div><b>63</b>desktop commands</div>
+              <div><b>96</b>HTTP routes</div>
+              <div><b>414</b>Python tests</div>
             </dl>
           </div>
 
           <figure className="receipt" aria-label="Benchmark receipt for a 120-step smoke run">
             <div className="receipt-head"><span>RUN RECEIPT</span><span>No. 120</span></div>
             <p className="receipt-title">1.9M-parameter smoke run</p>
-            <p className="receipt-sub">RTX 3060 Laptop · 120 steps · FP16</p>
+            <p className="receipt-sub">RTX 3060 Laptop · 120 steps · bf16 autocast</p>
             <div className="receipt-row"><span>median step</span><span>48.36 ms</span></div>
             <div className="receipt-row"><span>throughput</span><span>10,546.6 tok/s</span></div>
             <div className="receipt-row"><span>compute</span><span>0.119 TFLOPs</span></div>
@@ -107,17 +107,17 @@ export default function Home() {
             <li>
               <span className="step">01</span>
               <h3>Interface</h3>
-              <p>Next.js 16 and React 19. 13 pages, 73 typed API methods, Tauri webview or browser.</p>
+              <p>Next.js 16 and React 19. 13 pages, 78 typed API methods, Tauri webview or browser.</p>
             </li>
             <li>
               <span className="step">02</span>
               <h3>Shell</h3>
-              <p>Rust and Tauri 2 supervise the worker: 61 commands, JSON-lines IPC, process-tree kill.</p>
+              <p>Rust and Tauri 2 supervise the worker: 63 commands, JSON-lines IPC, process-tree kill.</p>
             </li>
             <li>
               <span className="step">03</span>
               <h3>Engine</h3>
-              <p>Python and PyTorch. 93 HTTP routes, 9 worker commands, 13 events, real Muon and AdamW.</p>
+              <p>Python and PyTorch. 96 HTTP routes, 9 worker commands, 13 events, real Muon and AdamW.</p>
             </li>
             <li>
               <span className="step">04</span>
@@ -135,12 +135,12 @@ export default function Home() {
           </SectionHead>
 
           <div className="score">
-            <b>9.7</b>
-            <span>pre-remediation health score, out of 10</span>
+            <b>7.5</b>
+            <span>overall health score, out of 10, from the audit report</span>
           </div>
 
           <table className="ledger">
-            <caption>34 findings across four severity classes.</caption>
+            <caption>37 findings across four severity classes: 33 fixed, 4 open.</caption>
             <thead>
               <tr><th scope="col">Severity</th><th scope="col">Found</th><th scope="col">Fixed</th><th scope="col">Open</th><th scope="col">Accepted</th></tr>
             </thead>
@@ -156,7 +156,7 @@ export default function Home() {
               ))}
             </tbody>
             <tfoot>
-              <tr><td>Total</td><td className="num">34</td><td className="num">34</td><td className="num">0</td><td className="num">0</td></tr>
+              <tr><td>Total</td><td className="num">37</td><td className="num">33</td><td className="num">4</td><td className="num">0</td></tr>
             </tfoot>
           </table>
 
@@ -168,20 +168,22 @@ export default function Home() {
             </div>
             <div className="note">
               <strong>What stays open</strong>
-              The machine-specific Cargo target and the missing frontend test runner are
-              closed (Vitest component tests and Playwright flow tests now run). Test exports
-              of the llama-compatible GGUF load and generate in llama.cpp b12723 for Q8_0, F16
-              and F32; tokenizer metadata remains approximate, and Ollama is unverified because
-              it is not installed. The NSIS build is unsigned, so SmartScreen warns until a
-              certificate is available. The desktop shell
-              also needs to supervise the local dashboard before its sweep panel works without a
-              separately started backend.
+              Open: the Cargo target pin is machine-specific (AUD-022), and the frontend has
+              11 Vitest component tests but no Playwright run in the latest pass (AUD-027).
+              Open, low: the desktop status reports no alert count (AUD-036), and the React
+              Compiler skips one logs view (AUD-037). The Rust unit-test binary does not start
+              on the audit machine, so Rust tests are unverified (ENV-001). GGUF exports were
+              load- and generation-tested in llama.cpp b12723 for Q8_0, F16 and F32 in an
+              earlier pass; tokenizer metadata remains approximate, and Ollama is unverified
+              because it is not installed. The NSIS build is unsigned, so SmartScreen warns
+              until a certificate is available.
             </div>
             <div className="note">
               <strong>How it was checked</strong>
-              412 Python tests, a 15-file static frontend export (13 routes), a production
-              website build, Rust <code>cargo check</code>, a real GGUF export test and a
-              llama.cpp load/generation smoke test. No unexecuted test is claimed.
+              414 Python tests on CPU, 11 Vitest tests, a TypeScript check, a production build
+              of the desktop frontend (13 routes, 15 HTML files), and Rust <code>cargo check</code>.
+              The GGUF llama.cpp smoke test is from an earlier pass. Rust unit tests and GPU
+              runs were not executed in the latest pass.
             </div>
             <div className="note">
               <strong>Since the audit</strong>
@@ -191,8 +193,8 @@ export default function Home() {
               Portable data paths, real DDP, the setup wizard, GGUF export verified in
               llama.cpp, hyperparameter sweeps, dataset quality audits, the plugin API and an
               unsigned NSIS installer build landed after the audit was written. Frontend
-              component and end-to-end flow tests (Vitest plus Playwright) now run on the UI side
-              as well.
+              component tests (Vitest, 11) run; the Playwright flow specs exist but were not
+              re-run in the latest pass.
             </div>
           </div>
         </section>

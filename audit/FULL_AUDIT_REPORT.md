@@ -663,3 +663,27 @@ benchmark. A 48.5 M-parameter run on a real dataset is the missing measurement (
 Pre-existing audit artefacts from earlier passes (`bug_inventory.md`, `architecture_map.md`,
 `desktop_api_integration_report.md`, etc.) were left in place; this report supersedes them where they
 overlap (notably BUG-01, whose incomplete fix is analysed in AUD-001).
+---
+
+## Verification pass (2026-11-27)
+
+**Scope of this pass:** static review and CPU-only runs. The GPU was deliberately not used, per your instruction. The pass verified the claims in the earlier audit against the current code, not a full re-audit.
+
+**Re-checked and confirmed:**
+* 414 Python tests pass on CPU (the README's "412" is now 414 after the new regression tests).
+* HTTP contract: every frontend call maps to a registered route. IPC contract: every `invoke` name is registered in Rust.
+* CORS and host checks in `server.py` are as previously described (local origins only, `127.0.0.1` bind by default).
+* Checkpoints load through `safe_torch_load` (restricted unpickling) on the main paths.
+
+**New findings and fixes:**
+
+| ID | Severity | Status | Summary |
+| --- | --- | --- | --- |
+| AUD-035 | High | Fixed | AUD-001 was incomplete. Eval checkpoint inspection and two dataset-cache loaders still retried with unrestricted unpickling. All now use restricted loading only. Regression tests added. |
+| AUD-036 | Low | Open | Desktop status returns `alerts_count: 0` always. No UI consumer. |
+| AUD-037 | Low | Open | React Compiler skips `LogsView.tsx`. Performance only. |
+| — | Medium | Fixed | Desktop `learning_rate` was hardcoded to 0. Now parsed in Rust from step events. |
+| — | Low | Fixed | `api.ts` lint error from `const module = ...`. |
+| ENV-001 | — | Blocked | Rust unit-test binary crashes at startup on this machine. No Rust tests have run. |
+
+**Not re-audited in this pass:** the training-engine math, the frontend functional walkthrough, the performance measurements, and the desktop end-to-end run. Their earlier reports in this folder still describe the state as of their dates, and they should be re-run when the GPU is available. Full status is in `test_results.md`.

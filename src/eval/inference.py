@@ -14,7 +14,7 @@ from typing import Any, Dict, Generator, List, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-from ..checkpoints.manager import CheckpointManager
+from ..checkpoints.manager import CheckpointManager, safe_torch_load
 from ..model.architecture import RoCanonConfig, RoCanonForCausalLM
 from ..tokenizer.tokenizer import RoCanonTokenizer
 
@@ -78,10 +78,7 @@ class InferenceEngine:
                 from safetensors.torch import load_file
                 chk_sd = load_file(str(chk_path), device="cpu")
             else:
-                try:
-                    payload = torch.load(chk_path, map_location="cpu", weights_only=True)
-                except Exception:
-                    payload = torch.load(chk_path, map_location="cpu", weights_only=False)
+                payload = safe_torch_load(chk_path, map_location="cpu")
                 chk_sd = payload.get("model_state_dict", payload) if isinstance(payload, dict) else {}
 
             if isinstance(chk_sd, dict) and any("embed_tokens.weight" in k or "weight" in k for k in chk_sd.keys()):

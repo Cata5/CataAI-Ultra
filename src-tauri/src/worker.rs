@@ -63,6 +63,7 @@ pub struct WorkerStatus {
     pub run_id: Option<String>,
     pub current_step: i64,
     pub current_loss: Option<f64>,
+    pub current_lr: Option<f64>,
     pub is_running: bool,
 }
 
@@ -180,6 +181,7 @@ impl WorkerSupervisor {
                 run_id: None,
                 current_step: 0,
                 current_loss: None,
+                current_lr: None,
                 is_running: false,
             })),
             python_path,
@@ -369,6 +371,7 @@ impl WorkerSupervisor {
             st.is_running = true;
             st.current_step = 0;
             st.current_loss = None;
+            st.current_lr = None;
         }
 
         // Emit initial STATE_CHANGED event to Tauri webview immediately
@@ -435,6 +438,7 @@ impl WorkerSupervisor {
                                     if is_current(&st) {
                                         st.current_step = step;
                                         st.current_loss = val.get("loss").or_else(|| val.get("train_loss")).and_then(|l| l.as_f64());
+                                        st.current_lr = val.get("learning_rate").or_else(|| val.get("lr")).and_then(|l| l.as_f64());
                                         st.state = "RUNNING".to_string();
                                         st.is_running = true;
                                     }
